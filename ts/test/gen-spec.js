@@ -25,7 +25,7 @@ function writeTsv(filename, header, entries) {
   for (const [input, output] of entries) {
     lines.push(`${input}\t${JSON.stringify(output)}`)
   }
-  const specDir = path.join(__dirname, 'spec')
+  const specDir = path.join(__dirname, '..', '..', 'test', 'spec')
   fs.mkdirSync(specDir, { recursive: true })
   fs.writeFileSync(path.join(specDir, filename), lines.join('\n') + '\n')
   console.log(`Wrote ${filename}: ${entries.length} entries`)

@@ -84,7 +84,7 @@ export function expect(actual: any): ExpectValue & ExpectFn {
 export function loadSpec(name: string): SpecEntry[] {
   // Resolve spec files relative to the project root test/spec directory,
   // since compiled tests run from dist-test/ but specs live in test/spec/.
-  const rootDir = path.resolve(__dirname, '..')
+  const rootDir = path.resolve(__dirname, '..', '..')
   const specPath = path.join(rootDir, 'test', 'spec', name)
   const content = fs.readFileSync(specPath, 'utf8')
   const entries: SpecEntry[] = []
