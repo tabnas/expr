@@ -44,7 +44,7 @@ import {
   Context,
   Token,
   util,
-} from 'jsonic'
+} from '@tabnas/jsonic'
 
 const { omap, entries, values } = util
 
@@ -1192,7 +1192,7 @@ function makeOpMap(
     .filter(([_, opdef]: [string, OpDef]) => opdef[anyfix])
     .reduce((odm: OpMap, [name, opdef]: [string, OpDef]) => {
       let tkn = ''
-      let tin = -1
+      let tin: Tin = -1 as Tin
       let src = ''
 
       if ('string' === typeof opdef.src) {

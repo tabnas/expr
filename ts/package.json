@@ -1,11 +1,11 @@
 {
-  "name": "@jsonic/expr",
+  "name": "@tabnas/expr",
   "version": "2.3.2",
-  "description": "This plugin allows the [Jsonic](https://jsonic.senecajs.org) JSON parser to support expression syntax.",
+  "description": "This plugin allows the [Tabnas](https://jsonic.senecajs.org) JSON parser to support expression syntax.",
   "main": "dist/expr.js",
   "type": "commonjs",
   "types": "dist/expr.d.ts",
-  "homepage": "https://github.com/jsonicjs/expr",
+  "homepage": "https://github.com/tabnas/expr",
   "keywords": [
     "pattern",
     "matcher",
@@ -16,7 +16,7 @@
   "author": "Richard Rodger (http://richardrodger.com)",
   "repository": {
     "type": "git",
-    "url": "git://github.com/jsonicjs/expr.git"
+    "url": "git://github.com/tabnas/expr.git"
   },
   "scripts": {
     "test": "node --enable-source-maps --test dist-test/**/*.test.js",
@@ -42,6 +42,6 @@
     "typescript": "6.0.3"
   },
   "peerDependencies": {
-    "jsonic": ">=2"
+    "@tabnas/jsonic": ">=2"
   }
 }

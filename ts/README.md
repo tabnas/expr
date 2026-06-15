@@ -1,28 +1,28 @@
-# @jsonic/expr
+# @tabnas/expr
 
-An expression-syntax plugin for the [Jsonic](https://jsonic.senecajs.org)
+An expression-syntax plugin for the [Tabnas](https://jsonic.senecajs.org)
 parser, available in both TypeScript and Go.
 
-Adds Pratt-parser expressions to Jsonic: infix, prefix, suffix, ternary,
+Adds Pratt-parser expressions to Tabnas: infix, prefix, suffix, ternary,
 and paren operators with configurable precedence. Expressions parse into
 LISP-style S-expressions (arrays whose first element is the operator src),
 which a user-supplied evaluator can reduce to values.
 
-[![npm version](https://img.shields.io/npm/v/@jsonic/expr.svg)](https://npmjs.com/package/@jsonic/expr)
-[![build](https://github.com/jsonicjs/expr/actions/workflows/build.yml/badge.svg)](https://github.com/jsonicjs/expr/actions/workflows/build.yml)
+[![npm version](https://img.shields.io/npm/v/@tabnas/expr.svg)](https://npmjs.com/package/@tabnas/expr)
+[![build](https://github.com/tabnas/expr/actions/workflows/build.yml/badge.svg)](https://github.com/tabnas/expr/actions/workflows/build.yml)
 
 ## Install
 
 TypeScript:
 
 ```sh
-npm install @jsonic/expr jsonic
+npm install @tabnas/expr @tabnas/jsonic
 ```
 
 Go:
 
 ```sh
-go get github.com/jsonicjs/expr/go
+go get github.com/tabnas/expr/go
 ```
 
 ## Documentation

@@ -1,7 +1,7 @@
 # Reference
 
-Exported API for `@jsonic/expr` (TypeScript) and
-`github.com/jsonicjs/expr/go`.
+Exported API for `@tabnas/expr` (TypeScript) and
+`github.com/tabnas/expr/go`.
 
 - [Exports](#exports)
 - [Types](#types)
@@ -14,7 +14,7 @@ Exported API for `@jsonic/expr` (TypeScript) and
 
 ## Exports
 
-### TypeScript (`@jsonic/expr`)
+### TypeScript (`@tabnas/expr`)
 
 | Symbol       | Kind  | Description                                               |
 | ------------ | ----- | --------------------------------------------------------- |
@@ -26,7 +26,7 @@ Exported API for `@jsonic/expr` (TypeScript) and
 | `Op`         | type  | Full operator descriptor passed to evaluators.            |
 | `Evaluate`   | type  | Signature of a user evaluator.                            |
 
-### Go (`github.com/jsonicjs/expr/go`)
+### Go (`github.com/tabnas/expr/go`)
 
 | Symbol         | Kind   | Description                                                  |
 | -------------- | ------ | ------------------------------------------------------------ |

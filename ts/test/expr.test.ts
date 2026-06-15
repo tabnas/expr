@@ -3,8 +3,8 @@
 
 import { describe, test, beforeEach } from 'node:test'
 
-import { Jsonic, Rule, Context, util } from 'jsonic'
-import { Debug } from 'jsonic/debug'
+import { Jsonic, Rule, Context, util } from '@tabnas/jsonic'
+import { Debug } from '@tabnas/jsonic/debug'
 
 import {
   Expr,
@@ -34,7 +34,7 @@ const S = (x: any, seen?: WeakSet<any>): any => (
         x[0].src || S(x[0], seen),
         ...(1 < x.length ? (x.slice(1).map((t: any) => S(t, seen))) : [])]
         .filter(t => undefined !== t)) :
-      (null != x && 'object' === typeof (x) ? omap(x, ([n, v]) => [n, S(v, seen)]) : x)))
+      (null != x && 'object' === typeof (x) ? omap(x, ([n, v]: [any, any]) => [n, S(v, seen)]) : x)))
 
 const mj =
   (je: Jsonic) => (s: string, m?: any) => C(S(je(s, m)))

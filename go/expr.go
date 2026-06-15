@@ -11,7 +11,7 @@ package expr
 import (
 	"strings"
 
-	jsonic "github.com/jsonicjs/jsonic/go"
+	jsonic "github.com/tabnas/jsonic/go"
 )
 
 // Version is the Go module version of this plugin.
@@ -268,21 +268,21 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// modifier added (by identity) with "expr".
 	modifyRule := func(name string, fn func(rs *jsonic.RuleSpec)) {
 		j.Rule(name, func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
-			preOpen := make(map[*jsonic.AltSpec]bool, len(rs.Open))
-			for _, a := range rs.Open {
+			preOpen := make(map[*jsonic.AltSpec]bool, len(rs.OpenAlts()))
+			for _, a := range rs.OpenAlts() {
 				preOpen[a] = true
 			}
-			preClose := make(map[*jsonic.AltSpec]bool, len(rs.Close))
-			for _, a := range rs.Close {
+			preClose := make(map[*jsonic.AltSpec]bool, len(rs.CloseAlts()))
+			for _, a := range rs.CloseAlts() {
 				preClose[a] = true
 			}
 			fn(rs)
-			for _, a := range rs.Open {
+			for _, a := range rs.OpenAlts() {
 				if !preOpen[a] {
 					appendExprTag(a)
 				}
 			}
-			for _, a := range rs.Close {
+			for _, a := range rs.CloseAlts() {
 				if !preClose[a] {
 					appendExprTag(a)
 				}
@@ -294,10 +294,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// Used for plugin-created rules (expr, paren, ternary) where every
 	// alt is plugin-added.
 	tagAllAlts := func(rs *jsonic.RuleSpec) {
-		for _, a := range rs.Open {
+		for _, a := range rs.OpenAlts() {
 			appendExprTag(a)
 		}
-		for _, a := range rs.Close {
+		for _, a := range rs.CloseAlts() {
 			appendExprTag(a)
 		}
 	}
@@ -306,19 +306,19 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	modifyRule("val", func(rs *jsonic.RuleSpec) {
 		// Prefix operator: backtrack and push to 'expr'.
 		if hasPrefix {
-			rs.Open = append([]*jsonic.AltSpec{{
+			rs.PrependOpen(&jsonic.AltSpec{
 				S: mkS(PREFIX),
 				B: 1,
 				P: "expr",
 				N: map[string]int{"expr_prefix": 1, "expr_suffix": 0},
 				G: "expr,prefix",
-			}}, rs.Open...)
+			})
 		}
 
 		// Preval: value followed by paren open (e.g., foo(1,2)).
 		if hasPreval {
 			valTinsLocal := j.TokenSet("VAL")
-			rs.Open = append([]*jsonic.AltSpec{{
+			rs.PrependOpen(&jsonic.AltSpec{
 				S: [][]int{valTinsLocal, OP},
 				B: 1,
 				P: "expr",
@@ -343,26 +343,26 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					r.Node = r.O0.ResolveVal(r, ctx)
 				},
 				G: "expr,paren,preval",
-			}}, rs.Open...)
+			})
 		}
 
 		// Block pair detection when inside ternary and the colon
 		// is a ternary close token (e.g., `1?2:3` — the `2:` should
 		// NOT be treated as a key-value pair).
 		if hasTernary {
-			rs.Open = append([]*jsonic.AltSpec{{
+			rs.PrependOpen(&jsonic.AltSpec{
 				S: [][]int{j.TokenSet("VAL"), TERN1},
 				B: 1,
 				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
 					return r.N["expr_ternary"] > 0
 				},
 				G: "expr,ternary,block-pair",
-			}}, rs.Open...)
+			})
 		}
 
 		// Paren open: backtrack and push to 'expr'.
 		if hasParen {
-			rs.Open = append([]*jsonic.AltSpec{{
+			rs.PrependOpen(&jsonic.AltSpec{
 				S: mkS(OP),
 				B: 1,
 				P: "expr",
@@ -371,12 +371,12 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					return !pdef.Preval.Required
 				},
 				G: "expr,paren",
-			}}, rs.Open...)
+			})
 		}
 
 		// Infix after value: backtrack, replace with 'expr' (only when NOT inside an expr).
 		if hasInfix {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(INFIX),
 				B: 1,
 				N: map[string]int{"expr_prefix": 0, "expr_suffix": 0},
@@ -387,12 +387,12 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					return ""
 				},
 				G: "expr,infix",
-			}}, rs.Close...)
+			})
 		}
 
 		// Suffix after value: backtrack, replace with 'expr' (only when NOT inside an expr).
 		if hasSuffix {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(SUFFIX),
 				B: 1,
 				N: map[string]int{"expr_prefix": 0, "expr_suffix": 1},
@@ -403,12 +403,12 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					return ""
 				},
 				G: "expr,suffix",
-			}}, rs.Close...)
+			})
 		}
 
 		// Ternary first separator.
 		if hasTernary {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(TERN0),
 				B: 1,
 				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
@@ -416,33 +416,33 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				},
 				R: "ternary",
 				G: "expr,ternary",
-			}}, rs.Close...)
+			})
 
 			// Ternary close: backtrack so ternary rule can consume it.
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(TERN1),
 				B: 1,
 				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
 					return r.N["expr_ternary"] > 0
 				},
 				G: "expr,ternary,close",
-			}}, rs.Close...)
+			})
 		}
 
 		// Paren close propagation.
 		if hasParen {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(CP),
 				B: 1,
 				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
 					return r.N["expr_paren"] > 0
 				},
 				G: "expr,paren-close",
-			}}, rs.Close...)
+			})
 		}
 
 		// Prevent implicit list inside expression (comma).
-		rs.Close = append([]*jsonic.AltSpec{{
+		rs.PrependClose(&jsonic.AltSpec{
 			S: mkS([]int{jsonic.TinCA}),
 			B: 1,
 			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
@@ -450,11 +450,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					(r.N["expr_ternary"] >= 1 && r.N["expr_paren"] >= 1)
 			},
 			G: "expr,imp,comma",
-		}}, rs.Close...)
+		})
 
 		// Prevent implicit list inside expression (space).
 		valTins := j.TokenSet("VAL")
-		rs.Close = append([]*jsonic.AltSpec{{
+		rs.PrependClose(&jsonic.AltSpec{
 			S: mkS(valTins),
 			B: 1,
 			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
@@ -462,7 +462,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					(r.N["expr_ternary"] >= 1 && r.N["expr_paren"] >= 1)
 			},
 			G: "expr,imp,space",
-		}}, rs.Close...)
+		})
 
 		// Chain-time preval: when val has produced a node and the next
 		// token is a preval-active paren-open, push to 'expr' so the new
@@ -473,7 +473,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// produced node, not a token in the lex buffer.
 		// Examples: a[0][1], f(x)(y), f(x)[i], (1+2)(3).
 		if hasParen && hasPreval {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(OP),
 				B: 1,
 				P: "expr",
@@ -498,7 +498,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				},
 				U: map[string]interface{}{"paren_preval": true},
 				G: "expr,paren,preval,chain",
-			}}, rs.Close...)
+			})
 		}
 
 		// Comma-op suppression: when an enclosing rule (e.g. an embedding
@@ -506,20 +506,20 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// treating it as the comma operator — the parent then consumes
 		// the `,` itself as a separator.
 		if hasInfix {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(INFIX),
 				B: 1,
 				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
 					return r.N["no_comma_op"] > 0 && r.C0 != nil && r.C0.Src == ","
 				},
 				G: "expr,no-comma-op-bail",
-			}}, rs.Close...)
+			})
 		}
 	})
 
 	// === LIST rule modifications ===
 	modifyRule("list", func(rs *jsonic.RuleSpec) {
-		rs.BO = append(rs.BO, func(r *jsonic.Rule, ctx *jsonic.Context) {
+		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			if r.Prev == nil || r.Prev == jsonic.NoRule || r.Prev.U["implist"] == nil {
 				r.N["expr"] = 0
 				r.N["expr_prefix"] = 0
@@ -529,7 +529,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			}
 		})
 		if hasParen {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(CP),
 				BF: func(r *jsonic.Rule, ctx *jsonic.Context) int {
 					if r.C0.Tin == jsonic.TinCS && r.N["expr_paren"] < 1 {
@@ -538,11 +538,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					return 1
 				},
 				G: "expr,paren,list",
-			}}, rs.Close...)
+			})
 			// Propagate implicit list node to enclosing paren.
 			// Go slice append may reallocate, making paren.Child.Node
 			// (which points to the original val) stale.
-			rs.AC = append(rs.AC, func(r *jsonic.Rule, ctx *jsonic.Context) {
+			rs.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
 				if r.N["expr_paren"] > 0 && r.Parent != nil && r.Parent != jsonic.NoRule && r.Parent.Name == "paren" {
 					r.Parent.Node = r.Node
 				}
@@ -552,7 +552,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// === MAP rule modifications ===
 	modifyRule("map", func(rs *jsonic.RuleSpec) {
-		rs.BO = append(rs.BO, func(r *jsonic.Rule, ctx *jsonic.Context) {
+		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			r.N["expr"] = 0
 			r.N["expr_prefix"] = 0
 			r.N["expr_suffix"] = 0
@@ -560,7 +560,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			r.N["expr_ternary"] = 0
 		})
 		if hasParen {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(CP),
 				BF: func(r *jsonic.Rule, ctx *jsonic.Context) int {
 					if r.C0.Tin == jsonic.TinCB && r.N["expr_paren"] < 1 {
@@ -569,21 +569,21 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					return 1
 				},
 				G: "expr,paren,map",
-			}}, rs.Close...)
+			})
 		}
 	})
 
 	// === PAIR rule modifications ===
 	modifyRule("pair", func(rs *jsonic.RuleSpec) {
 		if hasParen {
-			rs.Close = append([]*jsonic.AltSpec{{
+			rs.PrependClose(&jsonic.AltSpec{
 				S: mkS(CP),
 				B: 1,
 				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
 					return r.N["expr_paren"] > 0 || r.N["pk"] > 0
 				},
 				G: "expr,paren,pair",
-			}}, rs.Close...)
+			})
 		}
 	})
 
@@ -591,7 +591,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	modifyRule("elem", func(rs *jsonic.RuleSpec) {
 		if hasParen {
 			// Close implicit list within parens when ')' is seen.
-			rs.Close = append([]*jsonic.AltSpec{
+			rs.PrependClose([]*jsonic.AltSpec{
 				{
 					S: mkS(CP),
 					B: 1,
@@ -607,11 +607,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					R: "elem",
 					G: "expr,paren,elem,open",
 				},
-			}, rs.Close...)
+			}...)
 			// Propagate elem node to enclosing paren after close.
 			// Go slice append may reallocate, making earlier
 			// references to the list stale.
-			rs.AC = append(rs.AC, func(r *jsonic.Rule, ctx *jsonic.Context) {
+			rs.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
 				if r.N["expr_paren"] > 0 {
 					// Walk parent chain to find paren rule.
 					for p := r.Parent; p != nil && p != jsonic.NoRule; p = p.Parent {
@@ -708,33 +708,31 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		})
 	}
 
-	exprSpec.Open = exprOpen
+	exprSpec.AddOpen(exprOpen...)
 
 	// expr.BC: attach child result to incomplete expression.
 	// Uses fillNextSlot to find the deepest unfilled slot and fill it.
 	// This avoids Go slice append issues and works with the Go parser's
 	// replacement-chain result extraction.
-	exprSpec.BC = []jsonic.StateAction{
-		func(r *jsonic.Rule, ctx *jsonic.Context) {
-			if r.Child == nil || r.Child == jsonic.NoRule {
-				return
-			}
-			// Paren child: paren.AC already propagated the result.
-			if r.Child.Name == "paren" {
-				return
-			}
-			childNode := r.Child.Node
-			if jsonic.IsUndefined(childNode) {
-				childNode = nil
-			}
+	exprSpec.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+		if r.Child == nil || r.Child == jsonic.NoRule {
+			return
+		}
+		// Paren child: paren.AC already propagated the result.
+		if r.Child.Name == "paren" {
+			return
+		}
+		childNode := r.Child.Node
+		if jsonic.IsUndefined(childNode) {
+			childNode = nil
+		}
 
-			if box, ok := r.Node.(*jsonic.ListRef); ok && len(box.Val) > 0 {
-				if _, isOpV := box.Val[0].(*Op); isOpV {
-					fillNextSlot(box, childNode)
-				}
+		if box, ok := r.Node.(*jsonic.ListRef); ok && len(box.Val) > 0 {
+			if _, isOpV := box.Val[0].(*Op); isOpV {
+				fillNextSlot(box, childNode)
 			}
-		},
-	}
+		}
+	})
 
 	// expr.Close alternates.
 	exprClose := make([]*jsonic.AltSpec, 0)
@@ -975,22 +973,20 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		G: "expr,expr-end",
 	})
 
-	exprSpec.Close = exprClose
+	exprSpec.AddClose(exprClose...)
 
 	// AC: evaluate at root of expression, matching TS exactly:
 	//   if (options.evaluate && 0 === r.n.expr) {
 	//     r.parent.node = evaluation(r.parent, ctx, r.parent.node, options.evaluate)
 	//   }
-	exprSpec.AC = []jsonic.StateAction{
-		func(r *jsonic.Rule, ctx *jsonic.Context) {
-			if eopts.Evaluate != nil && r.N["expr"] < 1 {
-				parent := r.Parent
-				if parent != nil && parent != jsonic.NoRule {
-					parent.Node = evaluation(parent, ctx, parent.Node, eopts.Evaluate)
-				}
+	exprSpec.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+		if eopts.Evaluate != nil && r.N["expr"] < 1 {
+			parent := r.Parent
+			if parent != nil && parent != jsonic.NoRule {
+				parent.Node = evaluation(parent, ctx, parent.Node, eopts.Evaluate)
 			}
-		},
-	}
+		}
+	})
 
 	tagAllAlts(exprSpec)
 	j.RSM()["expr"] = exprSpec
@@ -1001,16 +997,14 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	if hasParen {
 		parenSpec := &jsonic.RuleSpec{Name: "paren"}
 
-		parenSpec.BO = []jsonic.StateAction{
-			func(r *jsonic.Rule, ctx *jsonic.Context) {
-				// Allow implicits inside parens.
-				r.N["dmap"] = 0
-				r.N["dlist"] = 0
-				r.N["pk"] = 0
-			},
-		}
+		parenSpec.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
+			// Allow implicits inside parens.
+			r.N["dmap"] = 0
+			r.N["dlist"] = 0
+			r.N["pk"] = 0
+		})
 
-		parenSpec.Open = []*jsonic.AltSpec{
+		parenSpec.AddOpen([]*jsonic.AltSpec{
 			// Empty parens: ()
 			{
 				S: func() [][]int { return [][]int{OP, CP} }(),
@@ -1048,9 +1042,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					r.Node = jsonic.Undefined
 				},
 			},
-		}
+		}...)
 
-		parenSpec.Close = []*jsonic.AltSpec{
+		parenSpec.AddClose([]*jsonic.AltSpec{
 			{
 				S: mkS(CP),
 				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
@@ -1103,41 +1097,37 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				},
 				G: "expr,paren,close",
 			},
-		}
+		}...)
 
-		parenSpec.BC = []jsonic.StateAction{
-			func(r *jsonic.Rule, ctx *jsonic.Context) {
-				if r.Child == nil || r.Child == jsonic.NoRule {
-					return
-				}
-				childNode := r.Child.Node
-				if jsonic.IsUndefined(childNode) {
-					return
-				}
-				if jsonic.IsUndefined(r.Node) {
-					r.Node = childNode
-				} else if isOp(childNode) {
-					// Don't overwrite if paren.Node is already a plain list
-					// (set by implicit list handling in elem/ternary).
-					if !isOp(r.Node) {
-						if sl, ok := r.Node.([]interface{}); ok && len(sl) > 0 {
-							return // keep the implicit list
-						}
+		parenSpec.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+			if r.Child == nil || r.Child == jsonic.NoRule {
+				return
+			}
+			childNode := r.Child.Node
+			if jsonic.IsUndefined(childNode) {
+				return
+			}
+			if jsonic.IsUndefined(r.Node) {
+				r.Node = childNode
+			} else if isOp(childNode) {
+				// Don't overwrite if paren.Node is already a plain list
+				// (set by implicit list handling in elem/ternary).
+				if !isOp(r.Node) {
+					if sl, ok := r.Node.([]interface{}); ok && len(sl) > 0 {
+						return // keep the implicit list
 					}
-					r.Node = childNode
 				}
-			},
-		}
+				r.Node = childNode
+			}
+		})
 
-		parenSpec.AC = []jsonic.StateAction{
-			func(r *jsonic.Rule, ctx *jsonic.Context) {
-				// Propagate paren result to parent.
-				r.Parent.Node = r.Node
-				if r.Parent.Parent != nil && r.Parent.Parent != jsonic.NoRule {
-					r.Parent.Parent.Node = r.Node
-				}
-			},
-		}
+		parenSpec.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+			// Propagate paren result to parent.
+			r.Parent.Node = r.Node
+			if r.Parent.Parent != nil && r.Parent.Parent != jsonic.NoRule {
+				r.Parent.Parent.Node = r.Node
+			}
+		})
 
 		tagAllAlts(parenSpec)
 		j.RSM()["paren"] = parenSpec
@@ -1147,7 +1137,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	if hasTernary {
 		ternarySpec := &jsonic.RuleSpec{Name: "ternary"}
 
-		ternarySpec.Open = []*jsonic.AltSpec{
+		ternarySpec.AddOpen([]*jsonic.AltSpec{
 			{
 				S: mkS(TERN0),
 				P: "val",
@@ -1184,33 +1174,31 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				},
 				G: "expr,ternary,open",
 			},
-		}
+		}...)
 
-		ternarySpec.BC = []jsonic.StateAction{
-			func(r *jsonic.Rule, ctx *jsonic.Context) {
-				if r.Child == nil || r.Child == jsonic.NoRule {
-					return
+		ternarySpec.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+			if r.Child == nil || r.Child == jsonic.NoRule {
+				return
+			}
+			childNode := r.Child.Node
+			if jsonic.IsUndefined(childNode) {
+				childNode = nil
+			}
+			if box, ok := r.Node.(*jsonic.ListRef); ok {
+				step, _ := r.U["ternary_step"].(int)
+				if step == 0 {
+					fillNextSlot(box, childNode)
+					r.U["ternary_step"] = 1
+				} else if step == 1 {
+					fillNextSlot(box, childNode)
+					r.U["ternary_step"] = 2
+				} else if step == 2 {
+					// Final slot filled when ternary ends
+					// (e.g., inside an existing elem/list).
+					fillNextSlot(box, childNode)
 				}
-				childNode := r.Child.Node
-				if jsonic.IsUndefined(childNode) {
-					childNode = nil
-				}
-				if box, ok := r.Node.(*jsonic.ListRef); ok {
-					step, _ := r.U["ternary_step"].(int)
-					if step == 0 {
-						fillNextSlot(box, childNode)
-						r.U["ternary_step"] = 1
-					} else if step == 1 {
-						fillNextSlot(box, childNode)
-						r.U["ternary_step"] = 2
-					} else if step == 2 {
-						// Final slot filled when ternary ends
-						// (e.g., inside an existing elem/list).
-						fillNextSlot(box, childNode)
-					}
-				}
-			},
-		}
+			}
+		})
 
 		// Condition for implicit list after ternary completes.
 		// Only fire when ternary is the FIRST expression — i.e., not already
@@ -1276,7 +1264,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			r.Node = listNode
 		}
 
-		ternarySpec.Close = []*jsonic.AltSpec{
+		ternarySpec.AddClose([]*jsonic.AltSpec{
 			// Second separator (e.g. ':').
 			{
 				S: mkS(TERN1),
@@ -1329,17 +1317,15 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				},
 				G: "expr,ternary,end",
 			},
-		}
+		}...)
 
-		ternarySpec.AC = []jsonic.StateAction{
-			func(r *jsonic.Rule, ctx *jsonic.Context) {
-				if eopts.Evaluate != nil {
-					if isOp(r.Node) {
-						r.Node = evaluation(r, ctx, r.Node, eopts.Evaluate)
-					}
+		ternarySpec.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+			if eopts.Evaluate != nil {
+				if isOp(r.Node) {
+					r.Node = evaluation(r, ctx, r.Node, eopts.Evaluate)
 				}
-			},
-		}
+			}
+		})
 
 		tagAllAlts(ternarySpec)
 		j.RSM()["ternary"] = ternarySpec

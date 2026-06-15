@@ -1,11 +1,11 @@
 # Tutorial
 
 A walk-through of parsing and evaluating your first expression with
-`@jsonic/expr`. By the end you will have:
+`@tabnas/expr`. By the end you will have:
 
 1. Parsed `1+2*3` into an S-expression AST
 2. Plugged in an evaluator to compute the numeric result
-3. Seen how expressions compose with the rest of Jsonic JSON
+3. Seen how expressions compose with the rest of Tabnas JSON
 
 The TypeScript and Go variants are kept side-by-side. Pick one language
 and follow the column; the inputs and outputs match.
@@ -16,10 +16,10 @@ and follow the column; the inputs and outputs match.
 
 ```sh
 # TypeScript
-npm install @jsonic/expr jsonic
+npm install @tabnas/expr @tabnas/jsonic
 
 # Go
-go get github.com/jsonicjs/expr/go
+go get github.com/tabnas/expr/go
 ```
 
 ## 2. Parse an expression
@@ -27,8 +27,8 @@ go get github.com/jsonicjs/expr/go
 TypeScript:
 
 ```ts
-import { Jsonic } from 'jsonic'
-import { Expr } from '@jsonic/expr'
+import { Jsonic } from '@tabnas/jsonic'
+import { Expr } from '@tabnas/expr'
 
 const j = Jsonic.make().use(Expr)
 
@@ -43,7 +43,7 @@ package main
 
 import (
   "fmt"
-  expr "github.com/jsonicjs/expr/go"
+  expr "github.com/tabnas/expr/go"
 )
 
 func main() {
@@ -65,8 +65,8 @@ and returns a value. Supply it via the plugin's `evaluate` option.
 TypeScript:
 
 ```ts
-import { Jsonic } from 'jsonic'
-import { Expr } from '@jsonic/expr'
+import { Jsonic } from '@tabnas/jsonic'
+import { Expr } from '@tabnas/expr'
 
 const math = (rule: any, ctx: any, op: any, ...terms: any[]) => {
   switch (op.src) {
@@ -90,8 +90,8 @@ package main
 
 import (
   "fmt"
-  jsonic "github.com/jsonicjs/jsonic/go"
-  expr "github.com/jsonicjs/expr/go"
+  jsonic "github.com/tabnas/jsonic/go"
+  expr "github.com/tabnas/expr/go"
 )
 
 func math(r *jsonic.Rule, ctx *jsonic.Context, op *expr.Op, terms []interface{}) interface{} {
