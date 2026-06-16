@@ -1325,47 +1325,47 @@ function makeParenMap(
 // the right), which is why prefix ops give only `right` and parens give
 // neither.
 //
-// The defaults sit on a base-1000 ladder so client code has generous room to
+// The defaults sit on a base-100000 ladder so client code has generous room to
 // insert custom operators between, below, and above the built-ins. Tiers are
-// 1000 apart; the +10 on `right` is the (tiny) left-associativity offset, so a
-// tier occupies a 10-wide band inside its 1000-wide slot and adjacent tiers can
-// never overlap. Reserved (empty-by-default) tiers — most of them BELOW
-// arithmetic, where client grammars add the most operators — leave room for the
-// usual suspects:
+// 100000 apart; the +10000 on `right` is the left-associativity offset, so a
+// tier occupies a 10000-wide band inside its 100000-wide slot and adjacent
+// tiers can never overlap. Reserved (empty-by-default) tiers — most of them
+// BELOW arithmetic, where client grammars add the most operators — leave room
+// for the usual suspects:
 //
-//     1000  sequence / comma                       (loosest)
-//     2000  assignment        (right-assoc: left 2010, right 2000)
-//     3000  ternary / conditional   (engine also has a dedicated ternary rule)
-//     4000  logical or
-//     5000  logical and
-//     6000  bitwise or
-//     7000  bitwise xor
-//     8000  bitwise and
-//     9000  equality          (== !=)
-//    10000  comparison        (< <= > >=)
-//    11000  shift             (<< >>)
-//    12000  addition / subtraction                 <-- built-in
-//    13000  multiplication / division / remainder  <-- built-in
-//    14000  (free — e.g. an extra tight infix)
-//    15000  unary prefix      (+ -)                 <-- built-in
-//    16000  (free — extra prefix, e.g. ! ~)
-//    17000  exponent          (** ^, right-assoc: left 17010, right 17000)
-//    18000  postfix / suffix  (! ? ++)
-//    19000  call / index / member  (f() a[i] a.b)   (tightest)
+//     100000  sequence / comma                       (loosest)
+//     200000  assignment        (right-assoc: left 210000, right 200000)
+//     300000  ternary / conditional   (engine also has a dedicated ternary rule)
+//     400000  logical or
+//     500000  logical and
+//     600000  bitwise or
+//     700000  bitwise xor
+//     800000  bitwise and
+//     900000  equality          (== !=)
+//    1000000  comparison        (< <= > >=)
+//    1100000  shift             (<< >>)
+//    1200000  addition / subtraction                 <-- built-in
+//    1300000  multiplication / division / remainder  <-- built-in
+//    1400000  (free — e.g. an extra tight infix)
+//    1500000  unary prefix      (+ -)                 <-- built-in
+//    1600000  (free — extra prefix, e.g. ! ~)
+//    1700000  exponent          (** ^, right-assoc: left 1710000, right 1700000)
+//    1800000  postfix / suffix  (! ? ++)
+//    1900000  call / index / member  (f() a[i] a.b)   (tightest)
 //
-// To add an operator, pick a tier base = N*1000 (left = base, right = base + 10
-// for left-assoc; swap them for right-assoc). Need an in-between tier? Use
-// base + 100, base + 200, … — each 1000-wide gap holds ~9 round sub-tiers.
+// To add an operator, pick a tier base = N*100000 (left = base, right = base +
+// 10000 for left-assoc; swap them for right-assoc). Need an in-between tier?
+// Use base + 20000, base + 40000, … — each 100000-wide gap holds ~4 sub-tiers.
 Expr.defaults = {
   op: {
     positive: {
       prefix: true,
-      right: 15000,
+      right: 1500000,
       src: '+',
     },
     negative: {
       prefix: true,
-      right: 15000,
+      right: 1500000,
       src: '-',
     },
 
@@ -1373,32 +1373,32 @@ Expr.defaults = {
     // Example: 2+3+4 === (2+3)+4
     addition: {
       infix: true,
-      left: 12000,
-      right: 12010,
+      left: 1200000,
+      right: 1210000,
       src: '+',
     },
     subtraction: {
       infix: true,
-      left: 12000,
-      right: 12010,
+      left: 1200000,
+      right: 1210000,
       src: '-',
     },
     multiplication: {
       infix: true,
-      left: 13000,
-      right: 13010,
+      left: 1300000,
+      right: 1310000,
       src: '*',
     },
     division: {
       infix: true,
-      left: 13000,
-      right: 13010,
+      left: 1300000,
+      right: 1310000,
       src: '/',
     },
     remainder: {
       infix: true,
-      left: 13000,
-      right: 13010,
+      left: 1300000,
+      right: 1310000,
       src: '%',
     },
 

@@ -56,7 +56,7 @@ describe('expr', () => {
           factorial: {
             suffix: true,
             src: '!',
-            left: 18000,
+            left: 1800000,
           },
           ternary: {
             ternary: true,
