@@ -30,7 +30,6 @@
 // inside the expression.
 
 // TODO: custom ctx.F for Op - make this automatic in options
-// TODO: increase infix base binding values
 // TODO: error on incomplete expr: 1+2+
 
 // The engine is the tabnas parser; jsonic supplies the relaxed-JSON
@@ -1316,16 +1315,57 @@ function makeParenMap(
   }, {}) as OpMap
 }
 
+// Default operator precedence — the "binding power" scale.
+//
+// Binding powers are compared only by ORDER, never by magnitude (every
+// comparison in prattify() is a `<` / `<=`): a higher number binds tighter.
+// Associativity is set by left vs right — left < right is left-associative
+// (a-b-c => (a-b)-c); left > right is right-associative. An unset left/right
+// falls back to MIN/MAX_SAFE_INTEGER (binds loosest on the left, tightest on
+// the right), which is why prefix ops give only `right` and parens give
+// neither.
+//
+// The defaults sit on a base-1000 ladder so client code has generous room to
+// insert custom operators between, below, and above the built-ins. Tiers are
+// 1000 apart; the +10 on `right` is the (tiny) left-associativity offset, so a
+// tier occupies a 10-wide band inside its 1000-wide slot and adjacent tiers can
+// never overlap. Reserved (empty-by-default) tiers — most of them BELOW
+// arithmetic, where client grammars add the most operators — leave room for the
+// usual suspects:
+//
+//     1000  sequence / comma                       (loosest)
+//     2000  assignment        (right-assoc: left 2010, right 2000)
+//     3000  ternary / conditional   (engine also has a dedicated ternary rule)
+//     4000  logical or
+//     5000  logical and
+//     6000  bitwise or
+//     7000  bitwise xor
+//     8000  bitwise and
+//     9000  equality          (== !=)
+//    10000  comparison        (< <= > >=)
+//    11000  shift             (<< >>)
+//    12000  addition / subtraction                 <-- built-in
+//    13000  multiplication / division / remainder  <-- built-in
+//    14000  (free — e.g. an extra tight infix)
+//    15000  unary prefix      (+ -)                 <-- built-in
+//    16000  (free — extra prefix, e.g. ! ~)
+//    17000  exponent          (** ^, right-assoc: left 17010, right 17000)
+//    18000  postfix / suffix  (! ? ++)
+//    19000  call / index / member  (f() a[i] a.b)   (tightest)
+//
+// To add an operator, pick a tier base = N*1000 (left = base, right = base + 10
+// for left-assoc; swap them for right-assoc). Need an in-between tier? Use
+// base + 100, base + 200, … — each 1000-wide gap holds ~9 round sub-tiers.
 Expr.defaults = {
   op: {
     positive: {
       prefix: true,
-      right: 14000,
+      right: 15000,
       src: '+',
     },
     negative: {
       prefix: true,
-      right: 14000,
+      right: 15000,
       src: '-',
     },
 
@@ -1333,32 +1373,32 @@ Expr.defaults = {
     // Example: 2+3+4 === (2+3)+4
     addition: {
       infix: true,
-      left: 140,
-      right: 150,
+      left: 12000,
+      right: 12010,
       src: '+',
     },
     subtraction: {
       infix: true,
-      left: 140,
-      right: 150,
+      left: 12000,
+      right: 12010,
       src: '-',
     },
     multiplication: {
       infix: true,
-      left: 160,
-      right: 170,
+      left: 13000,
+      right: 13010,
       src: '*',
     },
     division: {
       infix: true,
-      left: 160,
-      right: 170,
+      left: 13000,
+      right: 13010,
       src: '/',
     },
     remainder: {
       infix: true,
-      left: 160,
-      right: 170,
+      left: 13000,
+      right: 13010,
       src: '%',
     },
 

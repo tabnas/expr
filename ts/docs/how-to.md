@@ -24,7 +24,7 @@ TypeScript:
 ```ts
 new Tabnas().use(jsonic).use(Expr, {
   op: {
-    power: { infix: true, src: '^', left: 260, right: 250 },  // right-assoc
+    power: { infix: true, src: '^', left: 17010, right: 17000 },  // exponent tier, right-assoc
   },
 }).parse('2^3^2')  // ['^', 2, ['^', 3, 2]]
 ```
@@ -35,7 +35,7 @@ Go:
 expr.Parse("2^3^2", map[string]interface{}{
   "op": map[string]interface{}{
     "power": map[string]interface{}{
-      "infix": true, "src": "^", "left": 260, "right": 250,
+      "infix": true, "src": "^", "left": 17010, "right": 17000,
     },
   },
 })
@@ -48,8 +48,8 @@ Prefix operators use `right` only; suffix operators use `left` only.
 ```ts
 Expr, {
   op: {
-    bang:   { prefix: true,  src: '!', right: 200 },   // !x
-    factor: { suffix: true,  src: '!', left:  210 },   // x!
+    bang:   { prefix: true,  src: '!', right: 16000 },   // !x  (prefix tier)
+    factor: { suffix: true,  src: '!', left:  18000 },   // x!  (postfix tier)
   },
 }
 ```
@@ -99,7 +99,7 @@ Ternary is defined by two tokens in `src`:
 ```ts
 Expr, {
   op: {
-    cond: { ternary: true, src: ['?', ':'], left: 80, right: 90 },
+    cond: { ternary: true, src: ['?', ':'], left: 3000, right: 3010 },
   },
 }
 ```
