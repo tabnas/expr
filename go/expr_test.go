@@ -130,10 +130,10 @@ func TestSpecUnaryPrefixEdge(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"at": map[string]interface{}{
-				"prefix": true, "right": 15000, "src": "@",
+				"prefix": true, "right": 5000000, "src": "@",
 			},
 			"tight": map[string]interface{}{
-				"infix": true, "left": 120000, "right": 130000, "src": "~",
+				"infix": true, "left": 7000000, "right": 7100000, "src": "~",
 			},
 		},
 	})
@@ -144,10 +144,10 @@ func TestSpecUnarySuffixBasic(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"factorial": map[string]interface{}{
-				"suffix": true, "left": 15000, "src": "!",
+				"suffix": true, "left": 6000000, "src": "!",
 			},
 			"question": map[string]interface{}{
-				"suffix": true, "left": 13000, "src": "?",
+				"suffix": true, "left": 3500000, "src": "?",
 			},
 		},
 	})
@@ -158,13 +158,13 @@ func TestSpecUnarySuffixEdge(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"factorial": map[string]interface{}{
-				"suffix": true, "left": 15000, "src": "!",
+				"suffix": true, "left": 6000000, "src": "!",
 			},
 			"question": map[string]interface{}{
-				"suffix": true, "left": 13000, "src": "?",
+				"suffix": true, "left": 3500000, "src": "?",
 			},
 			"tight": map[string]interface{}{
-				"infix": true, "left": 120000, "right": 130000, "src": "~",
+				"infix": true, "left": 7000000, "right": 7100000, "src": "~",
 			},
 		},
 	})
@@ -175,10 +175,10 @@ func TestSpecUnarySuffixStructure(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"factorial": map[string]interface{}{
-				"suffix": true, "left": 15000, "src": "!",
+				"suffix": true, "left": 6000000, "src": "!",
 			},
 			"question": map[string]interface{}{
-				"suffix": true, "left": 13000, "src": "?",
+				"suffix": true, "left": 3500000, "src": "?",
 			},
 		},
 	})
@@ -189,10 +189,10 @@ func TestSpecUnarySuffixPrefix(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"factorial": map[string]interface{}{
-				"suffix": true, "left": 15000, "src": "!",
+				"suffix": true, "left": 6000000, "src": "!",
 			},
 			"question": map[string]interface{}{
-				"suffix": true, "left": 13000, "src": "?",
+				"suffix": true, "left": 3500000, "src": "?",
 			},
 		},
 	})
@@ -203,10 +203,10 @@ func TestSpecUnarySuffixParen(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"factorial": map[string]interface{}{
-				"suffix": true, "left": 15000, "src": "!",
+				"suffix": true, "left": 6000000, "src": "!",
 			},
 			"question": map[string]interface{}{
-				"suffix": true, "left": 13000, "src": "?",
+				"suffix": true, "left": 3500000, "src": "?",
 			},
 		},
 	})
@@ -227,7 +227,7 @@ func TestSpecTernaryBasic(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"factorial": map[string]interface{}{
-				"suffix": true, "src": "!", "left": 15000,
+				"suffix": true, "src": "!", "left": 6000000,
 			},
 			"ternary": map[string]interface{}{
 				"ternary": true, "src": []interface{}{"?", ":"},
@@ -241,7 +241,7 @@ func TestSpecTernaryImplicitList(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"factorial": map[string]interface{}{
-				"suffix": true, "src": "!", "left": 15000,
+				"suffix": true, "src": "!", "left": 6000000,
 			},
 			"ternary": map[string]interface{}{
 				"ternary": true, "src": []interface{}{"?", ":"},
@@ -305,7 +305,7 @@ func TestSpecAddInfix(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"foo": map[string]interface{}{
-				"infix": true, "left": 180, "right": 190, "src": "foo",
+				"infix": true, "left": 3500000, "right": 3600000, "src": "foo",
 			},
 		},
 	})
@@ -629,7 +629,7 @@ func TestSpecPrevalOverload(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
 			"factorial": map[string]interface{}{
-				"suffix": true, "left": 15000, "src": "!",
+				"suffix": true, "left": 6000000, "src": "!",
 			},
 			"square": map[string]interface{}{
 				"osrc": "[", "csrc": "]", "paren": true,

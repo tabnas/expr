@@ -1589,13 +1589,13 @@ func resolveOptions(opts map[string]interface{}) *ExprOptions {
 
 func addDefaultOps(eopts *ExprOptions) {
 	defaults := map[string]*OpDef{
-		"positive":       {Prefix: true, Right: 14000, Src: "+"},
-		"negative":       {Prefix: true, Right: 14000, Src: "-"},
-		"addition":       {Infix: true, Left: 140, Right: 150, Src: "+"},
-		"subtraction":    {Infix: true, Left: 140, Right: 150, Src: "-"},
-		"multiplication": {Infix: true, Left: 160, Right: 170, Src: "*"},
-		"division":       {Infix: true, Left: 160, Right: 170, Src: "/"},
-		"remainder":      {Infix: true, Left: 160, Right: 170, Src: "%"},
+		"positive":       {Prefix: true, Right: 4000000, Src: "+"},
+		"negative":       {Prefix: true, Right: 4000000, Src: "-"},
+		"addition":       {Infix: true, Left: 2000000, Right: 2100000, Src: "+"},
+		"subtraction":    {Infix: true, Left: 2000000, Right: 2100000, Src: "-"},
+		"multiplication": {Infix: true, Left: 3000000, Right: 3100000, Src: "*"},
+		"division":       {Infix: true, Left: 3000000, Right: 3100000, Src: "/"},
+		"remainder":      {Infix: true, Left: 3000000, Right: 3100000, Src: "%"},
 		"plain":          {Paren: true, OSrc: "(", CSrc: ")"},
 	}
 	for name, def := range defaults {
