@@ -146,7 +146,7 @@ gen('paren-list-implicit-structure-space', [
 
 gen('jsonic-base', ['1 "a" true', 'x:1 y:"a" z:true'], j)
 
-const je_foo = Jsonic.make().use(Expr, { op: { foo: { infix: true, left: 350000, right: 360000, src: 'foo' } } })
+const je_foo = Jsonic.make().use(Expr, { op: { foo: { infix: true, left: 3500000, right: 3600000, src: 'foo' } } })
 gen('add-infix', ['1 foo 2'], mj(je_foo))
 
 const je_angle = Jsonic.make().use(Expr, { op: { angle: { paren: true, osrc: '<', csrc: '>' } } })
@@ -161,7 +161,7 @@ gen('paren-preval-basic', [
 
 const je_overload = Jsonic.make().use(Expr, {
   op: {
-    factorial: { suffix: true, left: 600000, src: '!' },
+    factorial: { suffix: true, left: 6000000, src: '!' },
     square: { osrc: '[', csrc: ']', paren: true, preval: { required: true } },
     brace: { osrc: '{', csrc: '}', paren: true, preval: { required: true } }
   }
