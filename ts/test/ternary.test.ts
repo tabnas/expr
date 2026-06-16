@@ -4,7 +4,7 @@ import { describe, test, beforeEach } from 'node:test'
 
 import { Tabnas, util } from '@tabnas/parser'
 import { jsonic } from '@tabnas/jsonic'
-import { Debug } from '@tabnas/jsonic/debug'
+import { Debug } from '@tabnas/debug'
 
 import {
   Expr,
