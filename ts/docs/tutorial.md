@@ -16,7 +16,7 @@ and follow the column; the inputs and outputs match.
 
 ```sh
 # TypeScript
-npm install @tabnas/expr @tabnas/jsonic
+npm install @tabnas/expr @tabnas/parser @tabnas/jsonic
 
 # Go
 go get github.com/tabnas/expr/go
@@ -27,12 +27,13 @@ go get github.com/tabnas/expr/go
 TypeScript:
 
 ```ts
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Expr } from '@tabnas/expr'
 
-const j = Jsonic.make().use(Expr)
+const j = new Tabnas().use(jsonic).use(Expr)
 
-console.log(j('1+2*3'))
+console.log(j.parse('1+2*3'))
 // [ { src: '+', ... }, 1, [ { src: '*', ... }, 2, 3 ] ]
 ```
 
@@ -65,7 +66,8 @@ and returns a value. Supply it via the plugin's `evaluate` option.
 TypeScript:
 
 ```ts
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Expr } from '@tabnas/expr'
 
 const math = (rule: any, ctx: any, op: any, ...terms: any[]) => {
@@ -77,10 +79,10 @@ const math = (rule: any, ctx: any, op: any, ...terms: any[]) => {
   }
 }
 
-const j = Jsonic.make().use(Expr, { evaluate: math })
+const j = new Tabnas().use(jsonic).use(Expr, { evaluate: math })
 
-console.log(j('1+2*3'))  // 7
-console.log(j('-4+10'))  // 6
+console.log(j.parse('1+2*3'))  // 7
+console.log(j.parse('-4+10'))  // 6
 ```
 
 Go:
@@ -128,7 +130,7 @@ Expressions live inside any Jsonic value slot, so you can drop them
 into objects and arrays:
 
 ```ts
-j('{ total: 1+2*3, flags: [!true, -4] }')
+j.parse('{ total: 1+2*3, flags: [!true, -4] }')
 // { total: 7, flags: [false, -4] }   (after an evaluator for ! and - is added)
 ```
 

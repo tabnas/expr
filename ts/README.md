@@ -16,7 +16,7 @@ which a user-supplied evaluator can reduce to values.
 TypeScript:
 
 ```sh
-npm install @tabnas/expr @tabnas/jsonic
+npm install @tabnas/expr @tabnas/parser @tabnas/jsonic
 ```
 
 Go:
@@ -38,6 +38,16 @@ Docs are organised following the [Diátaxis](https://diataxis.fr) framework:
   `OpDef` schema, default operator set, grammar group tags.
 - **[Explanation](docs/explanation.md)** — design notes: Pratt algorithm,
   S-expression AST, paren/ternary/preval semantics, why `g=expr` tagging.
+
+
+## Grammar diagram
+
+The installed grammar as a railroad/syntax diagram, generated from the live
+grammar with [`@tabnas/railroad`](https://github.com/tabnas/railroad):
+
+![expr grammar railroad diagram](doc/grammar.svg)
+
+A vertical ASCII version is in [`doc/grammar.txt`](doc/grammar.txt).
 
 ## License
 

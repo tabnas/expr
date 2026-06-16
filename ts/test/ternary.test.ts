@@ -2,7 +2,8 @@
 
 import { describe, test, beforeEach } from 'node:test'
 
-import { Jsonic, util } from '@tabnas/jsonic'
+import { Tabnas, util } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Debug } from '@tabnas/jsonic/debug'
 
 import {
@@ -31,7 +32,7 @@ const S = (x: any): any =>
     (null != x && 'object' === typeof (x) ? omap(x, ([n, v]: [any, any]) => [n, S(v)]) : x)
 
 const mj =
-  (je: Jsonic) => (s: string, m?: any) => C(S(je(s, m)))
+  (je: Tabnas) => (s: string, m?: any) => C(S(je.parse(s, m)))
 
 
 // const _mo_ = 'toMatchObject'
@@ -46,7 +47,7 @@ describe('expr', () => {
   })
 
   test('ternary-basic', () => {
-    const je = Jsonic.make()
+    const je = new Tabnas().use(jsonic)
       // .use(Debug, { trace: true })
 
       .use(Expr, {
@@ -295,7 +296,7 @@ describe('expr', () => {
 
 
   test('ternary-paren-preval', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       // TODO: make this work
       op: {
         ternary: {
@@ -345,7 +346,7 @@ describe('expr', () => {
 
 
   test('ternary-many', () => {
-    const je0 = Jsonic.make().use(Expr, {
+    const je0 = new Tabnas().use(jsonic).use(Expr, {
       // TODO: make this work
       op: {
         foo: {
@@ -368,7 +369,7 @@ describe('expr', () => {
     expect(j0('1QQ2?4:5CC3'))[_mo_](['QQ', 1, ['?', 2, 4, 5], 3])
     expect(j0('1?2QQ4CC5:3'))[_mo_](['?', 1, ['QQ', 2, 4, 5], 3])
 
-    const je1 = Jsonic.make().use(Expr, {
+    const je1 = new Tabnas().use(jsonic).use(Expr, {
       // TODO: make this work
       op: {
         foo: {

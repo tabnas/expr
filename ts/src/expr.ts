@@ -33,8 +33,10 @@
 // TODO: increase infix base binding values
 // TODO: error on incomplete expr: 1+2+
 
+// The engine is the tabnas parser; jsonic supplies the relaxed-JSON
+// grammar. Engine types are re-exported by @tabnas/parser.
 import {
-  Jsonic,
+  Tabnas,
   Plugin,
   Rule,
   RuleSpec,
@@ -44,7 +46,7 @@ import {
   Context,
   Token,
   util,
-} from '@tabnas/jsonic'
+} from '@tabnas/parser'
 
 const { omap, entries, values } = util
 
@@ -116,7 +118,7 @@ type Evaluate = (rule: Rule, ctx: Context, op: Op, ...terms: any) => any
 const OP_MARK = {}
 
 // The plugin itself.
-let Expr: Plugin = function Expr(jsonic: Jsonic, options: ExprOptions) {
+let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
   // Ensure comment matcher is first to avoid conflicts with
   // comment markers (//, /*, etc)
   // let lexm = jsonic.options.lex?.match || []
@@ -131,8 +133,8 @@ let Expr: Plugin = function Expr(jsonic: Jsonic, options: ExprOptions) {
 
   // console.log('EXPR', options)
 
-  let token = jsonic.token.bind(jsonic) as any
-  let fixed = jsonic.fixed.bind(jsonic) as any
+  let token = tn.token.bind(tn) as any
+  let fixed = tn.fixed.bind(tn) as any
 
   // Build token maps (TM).
   let optop = options.op || {}
@@ -170,7 +172,7 @@ let Expr: Plugin = function Expr(jsonic: Jsonic, options: ExprOptions) {
     ...ternaryTM,
   }).reduce((a, op) => ((a[op.tkn] = op.src), a), {} as any)
 
-  jsonic.options({
+  tn.options({
     fixed: {
       token: { ...operatorFixed, ...parenFixed },
     },
@@ -199,7 +201,7 @@ let Expr: Plugin = function Expr(jsonic: Jsonic, options: ExprOptions) {
   }
 
   const rule = (name: string, fn: (rs: RuleSpec) => void) => {
-    jsonic.rule(name, (rs: RuleSpec) => {
+    tn.rule(name, (rs: RuleSpec) => {
       const origOpen = rs.open.bind(rs)
       const origClose = rs.close.bind(rs)
       ;(rs as any).open = (alts: any, flags?: any) => origOpen(tagExpr(alts), flags)
@@ -228,14 +230,14 @@ let Expr: Plugin = function Expr(jsonic: Jsonic, options: ExprOptions) {
   const hasTernary = 0 < TERN0.length && 0 < TERN1.length
   const hasParen = 0 < OP.length && 0 < CP.length
 
-  const CA = jsonic.token.CA
-  const CS = jsonic.token.CS
-  const CB = jsonic.token.CB
-  const TX = jsonic.token.TX
-  const NR = jsonic.token.NR
-  const ST = jsonic.token.ST
-  const VL = jsonic.token.VL
-  const ZZ = jsonic.token.ZZ
+  const CA = tn.token.CA
+  const CS = tn.token.CS
+  const CB = tn.token.CB
+  const TX = tn.token.TX
+  const NR = tn.token.NR
+  const ST = tn.token.ST
+  const VL = tn.token.VL
+  const ZZ = tn.token.ZZ
 
   const VAL = [TX, NR, ST, VL]
 
@@ -244,7 +246,7 @@ let Expr: Plugin = function Expr(jsonic: Jsonic, options: ExprOptions) {
   rule('val', (rs: RuleSpec) => {
     // TODO: jsonic - make it easier to handle this case
     // Implicit pair not allowed inside ternary
-    if (hasTernary && TERN1.includes(jsonic.token.CL)) {
+    if (hasTernary && TERN1.includes(tn.token.CL)) {
       // let pairkeyalt: any = rs.def.open.find((a: any) => a.g.includes('pair'))
       // pairkeyalt.c = (r: Rule) => !r.n.expr_ternary
 

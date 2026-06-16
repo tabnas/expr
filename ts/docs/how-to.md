@@ -22,11 +22,11 @@ Left-associative operators have `left < right`; right-associative have
 TypeScript:
 
 ```ts
-Jsonic.make().use(Expr, {
+new Tabnas().use(jsonic).use(Expr, {
   op: {
     power: { infix: true, src: '^', left: 260, right: 250 },  // right-assoc
   },
-})('2^3^2')  // ['^', 2, ['^', 3, 2]]
+}).parse('2^3^2')  // ['^', 2, ['^', 3, 2]]
 ```
 
 Go:
@@ -111,7 +111,7 @@ Parses `a ? b : c` as `['?', a, b, c]`.
 Set the named op to `null` in your options:
 
 ```ts
-Jsonic.make().use(Expr, { op: { remainder: null } })
+new Tabnas().use(jsonic).use(Expr, { op: { remainder: null } })
 ```
 
 `1%2` now fails to parse — no `%` operator is registered.
@@ -123,7 +123,7 @@ its `g` (group) field. Use Jsonic's `rule.exclude` option to remove
 the expression grammar entirely:
 
 ```ts
-Jsonic.make().use(Expr).options({ rule: { exclude: 'expr' } })
+new Tabnas().use(jsonic).use(Expr).options({ rule: { exclude: 'expr' } })
 ```
 
 This is how you temporarily reuse a shared Jsonic instance without
