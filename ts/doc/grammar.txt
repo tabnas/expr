@@ -138,5 +138,5 @@ paren:
        │
 
 Tokens:
-  KEY = map key (text, number, string, or value)
-  VAL = a value (text, number, string, or value)
+  KEY = map key: bare text, number, string, or keyword
+  VAL = value: bare text, number, string, or keyword
