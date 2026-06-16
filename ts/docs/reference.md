@@ -99,17 +99,49 @@ Named ops in the `op` map merge with the defaults. Set a name to `null`
 
 | Name            | Kind   | `src` | Precedence (left, right) |
 | --------------- | ------ | ----- | ------------------------ |
-| `positive`      | prefix | `+`   | _, 14000                 |
-| `negative`      | prefix | `-`   | _, 14000                 |
-| `addition`      | infix  | `+`   | 140, 150                 |
-| `subtraction`   | infix  | `-`   | 140, 150                 |
-| `multiplication`| infix  | `*`   | 160, 170                 |
-| `division`      | infix  | `/`   | 160, 170                 |
-| `remainder`     | infix  | `%`   | 160, 170                 |
+| `addition`      | infix  | `+`   | 12000, 12010             |
+| `subtraction`   | infix  | `-`   | 12000, 12010             |
+| `multiplication`| infix  | `*`   | 13000, 13010             |
+| `division`      | infix  | `/`   | 13000, 13010             |
+| `remainder`     | infix  | `%`   | 13000, 13010             |
+| `positive`      | prefix | `+`   | _, 15000                 |
+| `negative`      | prefix | `-`   | _, 15000                 |
 | `plain`         | paren  | `(` `)` | —                      |
 
 Higher numeric precedence binds tighter. `left < right` gives
-left-associativity (`a+b+c` → `(a+b)+c`).
+left-associativity (`a+b+c` → `(a+b)+c`); `left > right` gives
+right-associativity.
+
+### The binding-power scale
+
+Precedence values are compared only by **order**, never by magnitude, so the
+defaults sit on a deliberately roomy **base-1000 ladder** that leaves space for
+client operators to slot between, below, and above the built-ins. Most reserved
+tiers are **below** arithmetic, where grammars add the most operators:
+
+| Base      | Tier                                       | Built-in?     |
+| --------- | ------------------------------------------ | ------------- |
+| 1000      | sequence / comma                           |               |
+| 2000      | assignment (right-assoc)                   |               |
+| 3000      | ternary / conditional                      |               |
+| 4000      | logical or                                 |               |
+| 5000      | logical and                                |               |
+| 6000–8000 | bitwise or / xor / and                     |               |
+| 9000      | equality (`==` `!=`)                       |               |
+| 10000     | comparison (`<` `<=` `>` `>=`)             |               |
+| 11000     | shift (`<<` `>>`)                          |               |
+| **12000** | **addition / subtraction**                 | ✔ `+` `-`     |
+| **13000** | **multiplication / division / remainder**  | ✔ `*` `/` `%` |
+| 14000     | _(free)_                                   |               |
+| **15000** | **unary prefix**                           | ✔ `+` `-`     |
+| 16000     | _(free — extra prefix)_                    |               |
+| 17000     | exponent (`**`, right-assoc)               |               |
+| 18000     | postfix / suffix (`!` `?`)                 |               |
+| 19000     | call / index / member                      |               |
+
+To add an operator, pick a tier `base = N*1000` (`left = base`,
+`right = base + 10` for left-assoc; swap for right-assoc). Need an in-between
+level? Use `base + 100`, `base + 200`, … — each gap holds ~9 round sub-tiers.
 
 ## AST shape
 
