@@ -18,7 +18,7 @@ function gen(name, inputs, j) {
 
 const je_overload = Jsonic.make().use(Expr, {
   op: {
-    factorial: { suffix: true, left: 1800000, src: '!' },
+    factorial: { suffix: true, left: 600000, src: '!' },
     square: { osrc: '[', csrc: ']', paren: true, preval: { required: true } },
     brace: { osrc: '{', csrc: '}', paren: true, preval: { required: true } }
   }

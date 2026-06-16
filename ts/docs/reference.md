@@ -99,13 +99,13 @@ Named ops in the `op` map merge with the defaults. Set a name to `null`
 
 | Name            | Kind   | `src` | Precedence (left, right) |
 | --------------- | ------ | ----- | ------------------------ |
-| `addition`      | infix  | `+`   | 1200000, 1210000         |
-| `subtraction`   | infix  | `-`   | 1200000, 1210000         |
-| `multiplication`| infix  | `*`   | 1300000, 1310000         |
-| `division`      | infix  | `/`   | 1300000, 1310000         |
-| `remainder`     | infix  | `%`   | 1300000, 1310000         |
-| `positive`      | prefix | `+`   | _, 1500000               |
-| `negative`      | prefix | `-`   | _, 1500000               |
+| `addition`      | infix  | `+`   | 200000, 210000           |
+| `subtraction`   | infix  | `-`   | 200000, 210000           |
+| `multiplication`| infix  | `*`   | 300000, 310000           |
+| `division`      | infix  | `/`   | 300000, 310000           |
+| `remainder`     | infix  | `%`   | 300000, 310000           |
+| `positive`      | prefix | `+`   | _, 400000                |
+| `negative`      | prefix | `-`   | _, 400000                |
 | `plain`         | paren  | `(` `)` | —                      |
 
 Higher numeric precedence binds tighter. `left < right` gives
@@ -114,34 +114,27 @@ right-associativity.
 
 ### The binding-power scale
 
-Precedence values are compared only by **order**, never by magnitude, so the
-defaults sit on a deliberately roomy **base-100000 ladder** that leaves space
-for client operators to slot between, below, and above the built-ins. Most
-reserved tiers are **below** arithmetic, where grammars add the most operators:
+Precedence values are compared only by **order**, never by magnitude. The
+built-ins occupy a compact low block on a **base-100000 ladder**; the unary
+prefix is the tightest built-in (400000), so the entire range **above** it is
+open for tighter client operators, and looser operators slot in below addition:
 
-| Base          | Tier                                       | Built-in?     |
-| ------------- | ------------------------------------------ | ------------- |
-| 100000        | sequence / comma                           |               |
-| 200000        | assignment (right-assoc)                   |               |
-| 300000        | ternary / conditional                      |               |
-| 400000        | logical or                                 |               |
-| 500000        | logical and                                |               |
-| 600000–800000 | bitwise or / xor / and                     |               |
-| 900000        | equality (`==` `!=`)                       |               |
-| 1000000       | comparison (`<` `<=` `>` `>=`)             |               |
-| 1100000       | shift (`<<` `>>`)                          |               |
-| **1200000**   | **addition / subtraction**                 | ✔ `+` `-`     |
-| **1300000**   | **multiplication / division / remainder**  | ✔ `*` `/` `%` |
-| 1400000       | _(free)_                                   |               |
-| **1500000**   | **unary prefix**                           | ✔ `+` `-`     |
-| 1600000       | _(free — extra prefix)_                    |               |
-| 1700000       | exponent (`**`, right-assoc)               |               |
-| 1800000       | postfix / suffix (`!` `?`)                 |               |
-| 1900000       | call / index / member                      |               |
+| Base      | Tier                                          | Built-in?     |
+| --------- | --------------------------------------------- | ------------- |
+| < 100000  | looser client ops (assignment, ternary, logical, comparison, …) | |
+| 100000    | sequence / comma                              |               |
+| **200000**| **addition / subtraction**                    | ✔ `+` `-`     |
+| **300000**| **multiplication / division / remainder**     | ✔ `*` `/` `%` |
+| **400000**| **unary prefix** _(tightest built-in)_        | ✔ `+` `-`     |
+| 500000    | exponent (`**`, right-assoc)                  |               |
+| 600000    | postfix / suffix (`!` `?`)                    |               |
+| 700000    | call / index / member                         |               |
+| 800000 +  | _(free — the whole range above 400000 is open)_ |             |
 
 To add an operator, pick a tier `base = N*100000` (`left = base`,
-`right = base + 10000` for left-assoc; swap for right-assoc). Need an in-between
-level? Use `base + 20000`, `base + 40000`, … — each gap holds ~4 sub-tiers.
+`right = base + 10000` for left-assoc; swap for right-assoc). Tighter than the
+built-ins? Use `500000` and up. Looser? Use below `200000`. Sub-divide any gap
+with `base + 20000`, `base + 40000`, … — each gap holds ~4 sub-tiers.
 
 ## AST shape
 

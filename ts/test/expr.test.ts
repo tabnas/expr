@@ -758,10 +758,10 @@ describe('expr', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         at: {
-          prefix: true, right: 1600000, src: '@'
+          prefix: true, right: 500000, src: '@'
         },
         tight: {
-          infix: true, left: 1900000, right: 1910000, src: '~'
+          infix: true, left: 700000, right: 710000, src: '~'
         },
       }
     })
@@ -819,10 +819,10 @@ describe('expr', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
-          suffix: true, left: 1800000, src: '!'
+          suffix: true, left: 600000, src: '!'
         },
         question: {
-          suffix: true, left: 1400000, src: '?'
+          suffix: true, left: 350000, src: '?'
         },
       }
     })
@@ -881,13 +881,13 @@ describe('expr', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
-          suffix: true, left: 1800000, src: '!'
+          suffix: true, left: 600000, src: '!'
         },
         question: {
-          suffix: true, left: 1400000, src: '?'
+          suffix: true, left: 350000, src: '?'
         },
         tight: {
-          infix: true, left: 1900000, right: 1910000, src: '~'
+          infix: true, left: 700000, right: 710000, src: '~'
         },
       }
     })
@@ -944,10 +944,10 @@ describe('expr', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
-          suffix: true, left: 1800000, src: '!'
+          suffix: true, left: 600000, src: '!'
         },
         question: {
-          suffix: true, left: 1400000, src: '?'
+          suffix: true, left: 350000, src: '?'
         },
       }
     })
@@ -1006,10 +1006,10 @@ describe('expr', () => {
       .use(Expr, {
         op: {
           factorial: {
-            suffix: true, left: 1800000, src: '!'
+            suffix: true, left: 600000, src: '!'
           },
           question: {
-            suffix: true, left: 1400000, src: '?'
+            suffix: true, left: 350000, src: '?'
           },
         }
       })
@@ -1053,10 +1053,10 @@ describe('expr', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
-          suffix: true, left: 1800000, src: '!'
+          suffix: true, left: 600000, src: '!'
         },
         question: {
-          suffix: true, left: 1400000, src: '?'
+          suffix: true, left: 350000, src: '?'
         },
       }
     })
@@ -1878,7 +1878,7 @@ describe('expr', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
-          suffix: true, left: 1800000, src: '!'
+          suffix: true, left: 600000, src: '!'
         },
         square: {
           osrc: '[',
@@ -2101,7 +2101,7 @@ describe('expr', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         foo: {
-          infix: true, left: 1400000, right: 1410000, src: 'foo'
+          infix: true, left: 350000, right: 360000, src: 'foo'
         }
       }
     })
