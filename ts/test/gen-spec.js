@@ -159,8 +159,8 @@ function writeTsv(filename, header, entries) {
 {
   const je = Jsonic.make().use(Expr, {
     op: {
-      factorial: { suffix: true, left: 600000, src: '!' },
-      question: { suffix: true, left: 350000, src: '?' },
+      factorial: { suffix: true, left: 6000000, src: '!' },
+      question: { suffix: true, left: 3500000, src: '?' },
     }
   })
   const j = mj(je)
@@ -186,9 +186,9 @@ function writeTsv(filename, header, entries) {
 {
   const je = Jsonic.make().use(Expr, {
     op: {
-      factorial: { suffix: true, left: 600000, src: '!' },
-      question: { suffix: true, left: 350000, src: '?' },
-      tight: { infix: true, left: 700000, right: 710000, src: '~' },
+      factorial: { suffix: true, left: 6000000, src: '!' },
+      question: { suffix: true, left: 3500000, src: '?' },
+      tight: { infix: true, left: 7000000, right: 7100000, src: '~' },
     }
   })
   const j = mj(je)
@@ -214,8 +214,8 @@ function writeTsv(filename, header, entries) {
 {
   const je = Jsonic.make().use(Expr, {
     op: {
-      factorial: { suffix: true, left: 600000, src: '!' },
-      question: { suffix: true, left: 350000, src: '?' },
+      factorial: { suffix: true, left: 6000000, src: '!' },
+      question: { suffix: true, left: 3500000, src: '?' },
     }
   })
   const j = mj(je)
@@ -240,8 +240,8 @@ function writeTsv(filename, header, entries) {
 {
   const je = Jsonic.make().use(Expr, {
     op: {
-      factorial: { suffix: true, left: 600000, src: '!' },
-      question: { suffix: true, left: 350000, src: '?' },
+      factorial: { suffix: true, left: 6000000, src: '!' },
+      question: { suffix: true, left: 3500000, src: '?' },
     }
   })
   const j = mj(je)
@@ -263,8 +263,8 @@ function writeTsv(filename, header, entries) {
 {
   const je = Jsonic.make().use(Expr, {
     op: {
-      at: { prefix: true, right: 500000, src: '@' },
-      tight: { infix: true, left: 700000, right: 710000, src: '~' },
+      at: { prefix: true, right: 5000000, src: '@' },
+      tight: { infix: true, left: 7000000, right: 7100000, src: '~' },
     }
   })
   const j = mj(je)
@@ -290,7 +290,7 @@ function writeTsv(filename, header, entries) {
 {
   const je = Jsonic.make().use(Expr, {
     op: {
-      factorial: { suffix: true, src: '!', left: 600000 },
+      factorial: { suffix: true, src: '!', left: 6000000 },
       ternary: { ternary: true, src: ['?', ':'] },
     }
   })
@@ -333,8 +333,8 @@ function writeTsv(filename, header, entries) {
 {
   const je = Jsonic.make().use(Expr, {
     op: {
-      factorial: { suffix: true, left: 600000, src: '!' },
-      question: { suffix: true, left: 350000, src: '?' },
+      factorial: { suffix: true, left: 6000000, src: '!' },
+      question: { suffix: true, left: 3500000, src: '?' },
     }
   })
   const j = mj(je)

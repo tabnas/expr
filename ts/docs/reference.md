@@ -99,13 +99,13 @@ Named ops in the `op` map merge with the defaults. Set a name to `null`
 
 | Name            | Kind   | `src` | Precedence (left, right) |
 | --------------- | ------ | ----- | ------------------------ |
-| `addition`      | infix  | `+`   | 200000, 210000           |
-| `subtraction`   | infix  | `-`   | 200000, 210000           |
-| `multiplication`| infix  | `*`   | 300000, 310000           |
-| `division`      | infix  | `/`   | 300000, 310000           |
-| `remainder`     | infix  | `%`   | 300000, 310000           |
-| `positive`      | prefix | `+`   | _, 400000                |
-| `negative`      | prefix | `-`   | _, 400000                |
+| `addition`      | infix  | `+`   | 2000000, 2100000           |
+| `subtraction`   | infix  | `-`   | 2000000, 2100000           |
+| `multiplication`| infix  | `*`   | 3000000, 3100000           |
+| `division`      | infix  | `/`   | 3000000, 3100000           |
+| `remainder`     | infix  | `%`   | 3000000, 3100000           |
+| `positive`      | prefix | `+`   | _, 4000000                |
+| `negative`      | prefix | `-`   | _, 4000000                |
 | `plain`         | paren  | `(` `)` | —                      |
 
 Higher numeric precedence binds tighter. `left < right` gives
@@ -115,26 +115,26 @@ right-associativity.
 ### The binding-power scale
 
 Precedence values are compared only by **order**, never by magnitude. The
-built-ins occupy a compact low block on a **base-100000 ladder**; the unary
-prefix is the tightest built-in (400000), so the entire range **above** it is
+built-ins occupy a compact low block on a **base-1000000 ladder**; the unary
+prefix is the tightest built-in (4000000), so the entire range **above** it is
 open for tighter client operators, and looser operators slot in below addition:
 
 | Base      | Tier                                          | Built-in?     |
 | --------- | --------------------------------------------- | ------------- |
-| < 100000  | looser client ops (assignment, ternary, logical, comparison, …) | |
-| 100000    | sequence / comma                              |               |
-| **200000**| **addition / subtraction**                    | ✔ `+` `-`     |
-| **300000**| **multiplication / division / remainder**     | ✔ `*` `/` `%` |
-| **400000**| **unary prefix** _(tightest built-in)_        | ✔ `+` `-`     |
-| 500000    | exponent (`**`, right-assoc)                  |               |
-| 600000    | postfix / suffix (`!` `?`)                    |               |
-| 700000    | call / index / member                         |               |
-| 800000 +  | _(free — the whole range above 400000 is open)_ |             |
+| < 1000000  | looser client ops (assignment, ternary, logical, comparison, …) | |
+| 1000000    | sequence / comma                              |               |
+| **2000000**| **addition / subtraction**                    | ✔ `+` `-`     |
+| **3000000**| **multiplication / division / remainder**     | ✔ `*` `/` `%` |
+| **4000000**| **unary prefix** _(tightest built-in)_        | ✔ `+` `-`     |
+| 5000000    | exponent (`**`, right-assoc)                  |               |
+| 6000000    | postfix / suffix (`!` `?`)                    |               |
+| 7000000    | call / index / member                         |               |
+| 8000000 +  | _(free — the whole range above 4000000 is open)_ |             |
 
-To add an operator, pick a tier `base = N*100000` (`left = base`,
-`right = base + 10000` for left-assoc; swap for right-assoc). Tighter than the
-built-ins? Use `500000` and up. Looser? Use below `200000`. Sub-divide any gap
-with `base + 20000`, `base + 40000`, … — each gap holds ~4 sub-tiers.
+To add an operator, pick a tier `base = N*1000000` (`left = base`,
+`right = base + 100000` for left-assoc; swap for right-assoc). Tighter than the
+built-ins? Use `5000000` and up. Looser? Use below `2000000`. Sub-divide any gap
+with `base + 200000`, `base + 400000`, … — each gap holds ~4 sub-tiers.
 
 ## AST shape
 

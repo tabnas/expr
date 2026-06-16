@@ -1325,39 +1325,39 @@ function makeParenMap(
 // the right), which is why prefix ops give only `right` and parens give
 // neither.
 //
-// The defaults occupy a compact low block on a base-100000 ladder, leaving the
-// entire range above the built-ins open for client operators. Tiers are 100000
-// apart; the +10000 on `right` is the left-associativity offset, so a tier
-// occupies a 10000-wide band inside its 100000-wide slot and adjacent tiers can
-// never overlap. The unary prefix is the tightest built-in (400000); everything
-// above it is free for tighter client operators (exponent, postfix,
+// The defaults occupy a compact low block on a base-1000000 ladder, leaving the
+// entire range above the built-ins open for client operators. Tiers are 1000000
+// apart; the +100000 on `right` is the left-associativity offset, so a tier
+// occupies a 100000-wide band inside its 1000000-wide slot and adjacent tiers
+// can never overlap. The unary prefix is the tightest built-in (4000000);
+// everything above it is free for tighter client operators (exponent, postfix,
 // call/member, …), and looser operators (assignment, ternary, logical, …) slot
 // in below addition:
 //
-//    <100000  looser client ops (assignment, ternary, logical, comparison, …)
-//     100000  sequence / comma
-//     200000  addition / subtraction                 <-- built-in
-//     300000  multiplication / division / remainder  <-- built-in
-//     400000  unary prefix      (+ -)                 <-- built-in (tightest)
-//     500000  exponent          (** ^, right-assoc: left 510000, right 500000)
-//     600000  postfix / suffix  (! ? ++)
-//     700000  call / index / member  (f() a[i] a.b)
-//     800000+ free — the whole range above 400000 is open for client ops
+//    <1000000  looser client ops (assignment, ternary, logical, comparison, …)
+//     1000000  sequence / comma
+//     2000000  addition / subtraction                 <-- built-in
+//     3000000  multiplication / division / remainder  <-- built-in
+//     4000000  unary prefix      (+ -)                 <-- built-in (tightest)
+//     5000000  exponent          (** ^, right-assoc: left 5100000, right 5000000)
+//     6000000  postfix / suffix  (! ? ++)
+//     7000000  call / index / member  (f() a[i] a.b)
+//     8000000+ free — the whole range above 4000000 is open for client ops
 //
-// To add an operator, pick a tier base = N*100000 (left = base, right = base +
-// 10000 for left-assoc; swap them for right-assoc). Tighter than the built-ins?
-// Use 500000 and up. Looser? Use below 200000. Sub-divide any gap with
-// base + 20000, base + 40000, … — each 100000-wide gap holds ~4 sub-tiers.
+// To add an operator, pick a tier base = N*1000000 (left = base, right = base +
+// 100000 for left-assoc; swap them for right-assoc). Tighter than the built-ins?
+// Use 5000000 and up. Looser? Use below 2000000. Sub-divide any gap with
+// base + 200000, base + 400000, … — each 1000000-wide gap holds ~4 sub-tiers.
 Expr.defaults = {
   op: {
     positive: {
       prefix: true,
-      right: 400000,
+      right: 4000000,
       src: '+',
     },
     negative: {
       prefix: true,
-      right: 400000,
+      right: 4000000,
       src: '-',
     },
 
@@ -1365,32 +1365,32 @@ Expr.defaults = {
     // Example: 2+3+4 === (2+3)+4
     addition: {
       infix: true,
-      left: 200000,
-      right: 210000,
+      left: 2000000,
+      right: 2100000,
       src: '+',
     },
     subtraction: {
       infix: true,
-      left: 200000,
-      right: 210000,
+      left: 2000000,
+      right: 2100000,
       src: '-',
     },
     multiplication: {
       infix: true,
-      left: 300000,
-      right: 310000,
+      left: 3000000,
+      right: 3100000,
       src: '*',
     },
     division: {
       infix: true,
-      left: 300000,
-      right: 310000,
+      left: 3000000,
+      right: 3100000,
       src: '/',
     },
     remainder: {
       infix: true,
-      left: 300000,
-      right: 310000,
+      left: 3000000,
+      right: 3100000,
       src: '%',
     },
 
