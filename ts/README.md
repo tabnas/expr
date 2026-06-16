@@ -16,7 +16,7 @@ which a user-supplied evaluator can reduce to values.
 TypeScript:
 
 ```sh
-npm install @tabnas/expr @tabnas/jsonic
+npm install @tabnas/expr @tabnas/parser @tabnas/jsonic
 ```
 
 Go:

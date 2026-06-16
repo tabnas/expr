@@ -18,7 +18,7 @@ Exported API for `@tabnas/expr` (TypeScript) and
 
 | Symbol       | Kind  | Description                                               |
 | ------------ | ----- | --------------------------------------------------------- |
-| `Expr`       | plugin| Jsonic plugin. Pass to `jsonic.use(Expr, opts?)`.         |
+| `Expr`       | plugin| Jsonic plugin. Pass to `tn.use(Expr, opts?)`.             |
 | `evaluation` | fn    | Internal evaluator entry used by the plugin.              |
 | `testing`    | obj   | Internal helpers exposed for the test suite.              |
 | `ExprOptions`| type  | Shape of the plugin options argument.                     |
@@ -82,7 +82,7 @@ already evaluated. Return the op's value.
 ## Plugin options
 
 ```ts
-jsonic.use(Expr, { op: {...}, evaluate: fn })
+tn.use(Expr, { op: {...}, evaluate: fn })
 ```
 
 ```go

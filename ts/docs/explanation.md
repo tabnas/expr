@@ -84,7 +84,7 @@ field. Users of a shared Jsonic instance can then strip the expression
 grammar cleanly:
 
 ```ts
-jsonic.options({ rule: { exclude: 'expr' } })
+tn.options({ rule: { exclude: 'expr' } })
 ```
 
 Internally the plugin tags alts by snapshotting `rs.Open`/`rs.Close`

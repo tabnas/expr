@@ -3,7 +3,8 @@
 
 import { describe, test, beforeEach } from 'node:test'
 
-import { Jsonic, Rule, Context, util } from '@tabnas/jsonic'
+import { Tabnas, Rule, Context, util } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Debug } from '@tabnas/jsonic/debug'
 
 import {
@@ -37,7 +38,7 @@ const S = (x: any, seen?: WeakSet<any>): any => (
       (null != x && 'object' === typeof (x) ? omap(x, ([n, v]: [any, any]) => [n, S(v, seen)]) : x)))
 
 const mj =
-  (je: Jsonic) => (s: string, m?: any) => C(S(je(s, m)))
+  (je: Tabnas) => (s: string, m?: any) => C(S(je.parse(s, m)))
 
 
 // const _mo_ = 'toMatchObject'
@@ -77,7 +78,7 @@ describe('expr', () => {
 
 
   test('happy', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('1+2'))[_mo_](['+', 1, 2])
     expect(j('-1+2'))[_mo_](['+', ['-', 1], 2])
@@ -275,7 +276,7 @@ describe('expr', () => {
 
 
   test('binary', () => {
-    const j = mj(Jsonic.make()
+    const j = mj(new Tabnas().use(jsonic)
       // .use(Debug, { print: false, trace: true })
       .use(Expr))
 
@@ -330,7 +331,7 @@ describe('expr', () => {
 
 
   test('structure', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('a:1+2'))[_mo_]({ a: ['+', 1, 2] })
     expect(j('a:1+2,b:3+4'))[_mo_]({ a: ['+', 1, 2], b: ['+', 3, 4] })
@@ -343,7 +344,7 @@ describe('expr', () => {
 
 
   test('implicit-list-top-basic', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('1,2'))[_mo_]([1, 2])
     expect(j('1+2,3'))[_mo_]([['+', 1, 2], 3])
@@ -413,7 +414,7 @@ describe('expr', () => {
 
 
   test('implicit-list-top-paren', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('(1,2)'))[_mo_](['(', [1, 2]])
     expect(j('(1+2,3)'))[_mo_](['(', [['+', 1, 2], 3]])
@@ -494,7 +495,7 @@ describe('expr', () => {
 
 
   test('map-implicit-list-paren', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('a:(1,2),b:0'))[_mo_]({ a: ['(', [1, 2]], b: 0 })
     expect(j('a:(1+2,3),b:0'))[_mo_]({ a: ['(', [['+', 1, 2], 3]], b: 0 })
@@ -609,7 +610,7 @@ describe('expr', () => {
 
 
   test('unary-prefix-basic', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('1')).equal(1)
     expect(j('z')).equal('z')
@@ -754,7 +755,7 @@ describe('expr', () => {
 
 
   test('unary-prefix-edge', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         at: {
           prefix: true, right: 15000, src: '@'
@@ -815,7 +816,7 @@ describe('expr', () => {
 
 
   test('unary-suffix-basic', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
           suffix: true, left: 15000, src: '!'
@@ -877,7 +878,7 @@ describe('expr', () => {
 
 
   test('unary-suffix-edge', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
           suffix: true, left: 15000, src: '!'
@@ -940,7 +941,7 @@ describe('expr', () => {
 
 
   test('unary-suffix-structure', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
           suffix: true, left: 15000, src: '!'
@@ -991,7 +992,7 @@ describe('expr', () => {
 
 
   test('unary-suffix-prefix', () => {
-    const je = Jsonic.make()
+    const je = new Tabnas().use(jsonic)
       // .use(Debug, {
       //   trace: {
       //     rule: true,
@@ -1049,7 +1050,7 @@ describe('expr', () => {
 
 
   test('unary-suffix-paren', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
           suffix: true, left: 15000, src: '!'
@@ -1087,7 +1088,7 @@ describe('expr', () => {
 
 
   test('paren-basic', () => {
-    const j = mj(Jsonic.make()
+    const j = mj(new Tabnas().use(jsonic)
       // .use(Debug, { trace: true })
       .use(Expr))
 
@@ -1163,7 +1164,7 @@ describe('expr', () => {
 
 
   test('paren-map-implicit-structure-comma', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('{a:(1)}'))[_mo_]({ a: ['(', 1] })
     expect(j('{a:(1,2)}'))[_mo_]({ a: ['(', [1, 2]] })
@@ -1297,7 +1298,7 @@ describe('expr', () => {
 
 
   test('paren-map-implicit-structure-space', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('{a:(1)}'))[_mo_]({ a: ['(', 1] })
     expect(j('{a:(1 2)}'))[_mo_]({ a: ['(', [1, 2]] })
@@ -1431,7 +1432,7 @@ describe('expr', () => {
 
 
   test('paren-list-implicit-structure-comma', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('[(1)]'))[_mo_]([['(', 1]])
     expect(j('[(1,2)]'))[_mo_]([['(', [1, 2]]])
@@ -1568,7 +1569,7 @@ describe('expr', () => {
 
 
   test('paren-list-implicit-structure-space', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('[(1)]'))[_mo_]([['(', 1]])
     expect(j('[(1 2)]'))[_mo_]([['(', [1, 2]]])
@@ -1706,7 +1707,7 @@ describe('expr', () => {
 
 
   test('paren-implicit-list', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('(a)'))[_mo_](['(', 'a'])
     expect(j('(a,b)'))[_mo_](['(', ['a', 'b']])
@@ -1741,7 +1742,7 @@ describe('expr', () => {
 
 
   test('paren-implicit-map', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('(a:1,b:2)'))[_mo_](['(', { a: 1, b: 2 }])
     expect(j('(a:1 b:2)'))[_mo_](['(', { a: 1, b: 2 }])
@@ -1765,7 +1766,7 @@ describe('expr', () => {
 
 
   test('add-paren', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         angle: {
           paren: true, osrc: '<', csrc: '>'
@@ -1788,7 +1789,7 @@ describe('expr', () => {
 
 
   test('paren-preval-basic', () => {
-    const je = Jsonic.make()
+    const je = new Tabnas().use(jsonic)
       // .use(Debug, { trace: true })
       .use(Expr, {
         op: {
@@ -1874,7 +1875,7 @@ describe('expr', () => {
 
 
   test('paren-preval-overload', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: {
           suffix: true, left: 15000, src: '!'
@@ -1962,7 +1963,7 @@ describe('expr', () => {
 
 
   test('paren-preval-implicit', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         plain: {
           preval: true
@@ -1984,7 +1985,7 @@ describe('expr', () => {
     // produced value. The chain alt in val.close fires whenever the
     // current val has a node and the next token is a preval-active
     // paren-open.
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         index: {
           osrc: '[',
@@ -2032,7 +2033,7 @@ describe('expr', () => {
     // Baseline: with comma-op defined, `,` is absorbed as the comma
     // operator everywhere — including inside list/map/paren contexts
     // where it would otherwise have been a separator.
-    const jBase = mj(Jsonic.make().use(Expr, opts))
+    const jBase = mj(new Tabnas().use(jsonic).use(Expr, opts))
     expect(jBase('1,2'))[_mo_]([',', 1, 2])
     expect(jBase('[1,2]'))[_mo_]([[',', 1, 2]])
     expect(jBase('(1,2)'))[_mo_](['(', [',', 1, 2]])
@@ -2051,7 +2052,7 @@ describe('expr', () => {
         })
       })
     }
-    const je = Jsonic.make().use(Expr, opts).use(suppressInsideList)
+    const je = new Tabnas().use(jsonic).use(Expr, opts).use(suppressInsideList)
     const j = mj(je)
 
     // Inside `[...]`, `,` is a separator again, not the comma op.
@@ -2076,7 +2077,7 @@ describe('expr', () => {
       }
       return NaN
     }
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         q: { ternary: true, src: ['?', ':'] }
       },
@@ -2084,20 +2085,20 @@ describe('expr', () => {
     })
 
     // Direct ternary at top level evaluates through the .ac.
-    expect(je('1?2:3')).equal(2)
-    expect(je('0?2:3')).equal(3)
+    expect(je.parse('1?2:3')).equal(2)
+    expect(je.parse('0?2:3')).equal(3)
 
     // Right-associative chains evaluate fully (only the final step
     // triggers — earlier steps are skipped because r.next is another
     // ternary instance).
-    expect(je('1?2: 0?4:5')).equal(2)
-    expect(je('0?2: 1?4:5')).equal(4)
-    expect(je('0?2: 0?4:5')).equal(5)
+    expect(je.parse('1?2: 0?4:5')).equal(2)
+    expect(je.parse('0?2: 1?4:5')).equal(4)
+    expect(je.parse('0?2: 0?4:5')).equal(5)
   })
 
 
   test('add-infix', () => {
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         foo: {
           infix: true, left: 180, right: 190, src: 'foo'
@@ -2113,7 +2114,7 @@ describe('expr', () => {
   // TODO: provide as external tests for other plugins
 
   test('json-base', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('1')).equal(1)
     expect(j('"a"')).equal('a')
@@ -2129,7 +2130,7 @@ describe('expr', () => {
   })
 
   test('jsonic-base', () => {
-    const j = mj(Jsonic.make().use(Expr))
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
 
     expect(j('1 "a" true # foo'))[_mo_]([1, 'a', true])
     expect(j('x:1 y:"a" z:true // bar'))[_mo_]({ x: 1, y: 'a', z: true })
@@ -2160,7 +2161,7 @@ describe('expr', () => {
       }
     }
 
-    const je0 = Jsonic.make().use(Expr, opts)
+    const je0 = new Tabnas().use(jsonic).use(Expr, opts)
     const j0 = mj(je0)
     /*
         expect(j0('a.b'))[_mo_](['.', 'a', 'b'])
@@ -2218,14 +2219,14 @@ describe('expr', () => {
     let r = (null as unknown as Rule)
     let c = (null as unknown as Context)
 
-    expect(evaluation(r, c, je0('a.b'), resolve)).equal('a/b')
-    expect(evaluation(r, c, je0('a.b.c'), resolve)).equal('a/b/c')
-    expect(evaluation(r, c, je0('a.b.c.d'), resolve)).equal('a/b/c/d')
+    expect(evaluation(r, c, je0.parse('a.b'), resolve)).equal('a/b')
+    expect(evaluation(r, c, je0.parse('a.b.c'), resolve)).equal('a/b/c')
+    expect(evaluation(r, c, je0.parse('a.b.c.d'), resolve)).equal('a/b/c/d')
 
-    expect(evaluation(r, c, je0('.a'), resolve)).equal('/a')
-    expect(evaluation(r, c, je0('.a.b'), resolve)).equal('/a/b')
+    expect(evaluation(r, c, je0.parse('.a'), resolve)).equal('/a')
+    expect(evaluation(r, c, je0.parse('.a.b'), resolve)).equal('/a/b')
 
-    const je1 = Jsonic.make()
+    const je1 = new Tabnas().use(jsonic)
       // .use(Debug, {
       //   print: false,
       //   trace: {
@@ -2242,35 +2243,35 @@ describe('expr', () => {
         evaluate: resolve
       })
 
-    expect(je1('a.b')).equal('a/b')
-    expect(je1('a.b.c')).equal('a/b/c')
-    expect(je1('a.b.c.d')).equal('a/b/c/d')
+    expect(je1.parse('a.b')).equal('a/b')
+    expect(je1.parse('a.b.c')).equal('a/b/c')
+    expect(je1.parse('a.b.c.d')).equal('a/b/c/d')
 
-    expect(je1('{x:a.b}')).equal({ x: 'a/b' })
-    expect(je1('{x:a.b.c}')).equal({ x: 'a/b/c' })
-    expect(je1('{x:a.b.c.d}')).equal({ x: 'a/b/c/d' })
+    expect(je1.parse('{x:a.b}')).equal({ x: 'a/b' })
+    expect(je1.parse('{x:a.b.c}')).equal({ x: 'a/b/c' })
+    expect(je1.parse('{x:a.b.c.d}')).equal({ x: 'a/b/c/d' })
 
-    expect(je1('x:a.b')).equal({ x: 'a/b' })
-    expect(je1('x:a.b.c')).equal({ x: 'a/b/c' })
-    expect(je1('x:a.b.c.d')).equal({ x: 'a/b/c/d' })
+    expect(je1.parse('x:a.b')).equal({ x: 'a/b' })
+    expect(je1.parse('x:a.b.c')).equal({ x: 'a/b/c' })
+    expect(je1.parse('x:a.b.c.d')).equal({ x: 'a/b/c/d' })
 
-    expect(je1('a.b')).equal('a/b')
-    expect(je1('a.b.c')).equal('a/b/c')
-    expect(je1('a.b.c.d')).equal('a/b/c/d')
+    expect(je1.parse('a.b')).equal('a/b')
+    expect(je1.parse('a.b.c')).equal('a/b/c')
+    expect(je1.parse('a.b.c.d')).equal('a/b/c/d')
 
-    expect(je1('(a)')).equal('a')
-    expect(je1('(a.b)')).equal('a/b')
-    expect(je1('(a.b.c)')).equal('a/b/c')
+    expect(je1.parse('(a)')).equal('a')
+    expect(je1.parse('(a.b)')).equal('a/b')
+    expect(je1.parse('(a.b.c)')).equal('a/b/c')
 
-    expect(je1('+1')).equal(1)
-    expect(je1('+a')).equal('a')
-    expect(je1('(+a)')).equal('a')
-    expect(je1('1+2')).equal(3)
-    expect(je1('+3+4')).equal(7)
-    expect(je1('(1+2)')).equal(3)
-    expect(je1('(+3)')).equal(3)
-    expect(je1('+3+4')).equal(7)
-    expect(je1('(+3+4)')).equal(7)
+    expect(je1.parse('+1')).equal(1)
+    expect(je1.parse('+a')).equal('a')
+    expect(je1.parse('(+a)')).equal('a')
+    expect(je1.parse('1+2')).equal(3)
+    expect(je1.parse('+3+4')).equal(7)
+    expect(je1.parse('(1+2)')).equal(3)
+    expect(je1.parse('(+3)')).equal(3)
+    expect(je1.parse('+3+4')).equal(7)
+    expect(je1.parse('(+3+4)')).equal(7)
   })
 
 
@@ -2294,71 +2295,71 @@ describe('expr', () => {
       return mf ? mf(...terms) : NaN
     }
 
-    const j = Jsonic.make().use(Expr)
+    const j = new Tabnas().use(jsonic).use(Expr)
 
     let r = (null as unknown as Rule)
     let c = (null as unknown as Context)
 
     expect(evaluation(r, c, ME(PLUS, 1, 2), mr)).equal(3)
-    expect(evaluation(r, c, j('1+2'), mr)).equal(3)
+    expect(evaluation(r, c, j.parse('1+2'), mr)).equal(3)
 
     expect(evaluation(r, c, ME(PLUS, ME(PLUS, 1, 2), 3), mr)).equal(6)
-    expect(evaluation(r, c, j('1+2+3'), mr)).equal(6)
+    expect(evaluation(r, c, j.parse('1+2+3'), mr)).equal(6)
 
-    expect(evaluation(r, c, j('1*2+3'), mr)).equal(5)
-    expect(evaluation(r, c, j('1+2*3'), mr)).equal(7)
-
-
-    expect(evaluation(r, c, j('(1)'), mr)).equal(1)
-
-    expect(evaluation(r, c, j('(1+2)'), mr)).equal(3)
-
-    expect(evaluation(r, c, j('3+(1+2)'), mr)).equal(6)
-    expect(evaluation(r, c, j('(1+2)+3'), mr)).equal(6)
-
-    expect(evaluation(r, c, j('(1+2)*3'), mr)).equal(9)
-    expect(evaluation(r, c, j('3*(1+2)'), mr)).equal(9)
+    expect(evaluation(r, c, j.parse('1*2+3'), mr)).equal(5)
+    expect(evaluation(r, c, j.parse('1+2*3'), mr)).equal(7)
 
 
-    const je = Jsonic.make()
+    expect(evaluation(r, c, j.parse('(1)'), mr)).equal(1)
+
+    expect(evaluation(r, c, j.parse('(1+2)'), mr)).equal(3)
+
+    expect(evaluation(r, c, j.parse('3+(1+2)'), mr)).equal(6)
+    expect(evaluation(r, c, j.parse('(1+2)+3'), mr)).equal(6)
+
+    expect(evaluation(r, c, j.parse('(1+2)*3'), mr)).equal(9)
+    expect(evaluation(r, c, j.parse('3*(1+2)'), mr)).equal(9)
+
+
+    const je = new Tabnas().use(jsonic)
       // .use(Debug, { trace: true })
       .use(Expr, {
         evaluate: mr
       })
 
-    expect(je('11+22')).equal(33)
+    expect(je.parse('11+22')).equal(33)
 
-    expect(je('a:11+22')).equal({ a: 33 })
-    expect(je('[11+22]')).equal([33])
+    expect(je.parse('a:11+22')).equal({ a: 33 })
+    expect(je.parse('[11+22]')).equal([33])
 
-    expect(je('112')).equal(112)
-    expect(je('+112')).equal(112)
+    expect(je.parse('112')).equal(112)
+    expect(je.parse('+112')).equal(112)
 
-    expect(je('a:(113)')).equal({ a: 113 })
-    expect(je('(113)')).equal(113)
+    expect(je.parse('a:(113)')).equal({ a: 113 })
+    expect(je.parse('(113)')).equal(113)
 
 
-    expect(je('((114))')).equal(114)
-    expect(je('(((115)))')).equal(115)
+    expect(je.parse('((114))')).equal(114)
+    expect(je.parse('(((115)))')).equal(115)
 
-    expect(je('111+(222)')).equal(333)
-    expect(je('(111)+222')).equal(333)
-    expect(je('(111)+(222)')).equal(333)
+    expect(je.parse('111+(222)')).equal(333)
+    expect(je.parse('(111)+222')).equal(333)
+    expect(je.parse('(111)+(222)')).equal(333)
 
-    expect(je('111+222')).equal(333)
-    expect(je('(111+222)')).equal(333)
-    expect(je('(111+222)')).equal(333)
+    expect(je.parse('111+222')).equal(333)
+    expect(je.parse('(111+222)')).equal(333)
+    expect(je.parse('(111+222)')).equal(333)
 
-    expect(je('(1+2)*4')).equal(12)
-    expect(je('1+(2*4)')).equal(9)
+    expect(je.parse('(1+2)*4')).equal(12)
+    expect(je.parse('1+(2*4)')).equal(9)
 
-    expect(je('((1+2)*4)')).equal(12)
-    expect(je('(1+(2*4))')).equal(9)
+    expect(je.parse('((1+2)*4)')).equal(12)
+    expect(je.parse('(1+(2*4))')).equal(9)
 
-    expect(je('1-3')).equal(-2)
-    expect(je('-1')).equal(-1)
-    expect(je('+1')).equal(1)
-    expect(je('1+(-3)')).equal(-2)
+    expect(je.parse('1-3')).equal(-2)
+    expect(je.parse('-1')).equal(-1)
+    expect(je.parse('+1')).equal(1)
+    expect(je.parse('1+(-3)')).equal(-2)
 
   })
 
@@ -2383,7 +2384,7 @@ describe('expr', () => {
       return mf ? mf(...terms) : []
     }
 
-    const j = Jsonic.make().use(Expr, {
+    const j = new Tabnas().use(jsonic).use(Expr, {
       op: {
         union: {
           infix: true, src: 'U', left: 140, right: 150,
@@ -2398,15 +2399,15 @@ describe('expr', () => {
     let r = (null as unknown as Rule)
     let c = (null as unknown as Context)
 
-    expect(evaluation(r, c, j('[1]U[2]'), mr)).equal([1, 2])
-    expect(evaluation(r, c, j('[1,3]U[1,2]'), mr)).equal([1, 2, 3])
+    expect(evaluation(r, c, j.parse('[1]U[2]'), mr)).equal([1, 2])
+    expect(evaluation(r, c, j.parse('[1,3]U[1,2]'), mr)).equal([1, 2, 3])
 
-    expect(evaluation(r, c, j('[1,3]N[1,2]'), mr)).equal([1])
-    expect(evaluation(r, c, j('[1,3]N[2]'), mr)).equal([])
-    expect(evaluation(r, c, j('[1,3]N[2,1]'), mr)).equal([1])
+    expect(evaluation(r, c, j.parse('[1,3]N[1,2]'), mr)).equal([1])
+    expect(evaluation(r, c, j.parse('[1,3]N[2]'), mr)).equal([])
+    expect(evaluation(r, c, j.parse('[1,3]N[2,1]'), mr)).equal([1])
 
-    expect(evaluation(r, c, j('[1,3]N[2]U[1,2]'), mr)).equal([1, 2])
-    expect(evaluation(r, c, j('[1,3]N([2]U[1,2])'), mr)).equal([1])
+    expect(evaluation(r, c, j.parse('[1,3]N[2]U[1,2]'), mr)).equal([1, 2])
+    expect(evaluation(r, c, j.parse('[1,3]N([2]U[1,2])'), mr)).equal([1])
   })
 
 
@@ -2438,7 +2439,7 @@ describe('expr', () => {
       }
     }
 
-    const j0 = Jsonic.make()
+    const j0 = new Tabnas().use(jsonic)
       // .use(Debug, { trace: true })
       .use(Expr, {
         op: {
@@ -2475,48 +2476,48 @@ describe('expr', () => {
         }
       })
 
-    expect(j0('11+22')).equal(33)
-    expect(j0('44-33')).equal(11)
-    expect(j0('(44-33)+11')).equal(22)
-    expect(j0('44-(33+11)')).equal(0)
-    expect(j0('44-33+11')).equal(22)
+    expect(j0.parse('11+22')).equal(33)
+    expect(j0.parse('44-33')).equal(11)
+    expect(j0.parse('(44-33)+11')).equal(22)
+    expect(j0.parse('44-(33+11)')).equal(0)
+    expect(j0.parse('44-33+11')).equal(22)
 
-    expect(j0('(1.1)')).equal(1.1)
-    expect(j0('[0,(1)]')).equal([0, 1])
-    expect(j0('[0 (1)]')).equal([0, 1])
+    expect(j0.parse('(1.1)')).equal(1.1)
+    expect(j0.parse('[0,(1)]')).equal([0, 1])
+    expect(j0.parse('[0 (1)]')).equal([0, 1])
 
-    expect(j0('floor<1.5>')).equal(1)
-    expect(j0('a:floor<2.5>')).equal({ a: 2 })
-    expect(j0('{b:floor<3.5>}')).equal({ b: 3 })
-    expect(j0('[floor<4.5>]')).equal([4])
-    expect(j0('[0 floor<5.5>]')).equal([0, 5])
+    expect(j0.parse('floor<1.5>')).equal(1)
+    expect(j0.parse('a:floor<2.5>')).equal({ a: 2 })
+    expect(j0.parse('{b:floor<3.5>}')).equal({ b: 3 })
+    expect(j0.parse('[floor<4.5>]')).equal([4])
+    expect(j0.parse('[0 floor<5.5>]')).equal([0, 5])
 
-    expect(j0('1+floor<1.5>')).equal(2)
-    expect(j0('1+floor<1.5>+3')).equal(5)
-    expect(j0('floor<1.5>+4')).equal(5)
-    expect(j0('a:floor<1.5>+4')).equal({ a: 5 })
+    expect(j0.parse('1+floor<1.5>')).equal(2)
+    expect(j0.parse('1+floor<1.5>+3')).equal(5)
+    expect(j0.parse('floor<1.5>+4')).equal(5)
+    expect(j0.parse('a:floor<1.5>+4')).equal({ a: 5 })
 
-    expect(j0('a:(1+2) b:floor<1.9>')).equal({ a: 3, b: 1 })
+    expect(j0.parse('a:(1+2) b:floor<1.9>')).equal({ a: 3, b: 1 })
 
-    expect(j0('()')).equal(null)
-    expect(j0('<>')).equal(null)
-    expect(j0('<1>')).equal(1)
-    expect(j0('c:<2>')).equal({ c: 2 })
+    expect(j0.parse('()')).equal(null)
+    expect(j0.parse('<>')).equal(null)
+    expect(j0.parse('<1>')).equal(1)
+    expect(j0.parse('c:<2>')).equal({ c: 2 })
 
-    expect(j0('a:floor<>')).equal({ a: null })
-    expect(j0('floor<>')).equal(null)
-    expect(j0('[floor<>]')).equal([null])
-    expect(j0('floor<"a">')).equal(null)
-    expect(j0('a:floor<"a">')).equal({ a: null })
+    expect(j0.parse('a:floor<>')).equal({ a: null })
+    expect(j0.parse('floor<>')).equal(null)
+    expect(j0.parse('[floor<>]')).equal([null])
+    expect(j0.parse('floor<"a">')).equal(null)
+    expect(j0.parse('a:floor<"a">')).equal({ a: null })
 
-    expect(j0('[1 (2) (2+1) floor<4.5>]')).equal([1, 2, 3, 4])
-    expect(j0('1 (2) (2+1) floor<4.5>')).equal([1, 2, 3, 4])
+    expect(j0.parse('[1 (2) (2+1) floor<4.5>]')).equal([1, 2, 3, 4])
+    expect(j0.parse('1 (2) (2+1) floor<4.5>')).equal([1, 2, 3, 4])
 
-    expect(j0('bad<9>')).equal(null)
+    expect(j0.parse('bad<9>')).equal(null)
 
 
 
-    const j1 = Jsonic.make()
+    const j1 = new Tabnas().use(jsonic)
       // .use(Debug, { trace: true })
       .use(Expr, {
         op: {
@@ -2557,129 +2558,129 @@ describe('expr', () => {
       })
 
 
-    expect(j1('()')).equal(null)
-    expect(j1('(0)')).equal(0)
-    expect(j1('(0+1)')).equal(1)
-    expect(j1('[(0) 1]')).equal([0, 1])
+    expect(j1.parse('()')).equal(null)
+    expect(j1.parse('(0)')).equal(0)
+    expect(j1.parse('(0+1)')).equal(1)
+    expect(j1.parse('[(0) 1]')).equal([0, 1])
 
     // TODO
-    // expect(() => j1('[0 (1) 2]')).toThrow('Invalid operation: 0')
+    // expect(() => j1.parse('[0 (1) 2]')).toThrow('Invalid operation: 0')
 
-    expect(j1('[0,(1),2]')).equal([0, 1, 2])
-    expect(j1('[0,(1)]')).equal([0, 1])
-
-    // TODO
-    // expect(() => j1('[0 (1)]')).toThrow('Invalid operation: 0')
-
-    expect(j1('[(1)]')).equal([1])
-    expect(j1('[0,(1)]')).equal([0, 1])
-    expect(j1('[(0),(1)]')).equal([0, 1])
-    expect(j1('(0),(1)')).equal([0, 1])
-
-    // expect(() => j1('[(0) (1)]')).toThrow('Invalid operation: (')
-    // expect(() => j1('(0) (1)')).toThrow('Invalid operation: (')
-
-    expect(j1('floor(1.1)')).equal(1)
-    expect(j1('floor (1.1)')).equal(1)
+    expect(j1.parse('[0,(1),2]')).equal([0, 1, 2])
+    expect(j1.parse('[0,(1)]')).equal([0, 1])
 
     // TODO
-    // expect(j1('(floor) (1.1)')).equal(1)
-    // expect(() => j1('(0+1) (1+1)')).toThrow('Invalid operation: (')
+    // expect(() => j1.parse('[0 (1)]')).toThrow('Invalid operation: 0')
 
-    expect(j1('floor(0.5)')).equal(0)
-    expect(j1('a:floor(2.5)')).equal({ a: 2 })
+    expect(j1.parse('[(1)]')).equal([1])
+    expect(j1.parse('[0,(1)]')).equal([0, 1])
+    expect(j1.parse('[(0),(1)]')).equal([0, 1])
+    expect(j1.parse('(0),(1)')).equal([0, 1])
 
-    expect(j1('{b:floor(3.5)}')).equal({ b: 3 })
-    expect(j1('[floor(4.5)]')).equal([4])
-    expect(j1('[0 floor(5.5)]')).equal([0, 5])
-    expect(j1('[(0) 1 floor(5.5)]')).equal([0, 1, 5])
-    expect(j1('[(0) floor(5.5)]')).equal([0, 5])
-    expect(j1('[0,(1),floor(5.5)]')).equal([0, 1, 5])
+    // expect(() => j1.parse('[(0) (1)]')).toThrow('Invalid operation: (')
+    // expect(() => j1.parse('(0) (1)')).toThrow('Invalid operation: (')
 
-    expect(j1('[1,(2),(2+1)]')).equal([1, 2, 3])
-    expect(j1('[1,(2),(2+1),floor(4.5)]')).equal([1, 2, 3, 4])
-
-    expect(j1('a:floor(1.5)')).equal({ a: 1 })
+    expect(j1.parse('floor(1.1)')).equal(1)
+    expect(j1.parse('floor (1.1)')).equal(1)
 
     // TODO
-    // expect(() => j1('b:bad(2.5)')).toThrow('Invalid operation: bad')
+    // expect(j1.parse('(floor) (1.1)')).equal(1)
+    // expect(() => j1.parse('(0+1) (1+1)')).toThrow('Invalid operation: (')
 
-    expect(j1('[3+2]')).equal([5])
-    expect(j1('[3+(2)]')).equal([5])
-    expect(j1('[(3)+2]')).equal([5])
-    expect(j1('[(3)+(2)]')).equal([5])
-    expect(j1('[(3+2)]')).equal([5])
-    expect(j1('[(3+(2))]')).equal([5])
-    expect(j1('[((3)+2)]')).equal([5])
-    expect(j1('[((3)+(2))]')).equal([5])
+    expect(j1.parse('floor(0.5)')).equal(0)
+    expect(j1.parse('a:floor(2.5)')).equal({ a: 2 })
 
-    expect(j1('[1,3+2]')).equal([1, 5])
-    expect(j1('[1,3+(2)]')).equal([1, 5])
-    expect(j1('[1,(3)+2]')).equal([1, 5])
-    expect(j1('[1,(3)+(2)]')).equal([1, 5])
-    expect(j1('[1,(3+2)]')).equal([1, 5])
-    expect(j1('[1,(3+(2))]')).equal([1, 5])
-    expect(j1('[1,((3)+2)]')).equal([1, 5])
-    expect(j1('[1,((3)+(2))]')).equal([1, 5])
+    expect(j1.parse('{b:floor(3.5)}')).equal({ b: 3 })
+    expect(j1.parse('[floor(4.5)]')).equal([4])
+    expect(j1.parse('[0 floor(5.5)]')).equal([0, 5])
+    expect(j1.parse('[(0) 1 floor(5.5)]')).equal([0, 1, 5])
+    expect(j1.parse('[(0) floor(5.5)]')).equal([0, 5])
+    expect(j1.parse('[0,(1),floor(5.5)]')).equal([0, 1, 5])
 
-    expect(j1('[3+2,4]')).equal([5, 4])
-    expect(j1('[3+(2),4]')).equal([5, 4])
-    expect(j1('[(3)+2,4]')).equal([5, 4])
-    expect(j1('[(3)+(2),4]')).equal([5, 4])
-    expect(j1('[(3+2),4]')).equal([5, 4])
-    expect(j1('[(3+(2)),4]')).equal([5, 4])
-    expect(j1('[((3)+2),4]')).equal([5, 4])
-    expect(j1('[((3)+(2)),4]')).equal([5, 4])
+    expect(j1.parse('[1,(2),(2+1)]')).equal([1, 2, 3])
+    expect(j1.parse('[1,(2),(2+1),floor(4.5)]')).equal([1, 2, 3, 4])
 
-    expect(j1('[1,3+2,4]')).equal([1, 5, 4])
-    expect(j1('[1,3+(2),4]')).equal([1, 5, 4])
-    expect(j1('[1,(3)+2,4]')).equal([1, 5, 4])
-    expect(j1('[1,(3)+(2),4]')).equal([1, 5, 4])
-    expect(j1('[1,(3+2),4]')).equal([1, 5, 4])
-    expect(j1('[1,(3+(2)),4]')).equal([1, 5, 4])
-    expect(j1('[1,((3)+2),4]')).equal([1, 5, 4])
-    expect(j1('[1,((3)+(2)),4]')).equal([1, 5, 4])
+    expect(j1.parse('a:floor(1.5)')).equal({ a: 1 })
 
-    expect(j1('1+floor(1.1)')).equal(2)
-    expect(j1('floor(1.1)+1')).equal(2)
-    expect(j1('1+floor(1.1)+1')).equal(3)
+    // TODO
+    // expect(() => j1.parse('b:bad(2.5)')).toThrow('Invalid operation: bad')
 
-    expect(j1('a:(2)+1')).equal({ a: 3 })
+    expect(j1.parse('[3+2]')).equal([5])
+    expect(j1.parse('[3+(2)]')).equal([5])
+    expect(j1.parse('[(3)+2]')).equal([5])
+    expect(j1.parse('[(3)+(2)]')).equal([5])
+    expect(j1.parse('[(3+2)]')).equal([5])
+    expect(j1.parse('[(3+(2))]')).equal([5])
+    expect(j1.parse('[((3)+2)]')).equal([5])
+    expect(j1.parse('[((3)+(2))]')).equal([5])
 
-    expect(j1('a:1+floor(1.1)')).equal({ a: 2 })
-    expect(j1('a:(1.1)+1')).equal({ a: 2.1 })
-    expect(j1('a:floor(1.1)+1')).equal({ a: 2 })
-    expect(j1('a:1+floor(1.1)+1')).equal({ a: 3 })
+    expect(j1.parse('[1,3+2]')).equal([1, 5])
+    expect(j1.parse('[1,3+(2)]')).equal([1, 5])
+    expect(j1.parse('[1,(3)+2]')).equal([1, 5])
+    expect(j1.parse('[1,(3)+(2)]')).equal([1, 5])
+    expect(j1.parse('[1,(3+2)]')).equal([1, 5])
+    expect(j1.parse('[1,(3+(2))]')).equal([1, 5])
+    expect(j1.parse('[1,((3)+2)]')).equal([1, 5])
+    expect(j1.parse('[1,((3)+(2))]')).equal([1, 5])
 
-    expect(j1('[1+floor(1.1)]')).equal([2])
-    expect(j1('[floor(1.1)+2]')).equal([3])
-    expect(j1('[3+floor(1.1)+2]')).equal([6])
+    expect(j1.parse('[3+2,4]')).equal([5, 4])
+    expect(j1.parse('[3+(2),4]')).equal([5, 4])
+    expect(j1.parse('[(3)+2,4]')).equal([5, 4])
+    expect(j1.parse('[(3)+(2),4]')).equal([5, 4])
+    expect(j1.parse('[(3+2),4]')).equal([5, 4])
+    expect(j1.parse('[(3+(2)),4]')).equal([5, 4])
+    expect(j1.parse('[((3)+2),4]')).equal([5, 4])
+    expect(j1.parse('[((3)+(2)),4]')).equal([5, 4])
 
-    expect(j1('b:1.1+1,c:C0')).equal({ b: 2.1, c: 'C0' })
-    expect(j1('b:(1.1+1),c:C0a')).equal({ b: 2.1, c: 'C0a' })
+    expect(j1.parse('[1,3+2,4]')).equal([1, 5, 4])
+    expect(j1.parse('[1,3+(2),4]')).equal([1, 5, 4])
+    expect(j1.parse('[1,(3)+2,4]')).equal([1, 5, 4])
+    expect(j1.parse('[1,(3)+(2),4]')).equal([1, 5, 4])
+    expect(j1.parse('[1,(3+2),4]')).equal([1, 5, 4])
+    expect(j1.parse('[1,(3+(2)),4]')).equal([1, 5, 4])
+    expect(j1.parse('[1,((3)+2),4]')).equal([1, 5, 4])
+    expect(j1.parse('[1,((3)+(2)),4]')).equal([1, 5, 4])
 
-    expect(j1('b:(1.1)+1,c:C1')).equal({ b: 2.1, c: 'C1' })
-    expect(j1('b:((1.1)+1),c:C1a')).equal({ b: 2.1, c: 'C1a' })
+    expect(j1.parse('1+floor(1.1)')).equal(2)
+    expect(j1.parse('floor(1.1)+1')).equal(2)
+    expect(j1.parse('1+floor(1.1)+1')).equal(3)
 
-    expect(j1('b:1+floor(1.1),c:C2c')).equal({ b: 2, c: 'C2c' })
-    expect(j1('b:floor(1.1)+1,c:C2d')).equal({ b: 2, c: 'C2d' })
+    expect(j1.parse('a:(2)+1')).equal({ a: 3 })
 
-    expect(j1('b:(floor(1.1)),c:C2a')).equal({ b: 1, c: 'C2a' })
-    expect(j1('b:(1+floor(1.1)),c:C2b')).equal({ b: 2, c: 'C2b' })
+    expect(j1.parse('a:1+floor(1.1)')).equal({ a: 2 })
+    expect(j1.parse('a:(1.1)+1')).equal({ a: 2.1 })
+    expect(j1.parse('a:floor(1.1)+1')).equal({ a: 2 })
+    expect(j1.parse('a:1+floor(1.1)+1')).equal({ a: 3 })
+
+    expect(j1.parse('[1+floor(1.1)]')).equal([2])
+    expect(j1.parse('[floor(1.1)+2]')).equal([3])
+    expect(j1.parse('[3+floor(1.1)+2]')).equal([6])
+
+    expect(j1.parse('b:1.1+1,c:C0')).equal({ b: 2.1, c: 'C0' })
+    expect(j1.parse('b:(1.1+1),c:C0a')).equal({ b: 2.1, c: 'C0a' })
+
+    expect(j1.parse('b:(1.1)+1,c:C1')).equal({ b: 2.1, c: 'C1' })
+    expect(j1.parse('b:((1.1)+1),c:C1a')).equal({ b: 2.1, c: 'C1a' })
+
+    expect(j1.parse('b:1+floor(1.1),c:C2c')).equal({ b: 2, c: 'C2c' })
+    expect(j1.parse('b:floor(1.1)+1,c:C2d')).equal({ b: 2, c: 'C2d' })
+
+    expect(j1.parse('b:(floor(1.1)),c:C2a')).equal({ b: 1, c: 'C2a' })
+    expect(j1.parse('b:(1+floor(1.1)),c:C2b')).equal({ b: 2, c: 'C2b' })
 
 
-    expect(j1('1+(floor(1.1))')).equal(2)
+    expect(j1.parse('1+(floor(1.1))')).equal(2)
 
-    expect(j1('(11,22)')).equal([11, 22])
-    expect(j1('21+31')).equal(52)
-    expect(j1('(21)+31')).equal(52)
-    expect(j1('(21+31)')).equal(52)
-    expect(j1('(floor(2.2))')).equal(2)
-    expect(j1('((floor(2.2)))')).equal(2)
-    expect(j1('(floor(2.2))+1')).equal(3)
-    expect(j1('floor(2.2)+3')).equal(5)
-    expect(j1('(floor(1.1)+2)')).equal(3)
-    expect(j1('b:(floor(1.1)+2),c:C2c')).equal({ b: 3, c: 'C2c' })
+    expect(j1.parse('(11,22)')).equal([11, 22])
+    expect(j1.parse('21+31')).equal(52)
+    expect(j1.parse('(21)+31')).equal(52)
+    expect(j1.parse('(21+31)')).equal(52)
+    expect(j1.parse('(floor(2.2))')).equal(2)
+    expect(j1.parse('((floor(2.2)))')).equal(2)
+    expect(j1.parse('(floor(2.2))+1')).equal(3)
+    expect(j1.parse('floor(2.2)+3')).equal(5)
+    expect(j1.parse('(floor(1.1)+2)')).equal(3)
+    expect(j1.parse('b:(floor(1.1)+2),c:C2c')).equal({ b: 3, c: 'C2c' })
 
   })
 
@@ -2689,7 +2690,7 @@ describe('expr', () => {
     // the evaluate callback should receive the fully-built result of inner
     // expressions, and only the outermost result should appear in the
     // final parse output (not intermediate results).
-    const je = Jsonic.make().use(Expr, {
+    const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         dot: { infix: true, src: '.', left: 250, right: 240 },
         plain: null, addition: null, subtraction: null,
@@ -2702,8 +2703,8 @@ describe('expr', () => {
 
     // a.b.c is left-associative: (a.b).c
     // evaluate should produce "a.b.c", NOT "a.b"
-    expect(je('x:a.b.c')).equal({ x: 'a.b.c' })
-    expect(je('p:a.b')).equal({ p: 'a.b' })
+    expect(je.parse('x:a.b.c')).equal({ x: 'a.b.c' })
+    expect(je.parse('p:a.b')).equal({ p: 'a.b' })
   })
 
 
