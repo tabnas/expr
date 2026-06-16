@@ -75,8 +75,8 @@ describe('spec', () => {
   test('unary-prefix-edge', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        at: { prefix: true, right: 1600000, src: '@' },
-        tight: { infix: true, left: 1900000, right: 1910000, src: '~' },
+        at: { prefix: true, right: 500000, src: '@' },
+        tight: { infix: true, left: 700000, right: 710000, src: '~' },
       }
     })
     const j = mj(je)
@@ -87,8 +87,8 @@ describe('spec', () => {
   test('unary-suffix-basic', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        factorial: { suffix: true, left: 1800000, src: '!' },
-        question: { suffix: true, left: 1400000, src: '?' },
+        factorial: { suffix: true, left: 600000, src: '!' },
+        question: { suffix: true, left: 350000, src: '?' },
       }
     })
     const j = mj(je)
@@ -99,9 +99,9 @@ describe('spec', () => {
   test('unary-suffix-edge', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        factorial: { suffix: true, left: 1800000, src: '!' },
-        question: { suffix: true, left: 1400000, src: '?' },
-        tight: { infix: true, left: 1900000, right: 1910000, src: '~' },
+        factorial: { suffix: true, left: 600000, src: '!' },
+        question: { suffix: true, left: 350000, src: '?' },
+        tight: { infix: true, left: 700000, right: 710000, src: '~' },
       }
     })
     const j = mj(je)
@@ -112,8 +112,8 @@ describe('spec', () => {
   test('unary-suffix-structure', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        factorial: { suffix: true, left: 1800000, src: '!' },
-        question: { suffix: true, left: 1400000, src: '?' },
+        factorial: { suffix: true, left: 600000, src: '!' },
+        question: { suffix: true, left: 350000, src: '?' },
       }
     })
     const j = mj(je)
@@ -124,8 +124,8 @@ describe('spec', () => {
   test('unary-suffix-prefix', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        factorial: { suffix: true, left: 1800000, src: '!' },
-        question: { suffix: true, left: 1400000, src: '?' },
+        factorial: { suffix: true, left: 600000, src: '!' },
+        question: { suffix: true, left: 350000, src: '?' },
       }
     })
     const j = mj(je)
@@ -136,8 +136,8 @@ describe('spec', () => {
   test('unary-suffix-paren', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        factorial: { suffix: true, left: 1800000, src: '!' },
-        question: { suffix: true, left: 1400000, src: '?' },
+        factorial: { suffix: true, left: 600000, src: '!' },
+        question: { suffix: true, left: 350000, src: '?' },
       }
     })
     const j = mj(je)
@@ -160,7 +160,7 @@ describe('spec', () => {
   test('ternary-basic', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        factorial: { suffix: true, src: '!', left: 1800000 },
+        factorial: { suffix: true, src: '!', left: 600000 },
         ternary: { ternary: true, src: ['?', ':'] },
       }
     })
@@ -172,7 +172,7 @@ describe('spec', () => {
   test('ternary-implicit-list', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        factorial: { suffix: true, src: '!', left: 1800000 },
+        factorial: { suffix: true, src: '!', left: 600000 },
         ternary: { ternary: true, src: ['?', ':'] },
       }
     })
@@ -294,7 +294,7 @@ describe('spec', () => {
   test('add-infix', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        foo: { infix: true, left: 1400000, right: 1410000, src: 'foo' },
+        foo: { infix: true, left: 350000, right: 360000, src: 'foo' },
       }
     })
     const j = mj(je)
@@ -327,7 +327,7 @@ describe('spec', () => {
   test('paren-preval-overload', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
-        factorial: { suffix: true, left: 1800000, src: '!' },
+        factorial: { suffix: true, left: 600000, src: '!' },
         square: { osrc: '[', csrc: ']', paren: true, preval: { required: true } },
         brace: { osrc: '{', csrc: '}', paren: true, preval: { required: true } },
       }

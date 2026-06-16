@@ -1325,47 +1325,39 @@ function makeParenMap(
 // the right), which is why prefix ops give only `right` and parens give
 // neither.
 //
-// The defaults sit on a base-100000 ladder so client code has generous room to
-// insert custom operators between, below, and above the built-ins. Tiers are
-// 100000 apart; the +10000 on `right` is the left-associativity offset, so a
-// tier occupies a 10000-wide band inside its 100000-wide slot and adjacent
-// tiers can never overlap. Reserved (empty-by-default) tiers — most of them
-// BELOW arithmetic, where client grammars add the most operators — leave room
-// for the usual suspects:
+// The defaults occupy a compact low block on a base-100000 ladder, leaving the
+// entire range above the built-ins open for client operators. Tiers are 100000
+// apart; the +10000 on `right` is the left-associativity offset, so a tier
+// occupies a 10000-wide band inside its 100000-wide slot and adjacent tiers can
+// never overlap. The unary prefix is the tightest built-in (400000); everything
+// above it is free for tighter client operators (exponent, postfix,
+// call/member, …), and looser operators (assignment, ternary, logical, …) slot
+// in below addition:
 //
-//     100000  sequence / comma                       (loosest)
-//     200000  assignment        (right-assoc: left 210000, right 200000)
-//     300000  ternary / conditional   (engine also has a dedicated ternary rule)
-//     400000  logical or
-//     500000  logical and
-//     600000  bitwise or
-//     700000  bitwise xor
-//     800000  bitwise and
-//     900000  equality          (== !=)
-//    1000000  comparison        (< <= > >=)
-//    1100000  shift             (<< >>)
-//    1200000  addition / subtraction                 <-- built-in
-//    1300000  multiplication / division / remainder  <-- built-in
-//    1400000  (free — e.g. an extra tight infix)
-//    1500000  unary prefix      (+ -)                 <-- built-in
-//    1600000  (free — extra prefix, e.g. ! ~)
-//    1700000  exponent          (** ^, right-assoc: left 1710000, right 1700000)
-//    1800000  postfix / suffix  (! ? ++)
-//    1900000  call / index / member  (f() a[i] a.b)   (tightest)
+//    <100000  looser client ops (assignment, ternary, logical, comparison, …)
+//     100000  sequence / comma
+//     200000  addition / subtraction                 <-- built-in
+//     300000  multiplication / division / remainder  <-- built-in
+//     400000  unary prefix      (+ -)                 <-- built-in (tightest)
+//     500000  exponent          (** ^, right-assoc: left 510000, right 500000)
+//     600000  postfix / suffix  (! ? ++)
+//     700000  call / index / member  (f() a[i] a.b)
+//     800000+ free — the whole range above 400000 is open for client ops
 //
 // To add an operator, pick a tier base = N*100000 (left = base, right = base +
-// 10000 for left-assoc; swap them for right-assoc). Need an in-between tier?
-// Use base + 20000, base + 40000, … — each 100000-wide gap holds ~4 sub-tiers.
+// 10000 for left-assoc; swap them for right-assoc). Tighter than the built-ins?
+// Use 500000 and up. Looser? Use below 200000. Sub-divide any gap with
+// base + 20000, base + 40000, … — each 100000-wide gap holds ~4 sub-tiers.
 Expr.defaults = {
   op: {
     positive: {
       prefix: true,
-      right: 1500000,
+      right: 400000,
       src: '+',
     },
     negative: {
       prefix: true,
-      right: 1500000,
+      right: 400000,
       src: '-',
     },
 
@@ -1373,32 +1365,32 @@ Expr.defaults = {
     // Example: 2+3+4 === (2+3)+4
     addition: {
       infix: true,
-      left: 1200000,
-      right: 1210000,
+      left: 200000,
+      right: 210000,
       src: '+',
     },
     subtraction: {
       infix: true,
-      left: 1200000,
-      right: 1210000,
+      left: 200000,
+      right: 210000,
       src: '-',
     },
     multiplication: {
       infix: true,
-      left: 1300000,
-      right: 1310000,
+      left: 300000,
+      right: 310000,
       src: '*',
     },
     division: {
       infix: true,
-      left: 1300000,
-      right: 1310000,
+      left: 300000,
+      right: 310000,
       src: '/',
     },
     remainder: {
       infix: true,
-      left: 1300000,
-      right: 1310000,
+      left: 300000,
+      right: 310000,
       src: '%',
     },
 
