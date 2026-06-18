@@ -1,6 +1,6 @@
 /* Copyright (c) 2021-2025 Richard Rodger and other contributors, MIT License */
 
-package expr
+package tabnasexpr
 
 import (
 	"bufio"

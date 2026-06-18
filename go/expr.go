@@ -1,12 +1,12 @@
 /* Copyright (c) 2021-2025 Richard Rodger and other contributors, MIT License */
 
-// Package expr provides a Pratt-parser expression plugin for the jsonic
+// Package tabnasexpr provides a Pratt-parser expression plugin for the jsonic
 // JSON parser. It supports infix, prefix, suffix, ternary and paren
 // operators with configurable precedence.
 //
 // Expressions are encoded as LISP-style S-expressions using arrays/slices.
 // The operator source string is the first element of the slice.
-package expr
+package tabnasexpr
 
 import (
 	"strings"
