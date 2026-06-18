@@ -1,6 +1,6 @@
 # @tabnas/expr
 
-An expression-syntax plugin for the [Tabnas](https://jsonic.senecajs.org)
+An expression-syntax plugin for the [Tabnas](https://github.com/tabnas/jsonic)
 parser, available in both TypeScript and Go.
 
 Adds Pratt-parser expressions to Tabnas: infix, prefix, suffix, ternary,

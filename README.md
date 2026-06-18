@@ -1,6 +1,6 @@
 # @tabnas/expr
 
-This plugin allows the [Tabnas](https://jsonic.senecajs.org) JSON parser to support expression syntax.
+This plugin allows the [Tabnas](https://github.com/tabnas/jsonic) JSON parser to support expression syntax.
 
 This repository contains:
 
