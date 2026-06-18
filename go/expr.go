@@ -124,10 +124,24 @@ func isExprOp(node interface{}) bool {
 // in place via index assignment so every rule holding the same pointer
 // observes the fill. Returns true if a slot was filled.
 func fillNextSlot(node interface{}, val interface{}) bool {
+	return fillNextSlotSeen(node, val, nil)
+}
+
+func fillNextSlotSeen(node interface{}, val interface{}, seen map[*jsonic.ListRef]bool) bool {
 	box, _ := node.(*jsonic.ListRef)
 	if box == nil || len(box.Val) == 0 {
 		return false
 	}
+	// Guard against cyclic expression graphs: a ternary/prefix rewrite
+	// that re-points a shared *ListRef can leave a node reachable from
+	// itself. Without this the depth-first walk recurses forever.
+	if seen == nil {
+		seen = map[*jsonic.ListRef]bool{}
+	}
+	if seen[box] {
+		return false
+	}
+	seen[box] = true
 	op, ok := box.Val[0].(*Op)
 	if !ok {
 		return false
@@ -135,7 +149,7 @@ func fillNextSlot(node interface{}, val interface{}) bool {
 	// Check children first (depth-first) to fill innermost incomplete expr.
 	for i := 1; i <= op.Terms && i < len(box.Val); i++ {
 		if sub, ok := box.Val[i].(*jsonic.ListRef); ok {
-			if fillNextSlot(sub, val) {
+			if fillNextSlotSeen(sub, val, seen) {
 				return true
 			}
 		}
@@ -355,6 +369,20 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				B: 1,
 				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
 					return r.N["expr_ternary"] > 0
+				},
+				// Clear the parent-seeded node (mirrors json's #VAL @reset$).
+				// This alt consumes the value token (r.O0, e.g. the `2` of
+				// `2:3`) without going through json's #VAL alt, so its
+				// @reset$ never runs. The engine seeds a pushed val from its
+				// parent (here the ternary's *ListRef op-array). Because
+				// @val-bc's primitive-vs-container test treats the plugin's
+				// *ListRef box as a primitive (it is not a recognised
+				// container type), the stale box would survive coalescing
+				// instead of the resolved scalar — and the ternary then-slot
+				// would fill with the ternary node itself (a self-cycle).
+				// Resetting forces @val-bc to resolve the matched token.
+				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+					r.Node = jsonic.Undefined
 				},
 				G: "expr,ternary,block-pair",
 			})
@@ -975,15 +1003,27 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	exprSpec.AddClose(exprClose...)
 
-	// AC: evaluate at root of expression, matching TS exactly:
+	// AC: evaluate at root of expression, matching TS:
 	//   if (options.evaluate && 0 === r.n.expr) {
-	//     r.parent.node = evaluation(r.parent, ctx, r.parent.node, options.evaluate)
+	//     out = evaluation(r.parent, ctx, r.parent.node, options.evaluate)
+	//     r.parent.node = out
+	//     r.node = out
 	//   }
 	exprSpec.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
 		if eopts.Evaluate != nil && r.N["expr"] < 1 {
 			parent := r.Parent
 			if parent != nil && parent != jsonic.NoRule {
-				parent.Node = evaluation(parent, ctx, parent.Node, eopts.Evaluate)
+				out := evaluation(parent, ctx, parent.Node, eopts.Evaluate)
+				parent.Node = out
+				// Also write the evaluated result onto this expr rule's own
+				// node. When expr was PUSHED from a still-open value val (the
+				// prefix/paren/suffix forms `-1`, `(1+2)`, `(2+1)!`), that
+				// val's @val-bc coalescing reads its child (this expr) and
+				// would otherwise keep the raw op-array. Writing the result
+				// here makes the coalesced value the evaluated scalar. The
+				// infix form replaces the val (r:) instead, so this is
+				// harmless there.
+				r.Node = out
 			}
 		}
 	})
@@ -1400,9 +1440,19 @@ func prattify(exprNode interface{}, op *Op) *jsonic.ListRef {
 	}
 
 	if op.Prefix {
+		// Chained prefixes nest: a new prefix must go into the DEEPEST
+		// unfilled slot of the existing prefix chain, not overwrite the
+		// last term. Overwriting collapsed `---1` to `[-,[-,1]]` (the
+		// middle prefix was lost). fillNextSlot walks the chain
+		// depth-first and drops the new (empty) prefix expr into the
+		// innermost open slot, giving [-,[-,[-,_]]].
+		newExpr := makeExpr(op)
+		if fillNextSlot(box, newExpr) {
+			return box
+		}
 		end := exprOp.Terms
 		if end < len(box.Val) {
-			box.Val[end] = makeExpr(op)
+			box.Val[end] = newExpr
 			return box
 		}
 		return box
