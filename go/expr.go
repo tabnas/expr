@@ -10,6 +10,7 @@ package expr
 
 import (
 	"strings"
+	"sync"
 
 	jsonic "github.com/tabnas/jsonic/go"
 )
@@ -1551,8 +1552,25 @@ func dupExpr(node interface{}) *jsonic.ListRef {
 	return &jsonic.ListRef{Val: out, Meta: map[string]any{"expr": true}}
 }
 
-// Parse is a convenience function.
+// defaultParser is a lazily-created instance reused by the no-options Parse
+// path, so repeated calls don't rebuild the engine and the (expensive) expr
+// grammar each time. Building the grammar dominates a parse — a fresh
+// MakeJsonic() per call is many times slower (see perf_test.go). Parsing
+// builds a fresh context per call and only reads instance state, so the
+// shared instance is safe for concurrent use. Mirrors @tabnas/json's Parse.
+var (
+	defaultOnce   sync.Once
+	defaultParser *jsonic.Jsonic
+)
+
+// Parse is a convenience function. With no options it reuses a single
+// lazily-created default instance; when options are supplied it builds a
+// per-call instance (those callers need their own configured grammar).
 func Parse(src string, opts ...map[string]interface{}) (interface{}, error) {
+	if len(opts) == 0 {
+		defaultOnce.Do(func() { defaultParser = MakeJsonic() })
+		return defaultParser.Parse(src)
+	}
 	j := MakeJsonic(opts...)
 	return j.Parse(src)
 }
