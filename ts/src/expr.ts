@@ -246,9 +246,6 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
     // TODO: jsonic - make it easier to handle this case
     // Implicit pair not allowed inside ternary
     if (hasTernary && TERN1.includes(tn.token.CL)) {
-      // let pairkeyalt: any = rs.def.open.find((a: any) => a.g.includes('pair'))
-      // pairkeyalt.c = (r: Rule) => !r.n.expr_ternary
-
       rs.def.open
         .filter((a: any) => a.g.includes('pair'))
         .map((alt: any) => {
@@ -298,36 +295,12 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         ? {
           s: [OP],
           b: 1,
-
-          // QQQ
-          // p: 'paren',
           p: 'expr',
 
           c: (r: Rule) => {
             const pdef = parenOTM[r.o0.tin]
             return !pdef.preval.required
           },
-
-          // QQQ
-          /*
-          c: (r: Rule, ctx: Context) => {
-            const pdef = parenOTM[r.o0.tin]
-            let pass = true
-
-            if (pdef.preval.required) {
-              pass = 'val' === r.prev.name && r.prev.u.paren_preval
-            }
-
-            // Paren with preval as first term becomes root.
-            if (pass) {
-              if (1 === r.prev.i) {
-                ctx.root = () => r
-              }
-            }
-
-            return pass
-            },
-          */
 
           g: 'expr,expr-paren',
         }
@@ -537,9 +510,6 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
       hasParen
         ? {
           s: [OP],
-
-          // QQQ
-          // p: 'val',
           p: 'paren',
           b: 1,
 
@@ -556,7 +526,16 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           g: 'expr,expr-prefix',
           a: (r: Rule) => {
             const op = makeOp(r.o0, prefixTM)
+            // Only fold into the parent's node when it is an expression
+            // op THIS prefix chain is building (e.g. the outer `-` of
+            // `--1`). A ternary/paren op-array on the parent is a foreign
+            // seed the engine threaded down by parent-seeding — prattify
+            // would splice the new prefix into the wrapper (corrupting it
+            // with a stray hole + duplicated operand). Start a fresh
+            // operand expression for those (mirrors the infix guard).
             r.node = isOp(r.parent.node)
+              && !isTernaryOp(r.parent.node)
+              && !isParenOp(r.parent.node)
               ? prattify(r.parent.node, op, 'expr-prefix')
               : prior(r, r.parent, op, 'expr-prefix')
           },
@@ -615,22 +594,15 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         const addterm =
           isOp(r.node)
           && r.node?.length - 1 < r.node[0].terms
-          // QQQ
           && ('object' !== typeof r.node || r.node !== r.child.node)
 
         // Append final term to expression.
         if (addterm) {
           r.node.push(r.child.node)
         }
-
-        // console.log('EXPR-BC', addterm, r.i, p(r.node), r.u,
-        //   'C', r.child.i, p(r.child.node),
-        //   'P', r.parent.i, p(r.parent.node),
-        // )
       })
 
       .close([
-        // QQQ
         {
           c: (r: Rule) => 'paren' === r.child.name,
           n: { expr: 0 },
@@ -773,16 +745,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         //   'P', r.parent.name, r.parent.i, r.parent.n, p(r.parent.node))
 
         if (options.evaluate && 0 === r.n.expr) {
-          // The parent node will contain the root of the expr tree
-
-          // QQQ
-          // r.parent.node = evaluation(
-          //   r,
-          //   ctx,
-          //   r.node,
-          //   options.evaluate,
-          // )
-
+          // The parent node will contain the root of the expr tree.
           let out = evaluation(
             r.parent,
             ctx,
@@ -790,9 +753,18 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             options.evaluate,
           )
 
-          // console.log('EXPR-AC-OUT', out)
-
           r.parent.node = out
+
+          // Also write the evaluated result onto this expr rule's own
+          // node. When the expr rule was PUSHED from a still-open val
+          // (the prefix/paren forms: `+1`, `(a)`), that val's close
+          // coalescing reads its child's node (this expr rule). Under
+          // the new builtins val-close coalesces child-container over
+          // the seeded node, which would otherwise restore the raw
+          // op-array and discard the evaluated value. Writing `out`
+          // here makes the coalesced value the evaluated result (a
+          // primitive scalar or a real container), not the op-array.
+          r.node = out
         }
       })
   })
@@ -848,18 +820,9 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           : NONE,
       ])
 
-      .ac((r: Rule, ctx: Context) => {
-
-        // QQQ
-        // console.log('PAREN-AC', r.i, p(r.node), 'C', r.parent.i, p(r.parent.node))
+      .ac((r: Rule, _ctx: Context) => {
         r.parent.node = r.node
         r.parent.parent.node = r.node
-
-        // A Paren can occur outside an expression
-        // if (options.evaluate && 0 === r.n.expr) {
-        //   r.node = evaluation(r.child, ctx, r.child.node, options.evaluate)
-        // }
-
       })
   })
 
@@ -1009,9 +972,15 @@ function prior(rule: Rule, prior: Rule, op: Op, whence: string) {
   // console.log('PRIOR', whence, rule.i, p(rule.node), 'PR', prior.i, p(prior.node))
 
   let prior_node = prior.node
-  if (isOp(prior.node)) {
+  if (isOp(prior.node) && !op.prefix) {
+    // Infix/suffix: the prior node is the genuine first term to wrap
+    // (e.g. the `(1+2)` of `(1+2)+3`). Duplicate it so the in-place
+    // rewrite below preserves referential integrity.
     prior_node = dupNode(prior.node)
   } else {
+    // A prefix op never has a prior term, so any op-array sitting on
+    // prior.node here is a foreign parent-seed (a ternary/paren wrapper
+    // threaded down by the engine). Start fresh rather than mutating it.
     prior.node = []
   }
 
