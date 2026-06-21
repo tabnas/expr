@@ -129,6 +129,38 @@ Two consequences agents must internalise:
   tier base `N*1000000` (left = base, right = base+100000 for
   left-assoc) — no rescale needed.
 
+## Go-port parity: instance tins & deterministic op order
+
+Two defects in the Go port (`go/expr.go` `makeAllOps`) diverged from the
+canonical TS behaviour. Both bit downstream hosts that embed this plugin
+(notably the `@tabnas/c` parser, which hands `expr` a `(`/`+`/`*`/… op
+table and a host lexer that emits its own punctuation tins). Both are
+fixed in `go/expr.go`; the notes below explain *why* the code looks the
+way it does so the fixes are not "simplified" back into bugs.
+
+1. **Operator tins must come from the INSTANCE, not the global table.**
+   The TS plugin resolves an operator's token id with `tabnas.fixed(src)`
+   — an **instance** lookup. `getOrCreateTin` therefore calls
+   `j.FixedSrc(src)` (instance config), **not** the global
+   `jsonic.FixedTokens` map. A host grammar registers its punctuation as
+   instance-level fixed tokens; the global table does not contain those.
+   Reading the global map instead misses them and mints a fresh
+   `"#E"+src` tin that never matches the tin the host lexer emits, so an
+   infix alt waits forever on a token that never arrives (`1 + 2` →
+   "unexpected character: +"). Locked in by
+   `TestInstanceFixedTokenBinding`.
+
+2. **Operator setup order must be deterministic.** TS iterates an
+   insertion-ordered object; Go randomizes map iteration per run.
+   `makeAllOps` builds an op-name slice, `sort.Strings` it, and iterates
+   that — so tin assignment and last-write-wins tin resolution are stable
+   between runs. Without it, precedence-shared setup is order-dependent
+   and `1 + 2 * 3` parses flakily as `1+(2*3)` vs `(1+2)*3`. Locked in by
+   `TestOperatorOrderDeterministic` / `TestPrecedenceStable`.
+
+When porting a behaviour change, keep both invariants: instance-level
+`FixedSrc` lookups and sorted op iteration.
+
 ## debug-model composition test (@tabnas/debug)
 
 `ts/test/debug-model.test.ts` composes the expr plugin with the external

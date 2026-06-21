@@ -911,3 +911,87 @@ func TestSpecParenPrevalChain(t *testing.T) {
 	})
 	runSpec(t, "paren-preval-chain.tsv", j)
 }
+
+// --- Go-port parity regression tests ---
+
+// TestInstanceFixedTokenBinding locks in the fix for the instance-vs-global
+// tin defect. A host grammar (e.g. the @tabnas/c lexer) registers its own
+// fixed token for an operator's source string on the instance BEFORE the
+// expr plugin runs. The plugin must bind the operator to that instance tin
+// (mirroring the TS plugin's `tabnas.fixed(src)`), not consult the global
+// fixed-token table and mint a fresh "#E"+src tin that the host lexer never
+// emits.
+func TestInstanceFixedTokenBinding(t *testing.T) {
+	j := jsonic.Make()
+	hostTin := j.Token("#AT", "@") // host-registered, instance-level only
+
+	if int(j.FixedSrc("@")) != hostTin {
+		t.Fatalf("precondition: FixedSrc(@)=%d, want host tin %d", j.FixedSrc("@"), hostTin)
+	}
+
+	eopts := &ExprOptions{Op: map[string]*OpDef{
+		"at": {Infix: true, Left: 2000000, Right: 2100000, Src: "@"},
+	}}
+	ops := makeAllOps(j, eopts)
+
+	var atOp *Op
+	for _, op := range ops {
+		if op.Src == "@" {
+			atOp = op
+		}
+	}
+	if atOp == nil {
+		t.Fatal("expected an operator built for src @")
+	}
+	if atOp.Tin != hostTin {
+		t.Errorf("operator bound to tin %d, want host instance tin %d", atOp.Tin, hostTin)
+	}
+	if atOp.Tin != int(j.FixedSrc("@")) {
+		t.Errorf("operator tin %d != instance FixedSrc(@) %d", atOp.Tin, j.FixedSrc("@"))
+	}
+}
+
+// TestOperatorOrderDeterministic locks in the fix for map-iteration
+// nondeterminism. makeAllOps must build operators in a stable, sorted order
+// regardless of Go's per-run map-iteration randomization, so tin assignment
+// and last-write-wins tin resolution never vary between runs (which made
+// `1 + 2 * 3` parse flakily as `1+(2*3)` vs `(1+2)*3`).
+func TestOperatorOrderDeterministic(t *testing.T) {
+	build := func() []string {
+		j := jsonic.Make()
+		ops := makeAllOps(j, resolveOptions(nil))
+		names := make([]string, len(ops))
+		for i, op := range ops {
+			names[i] = op.Name
+		}
+		return names
+	}
+	first := build()
+	for i := 0; i < 50; i++ {
+		got := build()
+		if !reflect.DeepEqual(got, first) {
+			t.Fatalf("operator order not deterministic across builds:\n first: %v\n got:   %v", first, got)
+		}
+	}
+}
+
+// TestPrecedenceStable parses a precedence-sensitive expression repeatedly on
+// fresh instances; with deterministic operator setup every run must agree on
+// `1 + 2 * 3 == 1 + (2*3)`.
+func TestPrecedenceStable(t *testing.T) {
+	want := []interface{}{"+", float64(1), []interface{}{"*", float64(2), float64(3)}}
+	for i := 0; i < 50; i++ {
+		j := makeExprJsonic()
+		result, err := j.Parse("1 + 2 * 3")
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		got := simplifyAndNormalize(result)
+		wantN := simplifyAndNormalize(want)
+		if !reflect.DeepEqual(got, wantN) {
+			gj, _ := json.Marshal(got)
+			wj, _ := json.Marshal(wantN)
+			t.Fatalf("run %d: got %s, want %s", i, gj, wj)
+		}
+	}
+}
