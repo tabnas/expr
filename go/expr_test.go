@@ -116,6 +116,26 @@ func TestSpecBinary(t *testing.T) {
 	runSpec(t, "binary.tsv", j)
 }
 
+func TestSpecArithmeticMixed(t *testing.T) {
+	j := makeExprJsonic()
+	runSpec(t, "arithmetic-mixed.tsv", j)
+}
+
+func TestSpecPrefixInfixMixed(t *testing.T) {
+	j := makeExprJsonic()
+	runSpec(t, "prefix-infix-mixed.tsv", j)
+}
+
+func TestSpecParenDeepNest(t *testing.T) {
+	j := makeExprJsonic()
+	runSpec(t, "paren-deep-nest.tsv", j)
+}
+
+func TestSpecStructureArith(t *testing.T) {
+	j := makeExprJsonic()
+	runSpec(t, "structure-arith.tsv", j)
+}
+
 func TestSpecStructure(t *testing.T) {
 	j := makeExprJsonic()
 	runSpec(t, "structure.tsv", j)
