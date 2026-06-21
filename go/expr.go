@@ -9,6 +9,7 @@
 package tabnasexpr
 
 import (
+	"sort"
 	"strings"
 	"sync"
 
@@ -1494,13 +1495,28 @@ func prattifySuffix(node interface{}, op *Op) *jsonic.ListRef {
 		return makeExpr(op, node)
 	}
 
-	if !exprOp.Suffix && exprOp.Right <= op.Left {
+	// Paren expressions are complete units — a suffix wraps the whole group,
+	// it never drills inside (mirrors prattify's infix paren guard). In the TS
+	// port a paren op has no `right`, so `right <= left` is false and it falls
+	// through to the wrap branch; in Go a paren op's Right is the 0 zero-value,
+	// so it must be excluded explicitly or `(1-2)!` wrongly becomes
+	// ["(",["!",...]] instead of ["!",["(",...]].
+	if !exprOp.Paren && !exprOp.Suffix && exprOp.Right <= op.Left {
 		end := exprOp.Terms
 		if end < len(box.Val) {
 			lastTerm := box.Val[end]
-			// Drill into prefix.
+			// A higher-precedence suffix drills into a lower-precedence prefix
+			// OR infix sub-expression so it binds to the rightmost operand:
+			// e.g. `--1!` => [-,[-,[!,1]]] and `0!-1!*2!` =>
+			// [-,[!,0],[*,[!,1],[!,2]]] (the trailing `!` attaches to `2`, not
+			// the whole product). The TS port reaches these shapes via parse
+			// flow — applying the suffix to the operand before the infix
+			// absorbs it — so it only needs the explicit prefix drill; the Go
+			// port is handed the assembled tree here and must also drill
+			// through infix sub-ops.
 			if subBox := asListRef(lastTerm); subBox != nil && len(subBox.Val) > 0 {
-				if subOp, isSub := subBox.Val[0].(*Op); isSub && subOp.Prefix && subOp.Right < op.Left {
+				if subOp, isSub := subBox.Val[0].(*Op); isSub &&
+					(subOp.Prefix || subOp.Infix) && subOp.Right < op.Left {
 					prattifySuffix(subBox, op)
 					return box
 				}
@@ -1672,10 +1688,12 @@ func addDefaultOps(eopts *ExprOptions) {
 		}
 		// Skip default paren ops whose open/close source is already claimed
 		// by a user-provided paren op. Otherwise both ops share the same
-		// token tin and the non-deterministic map iteration in makeAllOps
-		// would let either win in parenOpenByTin (e.g. user's "func" with
-		// preval vs default "plain" without). This mirrors the TS plugin,
-		// where insertion-order iteration lets the user op win last-write.
+		// token tin and the (now deterministic, sorted) iteration in
+		// makeAllOps would resolve parenOpenByTin to whichever op sorts last
+		// — which may be the default "plain" rather than the user's "func"
+		// with preval. Dropping the conflicting default here keeps the user
+		// op authoritative, mirroring the TS plugin, where insertion-order
+		// iteration lets the user op win last-write.
 		if def.Paren {
 			conflict := false
 			for _, existing := range eopts.Op {
@@ -1706,10 +1724,22 @@ func makeAllOps(j *jsonic.Jsonic, eopts *ExprOptions) []*Op {
 		if tin, ok := srcTins[src]; ok {
 			return tin
 		}
-		// Reuse existing fixed token tin if src matches a built-in token
-		// (e.g., ":" is TinCL, "[" is TinOS). This prevents overriding
-		// jsonic's built-in token types when operators share syntax.
-		if existingTin, ok := jsonic.FixedTokens[src]; ok {
+		// Reuse an existing fixed-token tin if src is already registered as a
+		// fixed token on THIS instance (e.g., ":" is TinCL, "[" is TinOS, and
+		// any punctuation a host grammar registered on the instance). This
+		// prevents overriding jsonic's built-in token types when operators
+		// share syntax, and — critically — lets the plugin bind operators to
+		// the instance's own fixed tokens.
+		//
+		// This mirrors the TS plugin's `tabnas.fixed(src)`, which is an
+		// INSTANCE lookup. The instance config is seeded from the global
+		// built-ins AND carries any fixed tokens a host grammar (e.g. a C
+		// lexer registering "+"/"(") added to this instance. Consulting the
+		// GLOBAL tabnas.FixedTokens table instead would miss those instance
+		// registrations and mint a fresh "#E"+src tin that never matches the
+		// tin the host lexer actually emits — the infix alt would then wait
+		// on a token the lexer never produces.
+		if existingTin := j.FixedSrc(src); existingTin != 0 {
 			srcTins[src] = int(existingTin)
 			return int(existingTin)
 		}
@@ -1718,8 +1748,23 @@ func makeAllOps(j *jsonic.Jsonic, eopts *ExprOptions) []*Op {
 		return tin
 	}
 
+	// Iterate the operator table in a deterministic (sorted) order. Go
+	// randomizes map iteration order per run, which made operator setup
+	// order-dependent: tin assignment and last-write-wins resolution for
+	// operators sharing a token would vary between runs, so an expression
+	// like `1 + 2 * 3` could parse as `1 + (2*3)` on one run and
+	// `(1+2) * 3` on the next. The TS reference iterates an insertion-ordered
+	// object, so it is stable; sorting the op names is the closest
+	// deterministic Go analogue.
+	opNames := make([]string, 0, len(eopts.Op))
+	for name := range eopts.Op {
+		opNames = append(opNames, name)
+	}
+	sort.Strings(opNames)
+
 	var ops []*Op
-	for name, def := range eopts.Op {
+	for _, name := range opNames {
+		def := eopts.Op[name]
 		if def == nil {
 			continue
 		}

@@ -60,6 +60,30 @@ describe('spec', () => {
   })
 
 
+  test('arithmetic-mixed', () => {
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
+    runSpec('arithmetic-mixed.tsv', j)
+  })
+
+
+  test('prefix-infix-mixed', () => {
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
+    runSpec('prefix-infix-mixed.tsv', j)
+  })
+
+
+  test('paren-deep-nest', () => {
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
+    runSpec('paren-deep-nest.tsv', j)
+  })
+
+
+  test('structure-arith', () => {
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
+    runSpec('structure-arith.tsv', j)
+  })
+
+
   test('structure', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('structure.tsv', j)
@@ -93,6 +117,18 @@ describe('spec', () => {
     })
     const j = mj(je)
     runSpec('unary-suffix-basic.tsv', j)
+  })
+
+
+  test('unary-suffix-arith', () => {
+    const je = new Tabnas().use(jsonic).use(Expr, {
+      op: {
+        factorial: { suffix: true, left: 6000000, src: '!' },
+        question: { suffix: true, left: 3500000, src: '?' },
+      }
+    })
+    const j = mj(je)
+    runSpec('unary-suffix-arith.tsv', j)
   })
 
 

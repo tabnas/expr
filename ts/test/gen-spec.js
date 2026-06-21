@@ -65,6 +65,81 @@ function writeTsv(filename, header, entries) {
   writeTsv('binary.tsv', 'Binary infix operator tests - default Expr config', entries)
 }
 
+// === arithmetic-mixed ===
+{
+  const j = mj(Jsonic.make().use(Expr))
+  const entries = []
+  const cases = [
+    '1-2', '1-2-3', '1-2-3-4',
+    '8/2', '8/2/2', '8/2/2/2',
+    '7%3', '9%5%3',
+    '1+2-3', '1-2+3', '1-2+3-4', '10-2-3+4', '1+2-3+4-5',
+    '2*3/4', '8/2*3', '8/4%3', '2*3%4', '12%5*2', '2*3*4/6',
+    '1-2*3', '1*2-3', '10-8/2', '10/2-3', '1+8%3', '1%2+3',
+    '2*3-4/2', '10-2*3+1', '1-2*3-4', '8/2+3*4', '1+2*3-4/2',
+    '1-2-3*4', '12/2/3-1', '100-10-1*0',
+    '(1-2)*3', '10/(2-3)', '(1+2)%3', '(10-2)/(1+1)', '1-(2-3)', '8/(4/2)',
+  ]
+  for (const c of cases) {
+    entries.push([c, j(c)])
+  }
+  writeTsv('arithmetic-mixed.tsv', 'Mixed arithmetic - default Expr config', entries)
+}
+
+// === prefix-infix-mixed ===
+{
+  const j = mj(Jsonic.make().use(Expr))
+  const entries = []
+  const cases = [
+    '-1*2', '-1/2', '-1%2', '-1-2', '1-(-2)', '-1*-2', '-2*3+1',
+    '1+-2*3', '-1+2*-3', '-1-2-3', '-1*2*3', '--1*2', '-1*--2',
+    '-1/2/3', '-8/-2', '-1%-2',
+    '-(1+2)', '-(1-2)', '+(1*2)', '-((1+2))', '-(1+2)*3', '3*-(1+2)',
+    '-(1+2)/3', '-(1*2)-3', '1-(-2*3)',
+    '-a*b', '-a-b', 'a*-b', '-a/-b',
+  ]
+  for (const c of cases) {
+    entries.push([c, j(c)])
+  }
+  writeTsv('prefix-infix-mixed.tsv', 'Prefix with mixed infix/paren - default Expr config', entries)
+}
+
+// === paren-deep-nest ===
+{
+  const j = mj(Jsonic.make().use(Expr))
+  const entries = []
+  const cases = [
+    '((1-2))', '(((1*2)))', '((((1/2))))',
+    '((1+2)*3)', '(1*(2+3))', '((1+2)*(3-4))', '(1+(2*(3-4)))',
+    '((((1)))+2)', '(1-2)-(3-4)', '((1+2)-(3*4))', '1*((2+3)*4)',
+    '(1+2*3)-4', '((1))*((2))', '(1-(2-(3-4)))', '((1+2)*(3+4))-5',
+    '(1+2)/(3-1)', '10-((1+2)*3)', '((8/2)-1)*((3))',
+  ]
+  for (const c of cases) {
+    entries.push([c, j(c)])
+  }
+  writeTsv('paren-deep-nest.tsv', 'Deeply nested parens with mixed ops - default Expr config', entries)
+}
+
+// === structure-arith ===
+{
+  const j = mj(Jsonic.make().use(Expr))
+  const entries = []
+  const cases = [
+    'a:1-2', 'a:1*2-3', 'a:10/2', 'a:1%2',
+    'a:1-2,b:3*4', 'a:1-2 b:3*4', 'a:1-2,b:3/4,c:5%2',
+    '[1-2]', '[1-2,3*4]', '[1-2,3*4,5/6]', '[1-2 3*4]',
+    '[1-2*3]', '[10/2-1]',
+    '{a:1-2}', '{a:1-2,b:3*4}', '{a:1-2 b:3/4}',
+    '{x:[1-2,3*4]}', '{a:1-2,b:[3*4,5-6]}',
+    'a:1-2-3', '[1-2-3,4*5*6]',
+  ]
+  for (const c of cases) {
+    entries.push([c, j(c)])
+  }
+  writeTsv('structure-arith.tsv', 'Mixed-op expressions in structures - default Expr config', entries)
+}
+
 // === structure ===
 {
   const j = mj(Jsonic.make().use(Expr))
@@ -180,6 +255,32 @@ function writeTsv(filename, header, entries) {
     entries.push([c, j(c)])
   }
   writeTsv('unary-suffix-basic.tsv', 'Unary suffix operator tests - config:suffix', entries)
+}
+
+// === unary-suffix-arith === (requires custom config)
+{
+  const je = Jsonic.make().use(Expr, {
+    op: {
+      factorial: { suffix: true, left: 6000000, src: '!' },
+      question: { suffix: true, left: 3500000, src: '?' },
+    }
+  })
+  const j = mj(je)
+  const entries = []
+  const cases = [
+    '1!', '1!!', '1!!!', 'z!',
+    '1-2!', '1!-2', '1!-2!', '1*2!', '1!*2', '1!/2', '8/2!', '1!%2', '1%2!',
+    '1-2!-3', '1!-2!-3!', '0!-1!*2!', '8/2!-1', '1!*2!', '1!*2!*3!', '1!*2!+3!',
+    '0!+1!*2!', '1*2!*3', '1!*2*3!', '1+2!*3', '1!*2+3',
+    '1?-2', '1-2?', '1?*2', '2*3?', '8/2?', '1?%2', '1?+2?', '1?*2?',
+    '(1-2)!', '(1*2)!', '(8/2)!', '(1+2)!', '(1-2)?', '((1+2))!', '(1)!',
+    '1-(2!)', '(1!-2!)', '(1!*2!)',
+    '1?!', '1!?', '1?!?',
+  ]
+  for (const c of cases) {
+    entries.push([c, j(c)])
+  }
+  writeTsv('unary-suffix-arith.tsv', 'Suffix with mixed infix/paren - config:suffix', entries)
 }
 
 // === unary-suffix-edge === (requires custom config)

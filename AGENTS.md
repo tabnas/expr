@@ -35,26 +35,25 @@ There are two implementations that must behave identically — TypeScript
 
 ## The tabnas engine dependency
 
-Both runtimes depend on the unpublished `@tabnas` siblings via a
-**sibling checkout** (the standard tabnas dev model until the packages
-publish tagged releases):
+Both runtimes depend on published `@tabnas` siblings pulled from their
+package registries — no sibling checkout or local linking is needed:
 
 - TypeScript: `@tabnas/parser` and `@tabnas/jsonic` are declared as
-  `peerDependencies` (`">=2"`) in `ts/package.json` and mirrored as
-  `file:../../parser/ts` / `file:../../jsonic/ts` devDependencies for
-  local builds. `@tabnas/debug` and `@tabnas/railroad` are dev-only
-  `file:` devDependencies (debug for the `debug-model.test.ts`
-  composition test, railroad to regenerate `ts/doc/grammar.{svg,txt}`).
-  npm >=7 / Node >=24 auto-installs the peers; `engines.node` is `">=24"`.
-- Go: `go/go.mod` requires `github.com/tabnas/jsonic/go` with
-  `replace github.com/tabnas/jsonic/go => ../../jsonic/go`. That is the
-  module's **only** tabnas dependency — the Go jsonic package re-exports
-  the engine types (`jsonic.Make`, `jsonic.Rule`, `jsonic.Context`, …),
-  so `go/expr.go` imports `jsonic`, not `parser`, directly.
+  `peerDependencies` (`"^0.2.0"`) in `ts/package.json`, and `@tabnas/`
+  `{parser,jsonic,debug,railroad}` as `"^0.2.0"` devDependencies (debug
+  for the `debug-model.test.ts` composition test, railroad to regenerate
+  `ts/doc/grammar.{svg,txt}`). A plain `npm i` resolves them all from the
+  npm registry. `engines.node` is `">=24"`.
+- Go: `go/go.mod` requires `github.com/tabnas/jsonic/go` (with
+  `json/go` + `parser/go` as indirect deps), resolved from the Go module
+  proxy. The Go jsonic package re-exports the engine types
+  (`jsonic.Make`, `jsonic.Rule`, `jsonic.Context`, …), so `go/expr.go`
+  imports `jsonic`, not `parser`, directly.
 
-Clone the siblings (`parser`, `jsonic`, plus `debug`/`railroad` for the
-optional/diagram steps) next to this repo and build their TS first. CI
-does this for you (see below).
+To develop against unreleased sibling source instead of the published
+packages, point npm at local checkouts (`npm i ../../parser/ts` etc., or
+`npm link`) and add a `go.work` listing the sibling `go/` modules — keep
+both out of version control.
 
 ## Authority and alignment rules
 
@@ -129,6 +128,54 @@ Two consequences agents must internalise:
   tier base `N*1000000` (left = base, right = base+100000 for
   left-assoc) — no rescale needed.
 
+## Go-port parity: instance tins, deterministic op order, suffix drilling
+
+Three defects in the Go port (`go/expr.go`) diverged from the canonical
+TS behaviour. The first two bit downstream hosts that embed this plugin
+(notably the `@tabnas/c` parser, which hands `expr` a `(`/`+`/`*`/… op
+table and a host lexer that emits its own punctuation tins). All are
+fixed in `go/expr.go`; the notes below explain *why* the code looks the
+way it does so the fixes are not "simplified" back into bugs.
+
+1. **Operator tins must come from the INSTANCE, not the global table.**
+   The TS plugin resolves an operator's token id with `tabnas.fixed(src)`
+   — an **instance** lookup. `getOrCreateTin` therefore calls
+   `j.FixedSrc(src)` (instance config), **not** the global
+   `jsonic.FixedTokens` map. A host grammar registers its punctuation as
+   instance-level fixed tokens; the global table does not contain those.
+   Reading the global map instead misses them and mints a fresh
+   `"#E"+src` tin that never matches the tin the host lexer emits, so an
+   infix alt waits forever on a token that never arrives (`1 + 2` →
+   "unexpected character: +"). Locked in by
+   `TestInstanceFixedTokenBinding`.
+
+2. **Operator setup order must be deterministic.** TS iterates an
+   insertion-ordered object; Go randomizes map iteration per run.
+   `makeAllOps` builds an op-name slice, `sort.Strings` it, and iterates
+   that — so tin assignment and last-write-wins tin resolution are stable
+   between runs. Without it, precedence-shared setup is order-dependent
+   and `1 + 2 * 3` parses flakily as `1+(2*3)` vs `(1+2)*3`. Locked in by
+   `TestOperatorOrderDeterministic` / `TestPrecedenceStable`.
+
+3. **Suffix operators wrap parens and drill through infix.** `prattifySuffix`
+   integrates a suffix into the assembled expression tree. Two TS behaviours
+   the Go port initially missed: (a) a suffix applied to a **paren** group
+   must wrap it (`(1-2)!` → `["!",["(",...]]`), never drill inside — in TS a
+   paren op has no `right`, so `right <= left` is false (JS `undefined <= n`
+   is false) and it falls through to the wrap branch; in Go a paren op's
+   `Right` is the `0` zero-value, so it must be excluded explicitly. (b) a
+   higher-precedence suffix must drill into a lower-precedence **prefix OR
+   infix** sub-expression so it binds to the rightmost operand (`0!-1!*2!` →
+   `["-",["!",0],["*",["!",1],["!",2]]]`). TS reaches (b) via parse flow
+   (the suffix attaches to the operand before the infix absorbs it) and so
+   only drills into prefixes; the Go port is handed the assembled tree and
+   must also drill through infix sub-ops. Locked in by the
+   `unary-suffix-arith.tsv` shared fixture.
+
+When porting a behaviour change, keep all three invariants: instance-level
+`FixedSrc` lookups, sorted op iteration, and the suffix paren-guard/infix
+drill.
+
 ## debug-model composition test (@tabnas/debug)
 
 `ts/test/debug-model.test.ts` composes the expr plugin with the external
@@ -169,11 +216,10 @@ go test -v ./...       # unit tests + shared .tsv fixtures
 
 The repo root [`Makefile`](Makefile) wraps both: `make build|test` run
 the TS and Go halves, and `make publish-go V=x.y.z` injects `V` into the
-`const Version` in `go/expr.go` (currently `0.1.3`) and tags
-`go/vX.Y.Z`. The TS package version is `2.3.2` (`ts/package.json`).
-Local builds resolve the unpublished siblings via the repo-set `go.work`
-+ node_modules symlinks (`admin/scripts/link.sh`); there is no
-checked-in `go.work` in this repo.
+`const Version` in `go/expr.go` and tags `go/vX.Y.Z`. Both runtimes
+resolve their `@tabnas` deps from the published registries (npm / Go
+module proxy), so a plain `npm i` (TS) and `go build` (Go) work without
+any sibling checkout.
 
 ## CI
 
@@ -186,4 +232,7 @@ in CI):
   `.tsv` fixtures).
 - git-clones the tabnas closure (`parser debug json abnf railroad
   jsonic`) as sibling dirs, runs `npm i && npm run build --if-present`
-  in each in topo order, then `npm test` in `expr/ts`.
+  in each in topo order, then `npm test` in `expr/ts`. (Now that the
+  `@tabnas` deps are published, `expr/ts` resolves them from the npm
+  registry, so these clone/build steps are redundant and the workflow
+  can be reduced to `npm i && npm run build && npm test` in `expr/ts`.)
