@@ -257,6 +257,32 @@ function writeTsv(filename, header, entries) {
   writeTsv('unary-suffix-basic.tsv', 'Unary suffix operator tests - config:suffix', entries)
 }
 
+// === unary-suffix-arith === (requires custom config)
+{
+  const je = Jsonic.make().use(Expr, {
+    op: {
+      factorial: { suffix: true, left: 6000000, src: '!' },
+      question: { suffix: true, left: 3500000, src: '?' },
+    }
+  })
+  const j = mj(je)
+  const entries = []
+  const cases = [
+    '1!', '1!!', '1!!!', 'z!',
+    '1-2!', '1!-2', '1!-2!', '1*2!', '1!*2', '1!/2', '8/2!', '1!%2', '1%2!',
+    '1-2!-3', '1!-2!-3!', '0!-1!*2!', '8/2!-1', '1!*2!', '1!*2!*3!', '1!*2!+3!',
+    '0!+1!*2!', '1*2!*3', '1!*2*3!', '1+2!*3', '1!*2+3',
+    '1?-2', '1-2?', '1?*2', '2*3?', '8/2?', '1?%2', '1?+2?', '1?*2?',
+    '(1-2)!', '(1*2)!', '(8/2)!', '(1+2)!', '(1-2)?', '((1+2))!', '(1)!',
+    '1-(2!)', '(1!-2!)', '(1!*2!)',
+    '1?!', '1!?', '1?!?',
+  ]
+  for (const c of cases) {
+    entries.push([c, j(c)])
+  }
+  writeTsv('unary-suffix-arith.tsv', 'Suffix with mixed infix/paren - config:suffix', entries)
+}
+
 // === unary-suffix-edge === (requires custom config)
 {
   const je = Jsonic.make().use(Expr, {

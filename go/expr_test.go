@@ -174,6 +174,20 @@ func TestSpecUnarySuffixBasic(t *testing.T) {
 	runSpec(t, "unary-suffix-basic.tsv", j)
 }
 
+func TestSpecUnarySuffixArith(t *testing.T) {
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			"factorial": map[string]interface{}{
+				"suffix": true, "left": 6000000, "src": "!",
+			},
+			"question": map[string]interface{}{
+				"suffix": true, "left": 3500000, "src": "?",
+			},
+		},
+	})
+	runSpec(t, "unary-suffix-arith.tsv", j)
+}
+
 func TestSpecUnarySuffixEdge(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{

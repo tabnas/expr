@@ -120,6 +120,18 @@ describe('spec', () => {
   })
 
 
+  test('unary-suffix-arith', () => {
+    const je = new Tabnas().use(jsonic).use(Expr, {
+      op: {
+        factorial: { suffix: true, left: 6000000, src: '!' },
+        question: { suffix: true, left: 3500000, src: '?' },
+      }
+    })
+    const j = mj(je)
+    runSpec('unary-suffix-arith.tsv', j)
+  })
+
+
   test('unary-suffix-edge', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {

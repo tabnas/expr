@@ -1495,13 +1495,28 @@ func prattifySuffix(node interface{}, op *Op) *jsonic.ListRef {
 		return makeExpr(op, node)
 	}
 
-	if !exprOp.Suffix && exprOp.Right <= op.Left {
+	// Paren expressions are complete units — a suffix wraps the whole group,
+	// it never drills inside (mirrors prattify's infix paren guard). In the TS
+	// port a paren op has no `right`, so `right <= left` is false and it falls
+	// through to the wrap branch; in Go a paren op's Right is the 0 zero-value,
+	// so it must be excluded explicitly or `(1-2)!` wrongly becomes
+	// ["(",["!",...]] instead of ["!",["(",...]].
+	if !exprOp.Paren && !exprOp.Suffix && exprOp.Right <= op.Left {
 		end := exprOp.Terms
 		if end < len(box.Val) {
 			lastTerm := box.Val[end]
-			// Drill into prefix.
+			// A higher-precedence suffix drills into a lower-precedence prefix
+			// OR infix sub-expression so it binds to the rightmost operand:
+			// e.g. `--1!` => [-,[-,[!,1]]] and `0!-1!*2!` =>
+			// [-,[!,0],[*,[!,1],[!,2]]] (the trailing `!` attaches to `2`, not
+			// the whole product). The TS port reaches these shapes via parse
+			// flow — applying the suffix to the operand before the infix
+			// absorbs it — so it only needs the explicit prefix drill; the Go
+			// port is handed the assembled tree here and must also drill
+			// through infix sub-ops.
 			if subBox := asListRef(lastTerm); subBox != nil && len(subBox.Val) > 0 {
-				if subOp, isSub := subBox.Val[0].(*Op); isSub && subOp.Prefix && subOp.Right < op.Left {
+				if subOp, isSub := subBox.Val[0].(*Op); isSub &&
+					(subOp.Prefix || subOp.Infix) && subOp.Right < op.Left {
 					prattifySuffix(subBox, op)
 					return box
 				}
