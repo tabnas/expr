@@ -684,8 +684,13 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			A: func(r *jsonic.Rule, ctx *jsonic.Context) {
 				op := prefixByTin[r.O0.Tin]
 				if isOp(r.Parent.Node) && isExprOp(r.Parent.Node) {
-					r.Node = prattify(r.Parent.Node, op)
-					r.Parent.Node = r.Node // sync after potential reallocation
+					// prattify mutates the root box in place and returns the
+					// TS-style attachment point; the Go engine tracks the
+					// ROOT on both rules (BC slot-fills via fillNextSlot).
+					box := asListRef(r.Parent.Node)
+					prattify(box, op)
+					r.Node = box
+					r.Parent.Node = box
 				} else {
 					r.Node = prior(r, r.Parent, op)
 				}
@@ -705,13 +710,29 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				prev := r.Prev
 				parent := r.Parent
 
+				// prattify mutates the root box in place and returns the
+				// TS-style attachment point; the Go engine tracks the ROOT
+				// on the rules (BC slot-fills via fillNextSlot). asListRef
+				// also (re)boxes a plain op-slice so the shared-mutation
+				// contract holds for nodes that arrived unwrapped.
 				if isOp(parent.Node) && isExprOp(parent.Node) {
-					r.Node = prattify(parent.Node, op)
-					parent.Node = r.Node // sync after potential reallocation
+					box := asListRef(parent.Node)
+					prattify(box, op)
+					r.Node = box
+					parent.Node = box
 				} else if isOp(prev.Node) {
-					r.Node = prattify(prev.Node, op)
+					box := asListRef(prev.Node)
+					out := prattify(box, op)
+					root := box
+					if pop, ok := box.Val[0].(*Op); ok && pop.Paren {
+						// A paren prior is a complete unit: prattify wraps
+						// it in a NEW root instead of mutating in place, so
+						// the returned node is the root here.
+						root = out
+					}
+					r.Node = root
 					r.Parent = prev
-					prev.Node = r.Node // sync after potential reallocation
+					prev.Node = root
 				} else {
 					r.Node = prior(r, prev, op)
 				}
@@ -1361,11 +1382,45 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			},
 		}...)
 
+		// Ensure ternary results get evaluated (mirrors the TS ternary
+		// .ac). Fire on every ternary instance's after-close, but only act
+		// when the chain has reached its final step: r.Next is not another
+		// ternary instance, and the op-array is fully populated (cond,
+		// then, else). Early steps would otherwise evaluate a partial
+		// node. Write the result back along the replacement chain (each
+		// successive ternary instance and the original val that started
+		// the chain) and to the parent, so whichever node the engine
+		// returns reflects the evaluated form.
 		ternarySpec.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			if eopts.Evaluate != nil {
-				if isOp(r.Node) {
-					r.Node = evaluation(r, ctx, r.Node, eopts.Evaluate)
+			if eopts.Evaluate == nil {
+				return
+			}
+			// Skip while the chain is still ongoing: evaluate only on the
+			// FINAL step (TS: if r.next.name === 'ternary' return).
+			if r.Next != nil && r.Next != jsonic.NoRule && r.Next.Name == "ternary" {
+				return
+			}
+			if !isOp(r.Node) {
+				return
+			}
+			// The op-array isn't fully populated until all of the op's
+			// terms are present (TS: r.node.length < 4). Go pre-allocates
+			// the slots, so check for unfilled sentinels instead.
+			sl, _ := unwrapExpr(r.Node)
+			if len(sl) < 4 {
+				return
+			}
+			for _, el := range sl {
+				if isUnfilled(el) {
+					return
 				}
+			}
+			out := evaluation(r, ctx, r.Node, eopts.Evaluate)
+			for cur := r; cur != nil && cur != jsonic.NoRule; cur = cur.Prev {
+				cur.Node = out
+			}
+			if r.Parent != nil && r.Parent != jsonic.NoRule {
+				r.Parent.Node = out
 			}
 		})
 
@@ -1400,7 +1455,15 @@ func prior(rule *jsonic.Rule, priorRule *jsonic.Rule, op *Op) *jsonic.ListRef {
 // prattify integrates a new operator into the expression tree according to
 // operator precedence (Pratt algorithm). Operates on the *jsonic.ListRef
 // wrapper so any rebinding of expr.Val is visible to all holders of the
-// pointer. Returns the outermost expression *ListRef.
+// pointer — the root box is always mutated in place.
+//
+// Mirroring the TS prattify's return contract, the returned *ListRef is the
+// sub-expression the new operator now heads (the attachment point where the
+// operator's next term belongs): the root itself for a lower-precedence
+// (wrapping) infix or any suffix, or the newly created inner expression for
+// a higher-precedence (drilling) infix or a prefix. The engine's rule
+// actions track the root box separately and slot-fill via fillNextSlot, so
+// they do not depend on the returned value.
 func prattify(exprNode interface{}, op *Op) *jsonic.ListRef {
 	box := asListRef(exprNode)
 	if box == nil || len(box.Val) == 0 {
@@ -1419,6 +1482,7 @@ func prattify(exprNode interface{}, op *Op) *jsonic.ListRef {
 
 	if op.Infix {
 		// op is lower or equal precedence: wrap entire expression in place.
+		// The root is the attachment point (TS returns expr here).
 		if exprOp.Suffix || op.Left <= exprOp.Right {
 			wrapExpr(box, op)
 			return box
@@ -1429,14 +1493,22 @@ func prattify(exprNode interface{}, op *Op) *jsonic.ListRef {
 		if end < len(box.Val) {
 			if isOp(box.Val[end]) {
 				subBox := asListRef(box.Val[end])
+				// Keep the slot holding the shared box (the term may have
+				// arrived as a plain slice from outside the plugin).
+				box.Val[end] = subBox
 				subOp := subBox.Val[0].(*Op)
-				if subOp.Right < op.Left {
-					box.Val[end] = prattify(subBox, op)
-					return box
+				// Never drill into paren/ternary sub-units: they are
+				// complete structural groups. (TS reaches the same result
+				// because their unset `right` defaults to MAX_SAFE_INTEGER,
+				// making this comparison false; Go zero-values Right to 0,
+				// so they must be excluded explicitly.)
+				if !subOp.Paren && !subOp.Ternary && subOp.Right < op.Left {
+					return prattify(subBox, op)
 				}
 			}
-			box.Val[end] = makeExpr(op, box.Val[end])
-			return box
+			newNode := makeExpr(op, box.Val[end])
+			box.Val[end] = newNode
+			return newNode
 		}
 		return box
 	}
@@ -1447,15 +1519,16 @@ func prattify(exprNode interface{}, op *Op) *jsonic.ListRef {
 		// last term. Overwriting collapsed `---1` to `[-,[-,1]]` (the
 		// middle prefix was lost). fillNextSlot walks the chain
 		// depth-first and drops the new (empty) prefix expr into the
-		// innermost open slot, giving [-,[-,[-,_]]].
+		// innermost open slot, giving [-,[-,[-,_]]]. The new prefix
+		// expression is the attachment point (TS returns it).
 		newExpr := makeExpr(op)
 		if fillNextSlot(box, newExpr) {
-			return box
+			return newExpr
 		}
 		end := exprOp.Terms
 		if end < len(box.Val) {
 			box.Val[end] = newExpr
-			return box
+			return newExpr
 		}
 		return box
 	}
@@ -1855,6 +1928,38 @@ func makeAllOps(j *jsonic.Jsonic, eopts *ExprOptions) []*Op {
 		ops = append(ops, op)
 	}
 	return ops
+}
+
+// Prattify exposes the core Pratt algorithm for unit testing, mirroring
+// the TS module's `testing.prattify` export. It embeds op into the
+// expression tree expr (a *jsonic.ListRef or a plain []interface{}
+// op-array, mutated in place) according to operator precedence, and
+// returns the sub-expression the new operator now heads — the attachment
+// point where the operator's next term belongs. See prattify for the
+// exact contract. Build operator values with Opify.
+func Prattify(expr interface{}, op *Op) *jsonic.ListRef {
+	return prattify(expr, op)
+}
+
+// Opify marks a value as an operator owned by this plugin, mirroring the
+// TS module's `testing.opify` export. In TS, opify stamps the private
+// OP_MARK onto a plain object so isOp recognises it; in Go that mark is
+// the *Op type itself, so Opify normalises the operator (filling the
+// derived Terms count when unset, as the parser's own operator builder
+// does) and returns it ready for use as the head of an expression
+// op-array (e.g. with Prattify).
+func Opify(op *Op) *Op {
+	if op.Terms == 0 {
+		switch {
+		case op.Ternary:
+			op.Terms = 3
+		case op.Infix:
+			op.Terms = 2
+		default:
+			op.Terms = 1
+		}
+	}
+	return op
 }
 
 // Evaluation recursively evaluates an expression tree.

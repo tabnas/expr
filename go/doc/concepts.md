@@ -66,7 +66,8 @@ op is looser, so it takes the whole thing as a left operand) or **drill**
 into the last operand (the new op is tighter, so it grabs only the right
 edge). Applied repeatedly, that single comparison yields the correct tree for
 any mix of precedences and associativities. The core lives in `prattify`
-(and `prattifySuffix`).
+(and `prattifySuffix`), exported for unit testing as `Prattify` (with
+`Opify` to build operator values), mirroring the TS `testing` export.
 
 ## The binding-power scale
 

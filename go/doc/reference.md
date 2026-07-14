@@ -68,6 +68,30 @@ you parsed with no `"evaluate"` option (to defer or repeat evaluation).
 nodes pass through unchanged. Folds bottom-up: operands are evaluated before
 the resolver is called for an operator.
 
+### `Prattify`
+
+```go
+func Prattify(expr interface{}, op *Op) *jsonic.ListRef
+```
+
+The core Pratt algorithm, exported for unit testing (mirrors the TS module's
+`testing.prattify`). Embeds `op` into the expression tree `expr` (mutated in
+place) according to binding power, returning the sub-expression the new
+operator now heads — the attachment point where the operator's next term
+belongs. Build operator values with `Opify`.
+
+### `Opify`
+
+```go
+func Opify(op *Op) *Op
+```
+
+Prepare a hand-built `*Op` for use as the head of an expression op-array
+(mirrors the TS module's `testing.opify`). In TS, `opify` stamps the private
+`OP_MARK` onto a plain object; in Go the `*Op` type itself is the mark, so
+`Opify` normalises the operator (filling the derived `Terms` count when
+unset) and returns it.
+
 ### `Expr`
 
 ```go
