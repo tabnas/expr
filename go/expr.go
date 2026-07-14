@@ -551,11 +551,12 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	modifyRule("list", func(rs *jsonic.RuleSpec) {
 		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			if r.Prev == nil || r.Prev == jsonic.NoRule || r.Prev.U["implist"] == nil {
-				r.N["expr"] = 0
-				r.N["expr_prefix"] = 0
-				r.N["expr_suffix"] = 0
-				r.N["expr_paren"] = 0
-				r.N["expr_ternary"] = 0
+				rn := r.EnsureN()
+				rn["expr"] = 0
+				rn["expr_prefix"] = 0
+				rn["expr_suffix"] = 0
+				rn["expr_paren"] = 0
+				rn["expr_ternary"] = 0
 			}
 		})
 		if hasParen {
@@ -583,11 +584,12 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// === MAP rule modifications ===
 	modifyRule("map", func(rs *jsonic.RuleSpec) {
 		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			r.N["expr"] = 0
-			r.N["expr_prefix"] = 0
-			r.N["expr_suffix"] = 0
-			r.N["expr_paren"] = 0
-			r.N["expr_ternary"] = 0
+			rn := r.EnsureN()
+			rn["expr"] = 0
+			rn["expr_prefix"] = 0
+			rn["expr_suffix"] = 0
+			rn["expr_paren"] = 0
+			rn["expr_ternary"] = 0
 		})
 		if hasParen {
 			rs.PrependClose(&jsonic.AltSpec{
@@ -1062,9 +1064,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 		parenSpec.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			// Allow implicits inside parens.
-			r.N["dmap"] = 0
-			r.N["dlist"] = 0
-			r.N["pk"] = 0
+			rn := r.EnsureN()
+			rn["dmap"] = 0
+			rn["dlist"] = 0
+			rn["pk"] = 0
 		})
 
 		parenSpec.AddOpen([]*jsonic.AltSpec{
@@ -1081,8 +1084,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
 					pop := parenOpenByTin[r.O0.Tin]
 					pd := "expr_paren_depth_" + pop.Name
-					r.U[pd] = 1
-					r.N[pd] = 1
+					r.EnsureU()[pd] = 1
+					r.EnsureN()[pd] = 1
 					r.Node = jsonic.Undefined
 				},
 			},
@@ -1100,8 +1103,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
 					pop := parenOpenByTin[r.O0.Tin]
 					pd := "expr_paren_depth_" + pop.Name
-					r.U[pd] = 1
-					r.N[pd] = 1
+					r.EnsureU()[pd] = 1
+					r.EnsureN()[pd] = 1
 					r.Node = jsonic.Undefined
 				},
 			},
@@ -1251,10 +1254,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				step, _ := r.U["ternary_step"].(int)
 				if step == 0 {
 					fillNextSlot(box, childNode)
-					r.U["ternary_step"] = 1
+					r.EnsureU()["ternary_step"] = 1
 				} else if step == 1 {
 					fillNextSlot(box, childNode)
-					r.U["ternary_step"] = 2
+					r.EnsureU()["ternary_step"] = 2
 				} else if step == 2 {
 					// Final slot filled when ternary ends
 					// (e.g., inside an existing elem/list).
