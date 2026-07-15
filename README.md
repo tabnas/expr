@@ -1,5 +1,12 @@
 # @tabnas/expr
 
+<!-- tabnas-badges -->
+[![npm](https://tabnas.github.io/status/badges/expr-npm.svg)](https://www.npmjs.com/package/@tabnas/expr)
+[![CI](https://github.com/tabnas/expr/actions/workflows/ci.yml/badge.svg)](https://github.com/tabnas/expr/actions/workflows/ci.yml)
+[![go](https://tabnas.github.io/status/badges/expr-go.svg)](https://pkg.go.dev/github.com/tabnas/expr/go)
+[![tabnas standard](https://tabnas.github.io/status/badges/expr-standard.svg)](https://tabnas.github.io/status/)
+<!-- /tabnas-badges -->
+
 An expression-syntax plugin for the [Tabnas](https://github.com/tabnas/jsonic)
 JSON parser, available in both TypeScript and Go.
 
