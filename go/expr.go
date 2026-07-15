@@ -17,7 +17,7 @@ import (
 )
 
 // Version is the Go module version of this plugin.
-const Version = "0.2.0"
+const Version = "0.2.1"
 
 // OpDef defines an operator for the expression parser.
 type OpDef struct {

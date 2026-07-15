@@ -1,6 +1,6 @@
 {
   "name": "@tabnas/expr",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "This plugin allows the [Tabnas](https://github.com/tabnas/jsonic) JSON parser to support expression syntax.",
   "main": "dist/expr.js",
   "type": "commonjs",
@@ -16,7 +16,8 @@
   "author": "Richard Rodger (http://richardrodger.com)",
   "repository": {
     "type": "git",
-    "url": "git://github.com/tabnas/expr.git"
+    "url": "git://github.com/tabnas/expr.git",
+    "directory": "ts"
   },
   "scripts": {
     "test": "node --enable-source-maps --test dist-test/**/*.test.js",
