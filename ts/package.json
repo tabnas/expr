@@ -1,6 +1,6 @@
 {
   "name": "@tabnas/expr",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "This plugin allows the [Tabnas](https://github.com/tabnas/jsonic) JSON parser to support expression syntax.",
   "main": "dist/expr.js",
   "type": "commonjs",
