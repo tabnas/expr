@@ -2036,6 +2036,19 @@ func Simplify(node interface{}) interface{} {
 			result[i] = Simplify(el)
 		}
 		return result
+	case *jsonic.OrderedMap:
+		if v == nil {
+			return nil
+		}
+		// Parse results now come back as insertion-ordered *OrderedMap
+		// objects. Simplify each value and preserve key order; the map is
+		// re-keyed into a plain map[string]interface{} so downstream JSON
+		// normalization and value comparisons work unchanged.
+		result := make(map[string]interface{}, len(v.Keys))
+		for _, k := range v.Keys {
+			result[k] = Simplify(v.Vals[k])
+		}
+		return result
 	case map[string]interface{}:
 		result := make(map[string]interface{})
 		for k, val := range v {
