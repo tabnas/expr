@@ -740,12 +740,12 @@ func TestEvaluateNestedInfix(t *testing.T) {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	m, ok := result.(map[string]interface{})
+	m, ok := result.(*jsonic.OrderedMap)
 	if !ok {
-		t.Fatalf("result type = %T, want map", result)
+		t.Fatalf("result type = %T, want *jsonic.OrderedMap", result)
 	}
 
-	got := m["x"]
+	got, _ := m.Get("x")
 	if got != "a.b.c" {
 		t.Errorf("x = %v, want %q", got, "a.b.c")
 		t.Logf("evaluate calls: %v", calls)
@@ -754,9 +754,9 @@ func TestEvaluateNestedInfix(t *testing.T) {
 	// Also test simple single infix
 	calls = nil
 	result, _ = j.Parse("p:a.b")
-	m = result.(map[string]interface{})
-	if m["p"] != "a.b" {
-		t.Errorf("p = %v, want %q", m["p"], "a.b")
+	m = result.(*jsonic.OrderedMap)
+	if p, _ := m.Get("p"); p != "a.b" {
+		t.Errorf("p = %v, want %q", p, "a.b")
 	}
 }
 
