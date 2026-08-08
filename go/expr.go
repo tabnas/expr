@@ -16,8 +16,10 @@ import (
 	jsonic "github.com/tabnas/jsonic/go"
 )
 
-// Version is the Go module version of this plugin.
-const Version = "0.4.2"
+// VERSION is this module's version. It MUST equal ts/package.json
+// "version": the release orchestrator rewrites both, and
+// TestVersionMatchesPackageJSON fails the build if they drift.
+const VERSION = "0.4.2"
 
 // OpDef defines an operator for the expression parser.
 type OpDef struct {

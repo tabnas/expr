@@ -220,10 +220,16 @@ go test -v ./...       # unit tests + shared .tsv fixtures
 
 The repo root [`Makefile`](Makefile) wraps both: `make build|test` run
 the TS and Go halves, and `make publish-go V=x.y.z` injects `V` into the
-`const Version` in `go/expr.go` and tags `go/vX.Y.Z`. Both runtimes
+`const VERSION` in `go/expr.go` and tags `go/vX.Y.Z`. Both runtimes
 resolve their `@tabnas` deps from the published registries (npm / Go
 module proxy), so a plain `npm i` (TS) and `go build` (Go) work without
 any sibling checkout.
+
+Both runtimes bake in the package version: `const VERSION` in
+`go/expr.go` and the exported `VERSION` in `ts/src/expr.ts`. Both MUST
+equal `ts/package.json` `"version"`; `go/version_test.go` and
+`ts/test/version.test.ts` fail the build if either drifts. Never bump
+one by hand — the release orchestrator rewrites all three together.
 
 ## CI
 
