@@ -101,13 +101,14 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error
 The plugin itself. Apply with `j.Use(Expr, opts)`. `MakeJsonic` does this
 for you.
 
-### `Version`
+### `VERSION`
 
 ```go
-const Version = "0.1.3"
+const VERSION = "0.4.2"
 ```
 
-The Go module version of the plugin.
+The plugin's version. It always equals the `version` in `ts/package.json`
+— `TestVersionMatchesPackageJSON` fails the build if the two drift.
 
 ## Options map
 

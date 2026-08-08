@@ -1470,6 +1470,11 @@ const testing = {
   opify: (x: any) => ((x.OP_MARK = OP_MARK), x),
 }
 
-export { Expr, evaluation, testing }
+export { VERSION, Expr, evaluation, testing }
 
 export type { ExprOptions, OpDef, Op, Evaluate }
+
+// VERSION is this package's version. It MUST equal package.json "version":
+// the release orchestrator rewrites both, and the version test fails the
+// build if they drift. Mirrors `const VERSION` in go/expr.go.
+const VERSION = '0.4.2'
