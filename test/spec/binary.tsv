@@ -1,5 +1,5 @@
+input	expected
 # Binary infix operator tests - default Expr config
-# input	expected_output
 1+2	["+",1,2]
 1*2	["*",1,2]
 1*2+3	["+",["*",1,2],3]

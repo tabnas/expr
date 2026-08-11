@@ -1,8 +1,8 @@
+input	expected
 # Evaluate callback: math expression grammar
 # Tests that the evaluate callback fires correctly for nested
 # and chained expressions, including left-associative chains,
 # parenthesized grouping, and mixed precedence.
-# input	expected_output
 # Simple literals
 x:1	{"x":1}
 x:42	{"x":42}

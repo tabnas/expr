@@ -1,5 +1,5 @@
+input	expected
 # Mixed-op expressions in structures - default Expr config
-# input	expected_output
 a:1-2	{"a":["-",1,2]}
 a:1*2-3	{"a":["-",["*",1,2],3]}
 a:10/2	{"a":["/",10,2]}

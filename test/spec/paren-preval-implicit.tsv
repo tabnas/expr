@@ -1,5 +1,5 @@
+input	expected
 # paren-preval-implicit
-# input	expected_output
 foo,(1,a)	["foo",["(",[1,"a"]]]
 foo,(1+2,a)	["foo",["(",[["+",1,2],"a"]]]
 foo,(1+2+3,a)	["foo",["(",[["+",["+",1,2],3],"a"]]]

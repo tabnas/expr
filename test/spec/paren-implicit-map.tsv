@@ -1,5 +1,5 @@
+input	expected
 # paren-implicit-map
-# input	expected_output
 (a:1,b:2)	["(",{"a":1,"b":2}]
 (a:1 b:2)	["(",{"a":1,"b":2}]
 (a:1,b:2,c:3)	["(",{"a":1,"b":2,"c":3}]

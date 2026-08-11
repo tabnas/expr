@@ -1,5 +1,5 @@
+input	expected
 # paren-implicit-list
-# input	expected_output
 (a)	["(","a"]
 (a,b)	["(",["a","b"]]
 (a,b,c)	["(",["a","b","c"]]

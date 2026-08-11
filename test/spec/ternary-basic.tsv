@@ -1,7 +1,7 @@
+input	expected
 # Ternary operator tests - config: ternary + factorial
 # Operators: ternary {src: ['?', ':']}, factorial {suffix, src: '!', left: 15000}
 # Mirrors ternary.test.ts ternary-basic. Ternary is right-associative.
-# input	expected_output
 1?2:3	["?",1,2,3]
 1?2: 3?4:5	["?",1,2,["?",3,4,5]]
 1?4:5 ?2:3	["?",1,4,["?",5,2,3]]

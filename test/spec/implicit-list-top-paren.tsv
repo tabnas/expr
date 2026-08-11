@@ -1,5 +1,5 @@
+input	expected
 # implicit-list-top-paren
-# input	expected_output
 (1,2)	["(",[1,2]]
 (1+2,3)	["(",[["+",1,2],3]]
 (1+2+3,4)	["(",[["+",["+",1,2],3],4]]

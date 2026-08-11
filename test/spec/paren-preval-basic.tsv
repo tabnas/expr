@@ -1,5 +1,5 @@
+input	expected
 # paren-preval-basic
-# input	expected_output
 B<C>	["<","B","C"]
 a:b<c>	{"a":["<","b","c"]}
 a:b<c,d>	{"a":["<","b",["c","d"]]}

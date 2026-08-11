@@ -1,5 +1,5 @@
+input	expected
 # Combined suffix and prefix - config:suffix
-# input	expected_output
 -1!	["-",["!",1]]
 --1!	["-",["-",["!",1]]]
 -1!!	["-",["!",["!",1]]]

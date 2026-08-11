@@ -6,21 +6,29 @@ with that in mind.
 
 ## Format
 
-Tab-separated, one case per line. Blank lines and lines whose first
-non-space character is `#` are skipped; each file opens with a title line and
-a column legend:
+Tab-separated, one case per line, read by the shared
+[`@tabnas/support`](https://github.com/tabnas/support) loader — one
+loader, in two languages written to behave identically. **Line 1 is the
+header**, and a `#`-leading line with no tab is a comment:
 
+    input	expected
     # <what this file covers>
-    # input	expected_output
     1+2	["+",1,2]
 
-Both loaders trim the whole line, then split at the **first** tab.
-`expected_output` is parsed as JSON — it is the value the expression
-evaluates to, with operator trees written as `[op, ...operands]`.
+That header line is new. These fixtures used to open with a title comment
+and a `#`-prefixed column legend (`# input	expected_output`), which the
+shared loader would have read as a data row, since a `#` line WITH a tab
+is data — the rule that lets a fixture's input be a comment in the parsed
+language. Every file was re-headed: the legend line is gone, the title
+comment stays, no data row moved.
 
-**The `input` column is used verbatim** and is line-trimmed: no escape
-sequence is decoded, and leading or trailing whitespace cannot be tested
-here. A case needing either belongs in an in-language test.
+`expected` is parsed as JSON — the value the expression evaluates to, with
+operator trees written as `[op, ...operands]`.
+
+Escapes (`\n`, `\r`, `\t`, `\\`) are decoded in the `input` column. No
+fixture uses one, but a case needing a real control character can now be
+written; it could not before. Lines are no longer trimmed, so leading and
+trailing whitespace in a cell is significant — no fixture has any.
 
 Files are named after the feature they pin (`ternary-*`, `paren-*`,
 `unary-*`, …); the plugin configuration a file assumes belongs to the runner
@@ -28,11 +36,19 @@ that names it.
 
 ## Who runs what
 
-- TypeScript: `ts/test/*.test.ts` via `loadSpec` in `ts/test/spec-util.ts`.
-- Go: `go/*_test.go` via `loadSpec` in `go/expr_test.go`.
+- TypeScript: `ts/test/spec.test.ts` — `runSpec(name, j)`, a
+  `makeRunner(...)` over the file.
+- Go: `go/expr_test.go` — `runSpec(t, name, j)`, a `support.Runner{...}`
+  over the file.
 
-Both name the same files. A fixture only one runtime runs proves nothing, so
-wire a new file into both.
+A fixture is named by the test that supplies its parser, because what
+varies per case is the CONFIGURED PARSER — several files need operators
+defined in the plugin's options, which cannot live in a fixture column. So
+a new file has to be wired into both runtimes by hand. A fixture only one
+runtime runs proves nothing.
+
+Each ROW is now its own test case rather than one assertion inside a
+per-file test, so a failure names the file and line it came from.
 
 ## Rules
 
