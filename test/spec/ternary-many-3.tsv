@@ -1,6 +1,6 @@
+input	expected
 # Multiple ternary operators - 3 ternaries config
 # foo {src: ['?', ':']}, bar {src: ['QQ', 'CC']}, zed {src: ['%%', '@@']}
-# input	expected_output
 a:1	{"a":1}
 1?2:3	["?",1,2,3]
 1QQ2CC3	["QQ",1,2,3]

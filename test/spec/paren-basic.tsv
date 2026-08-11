@@ -1,5 +1,5 @@
+input	expected
 # Parenthesis tests - default Expr config
-# input	expected_output
 100+200	["+",100,200]
 (100)	["(",100]
 (100)+200	["+",["(",100],200]

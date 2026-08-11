@@ -1,5 +1,5 @@
+input	expected
 # Suffix operators inside parens - config:suffix
-# input	expected_output
 (0!+1!+2!)	["(",["+",["+",["!",0],["!",1]],["!",2]]]
 (0!+1!+2)	["(",["+",["+",["!",0],["!",1]],2]]
 (0!+1+2!)	["(",["+",["+",["!",0],1],["!",2]]]

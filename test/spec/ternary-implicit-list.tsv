@@ -1,7 +1,7 @@
+input	expected
 # Ternary with implicit lists - config: ternary + factorial
 # Operators: ternary {src: ['?', ':']}, factorial {suffix, src: '!', left: 15000}
 # Top-level implicit lists with ternary, plus inside parens.
-# input	expected_output
 # Top-level: space-separated
 a 1?2:3	["a",["?",1,2,3]]
 1?2:3 b	[["?",1,2,3],"b"]

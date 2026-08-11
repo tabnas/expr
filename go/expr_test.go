@@ -3,65 +3,41 @@
 package tabnasexpr
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
 	jsonic "github.com/tabnas/jsonic/go"
+	support "github.com/tabnas/support/go"
 )
 
-// specEntry holds one line from a TSV spec file.
-type specEntry struct {
-	input    string
-	expected interface{}
-}
+// The fixtures live at the repo root in `test/spec/*.tsv` and are read by
+// github.com/tabnas/support/go, whose TypeScript half ts/test/spec.test.ts
+// uses to run the SAME files — so the two implementations cannot drift
+// without one going red, and neither can the two loaders.
+//
+// What varies per case is the CONFIGURED PARSER, which cannot live in an
+// opts column: several fixtures need operators defined in the plugin's
+// options. So each test builds its own and hands it here, and each ROW
+// becomes its own subtest.
 
-// loadSpec reads a TSV spec file and returns parsed entries.
-func loadSpec(t *testing.T, name string) []specEntry {
+func runSpec(t *testing.T, specName string, j *jsonic.Jsonic) {
 	t.Helper()
 
-	// Find spec dir relative to this test file.
-	_, filename, _, _ := runtime.Caller(0)
-	specDir := filepath.Join(filepath.Dir(filename), "..", "test", "spec")
-	specPath := filepath.Join(specDir, name)
-
-	f, err := os.Open(specPath)
+	dir, err := support.FindSpecDir("")
 	if err != nil {
-		t.Fatalf("failed to open spec file %s: %v", specPath, err)
+		t.Fatal(err)
 	}
-	defer f.Close()
 
-	var entries []specEntry
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		var expected interface{}
-		if err := json.Unmarshal([]byte(parts[1]), &expected); err != nil {
-			t.Fatalf("failed to parse expected JSON in %s: %q: %v", name, parts[1], err)
-		}
-		entries = append(entries, specEntry{input: parts[0], expected: expected})
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("error reading spec file %s: %v", name, err)
-	}
-	return entries
+	support.Runner{
+		Parse:     j.Parse,
+		Normalize: simplifyAndNormalize,
+	}.File(t, filepath.Join(dir, specName))
 }
 
-// simplifyAndNormalize converts the parse result to simplified form
-// and normalizes it to match JSON-parsed expected values.
 func simplifyAndNormalize(node interface{}) interface{} {
 	simplified := Simplify(node)
 	// Round-trip through JSON to normalize types (float64 for numbers, etc.)
@@ -74,26 +50,6 @@ func simplifyAndNormalize(node interface{}) interface{} {
 		return simplified
 	}
 	return normalized
-}
-
-// runSpec runs all entries from a TSV spec file against a jsonic instance.
-func runSpec(t *testing.T, specName string, j *jsonic.Jsonic) {
-	t.Helper()
-	entries := loadSpec(t, specName)
-	for _, e := range entries {
-		t.Run(e.input, func(t *testing.T) {
-			result, err := j.Parse(e.input)
-			if err != nil {
-				t.Fatalf("parse error for %q: %v", e.input, err)
-			}
-			got := simplifyAndNormalize(result)
-			if !reflect.DeepEqual(got, e.expected) {
-				gotJSON, _ := json.Marshal(got)
-				expJSON, _ := json.Marshal(e.expected)
-				t.Errorf("input: %q\n  got:  %s\n  want: %s", e.input, gotJSON, expJSON)
-			}
-		})
-	}
 }
 
 func makeExprJsonic(opOpts ...map[string]interface{}) *jsonic.Jsonic {

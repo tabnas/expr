@@ -1,5 +1,5 @@
+input	expected
 # Unary suffix operator tests - config:suffix
-# input	expected_output
 1!	["!",1]
 1 !	["!",1]
 1!!	["!",["!",1]]

@@ -1,5 +1,5 @@
+input	expected
 # paren-preval-overload
-# input	expected_output
 [1]	[1]
 a[1]	["[","a",1]
 [a[1]]	[["[","a",1]]

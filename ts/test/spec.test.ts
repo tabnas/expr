@@ -1,15 +1,16 @@
 /* Copyright (c) 2021-2025 Richard Rodger and other contributors, MIT License */
 
 import { describe, test, beforeEach } from 'node:test'
+import Path from 'node:path'
 
 import { Tabnas, util } from '@tabnas/parser'
 import { jsonic } from '@tabnas/jsonic'
 
+import { findSpecDir, makeRunner } from '@tabnas/support'
+
 import {
   Expr,
 } from '..'
-
-import { loadSpec, expect } from './spec-util'
 
 
 const { omap } = util
@@ -30,14 +31,22 @@ const S = (x: any, seen?: WeakSet<any>): any => (
 const mj =
   (je: Tabnas) => (s: string, m?: any) => C(S(je.parse(s, m)))
 
-const _mo_ = 'equal'
 
+// The fixtures live at the repo root in `test/spec/*.tsv` and are read by
+// @tabnas/support, whose Go half `go/expr_test.go` uses to run the SAME
+// files — so the two implementations cannot drift without one going red,
+// and neither can the two loaders.
+//
+// What varies per case is the CONFIGURED PARSER, which cannot live in an
+// `opts` column: several fixtures need operators defined in the plugin's
+// options. So each test builds its own and hands it here, and each ROW
+// becomes its own test case rather than one assertion inside a per-file
+// test.
+const SPEC = findSpecDir(__dirname)
 
 function runSpec(specName: string, j: (s: string) => any) {
-  const entries = loadSpec(specName)
-  for (const entry of entries) {
-    expect(j(entry.input))[_mo_](entry.expected)
-  }
+  makeRunner({ parse: (input) => j(input) })
+    .file(Path.join(SPEC, specName))
 }
 
 

@@ -1,5 +1,5 @@
+input	expected
 # paren-map-implicit-structure-comma
-# input	expected_output
 {a:(1)}	{"a":["(",1]}
 {a:(1,2)}	{"a":["(",[1,2]]}
 {a:(1,2,3)}	{"a":["(",[1,2,3]]}

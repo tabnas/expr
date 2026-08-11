@@ -1,5 +1,5 @@
+input	expected
 # Unary prefix edge cases - config:prefix-tight
-# input	expected_output
 @1	["@",1]
 @@1	["@",["@",1]]
 @@@1	["@",["@",["@",1]]]

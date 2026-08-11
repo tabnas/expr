@@ -1,5 +1,5 @@
+input	expected
 # map-implicit-list-paren
-# input	expected_output
 a:(1,2),b:0	{"a":["(",[1,2]],"b":0}
 a:(1+2,3),b:0	{"a":["(",[["+",1,2],3]],"b":0}
 a:(1+2+3,4),b:0	{"a":["(",[["+",["+",1,2],3],4]],"b":0}

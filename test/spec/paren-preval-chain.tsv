@@ -1,8 +1,8 @@
+input	expected
 # Chain-required preval parens - index/call style
 # Operators: index {paren: true, osrc: '[', csrc: ']', preval: {required: true}}
 #            call  {paren: true, osrc: '(', csrc: ')', preval: {active: true}}
 #            plain: null (disabled so '(' only matches call)
-# input	expected_output
 # Same-paren chain
 a[0]	["[","a",0]
 a[0][1]	["[",["[","a",0],1]
