@@ -1,0 +1,13 @@
+{
+  "$schema": "https://tabnas.dev/schema/plugin.schema.json",
+  "name": "@tabnas/expr",
+  "go": "github.com/tabnas/expr/go",
+  "description": "Expression syntax with operators and precedence for the tabnas engine.",
+  "base": "@tabnas/jsonic",
+  "engine": "@tabnas/parser",
+  "specDir": "test/spec",
+  "errorCodes": [],
+  "docs": "https://tabnas.dev/docs/packages",
+  "repository": "https://github.com/tabnas/expr",
+  "versionSource": "ts/package.json"
+}
