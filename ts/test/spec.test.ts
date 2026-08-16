@@ -57,55 +57,55 @@ describe('spec', () => {
   })
 
 
-  test('happy', () => {
+  describe('happy', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('happy.tsv', j)
   })
 
 
-  test('binary', () => {
+  describe('binary', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('binary.tsv', j)
   })
 
 
-  test('arithmetic-mixed', () => {
+  describe('arithmetic-mixed', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('arithmetic-mixed.tsv', j)
   })
 
 
-  test('prefix-infix-mixed', () => {
+  describe('prefix-infix-mixed', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('prefix-infix-mixed.tsv', j)
   })
 
 
-  test('paren-deep-nest', () => {
+  describe('paren-deep-nest', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('paren-deep-nest.tsv', j)
   })
 
 
-  test('structure-arith', () => {
+  describe('structure-arith', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('structure-arith.tsv', j)
   })
 
 
-  test('structure', () => {
+  describe('structure', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('structure.tsv', j)
   })
 
 
-  test('unary-prefix-basic', () => {
+  describe('unary-prefix-basic', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('unary-prefix-basic.tsv', j)
   })
 
 
-  test('unary-prefix-edge', () => {
+  describe('unary-prefix-edge', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         at: { prefix: true, right: 5000000, src: '@' },
@@ -117,7 +117,7 @@ describe('spec', () => {
   })
 
 
-  test('unary-suffix-basic', () => {
+  describe('unary-suffix-basic', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, left: 6000000, src: '!' },
@@ -129,7 +129,7 @@ describe('spec', () => {
   })
 
 
-  test('unary-suffix-arith', () => {
+  describe('unary-suffix-arith', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, left: 6000000, src: '!' },
@@ -141,7 +141,7 @@ describe('spec', () => {
   })
 
 
-  test('unary-suffix-edge', () => {
+  describe('unary-suffix-edge', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, left: 6000000, src: '!' },
@@ -154,7 +154,7 @@ describe('spec', () => {
   })
 
 
-  test('unary-suffix-structure', () => {
+  describe('unary-suffix-structure', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, left: 6000000, src: '!' },
@@ -166,7 +166,7 @@ describe('spec', () => {
   })
 
 
-  test('unary-suffix-prefix', () => {
+  describe('unary-suffix-prefix', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, left: 6000000, src: '!' },
@@ -178,7 +178,7 @@ describe('spec', () => {
   })
 
 
-  test('unary-suffix-paren', () => {
+  describe('unary-suffix-paren', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, left: 6000000, src: '!' },
@@ -190,19 +190,19 @@ describe('spec', () => {
   })
 
 
-  test('paren-basic', () => {
+  describe('paren-basic', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('paren-basic.tsv', j)
   })
 
 
-  test('implicit-list-top-basic', () => {
+  describe('implicit-list-top-basic', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('implicit-list-top-basic.tsv', j)
   })
 
 
-  test('ternary-basic', () => {
+  describe('ternary-basic', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, src: '!', left: 6000000 },
@@ -214,7 +214,7 @@ describe('spec', () => {
   })
 
 
-  test('ternary-implicit-list', () => {
+  describe('ternary-implicit-list', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, src: '!', left: 6000000 },
@@ -226,7 +226,7 @@ describe('spec', () => {
   })
 
 
-  test('ternary-paren-preval', () => {
+  describe('ternary-paren-preval', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         ternary: { ternary: true, src: ['?', ':'] },
@@ -238,7 +238,7 @@ describe('spec', () => {
   })
 
 
-  test('ternary-many-2', () => {
+  describe('ternary-many-2', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         foo: { ternary: true, src: ['?', ':'] },
@@ -250,7 +250,7 @@ describe('spec', () => {
   })
 
 
-  test('ternary-many-3', () => {
+  describe('ternary-many-3', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         foo: { ternary: true, src: ['?', ':'] },
@@ -263,7 +263,7 @@ describe('spec', () => {
   })
 
 
-  test('paren-preval-chain', () => {
+  describe('paren-preval-chain', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         index: { paren: true, osrc: '[', csrc: ']', preval: { required: true } },
@@ -276,67 +276,67 @@ describe('spec', () => {
   })
 
 
-  test('json-base', () => {
+  describe('json-base', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('json-base.tsv', j)
   })
 
 
-  test('implicit-list-top-paren', () => {
+  describe('implicit-list-top-paren', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('implicit-list-top-paren.tsv', j)
   })
 
 
-  test('paren-implicit-list', () => {
+  describe('paren-implicit-list', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('paren-implicit-list.tsv', j)
   })
 
 
-  test('paren-implicit-map', () => {
+  describe('paren-implicit-map', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('paren-implicit-map.tsv', j)
   })
 
 
-  test('map-implicit-list-paren', () => {
+  describe('map-implicit-list-paren', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('map-implicit-list-paren.tsv', j)
   })
 
 
-  test('paren-map-implicit-structure-comma', () => {
+  describe('paren-map-implicit-structure-comma', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('paren-map-implicit-structure-comma.tsv', j)
   })
 
 
-  test('paren-map-implicit-structure-space', () => {
+  describe('paren-map-implicit-structure-space', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('paren-map-implicit-structure-space.tsv', j)
   })
 
 
-  test('paren-list-implicit-structure-comma', () => {
+  describe('paren-list-implicit-structure-comma', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('paren-list-implicit-structure-comma.tsv', j)
   })
 
 
-  test('paren-list-implicit-structure-space', () => {
+  describe('paren-list-implicit-structure-space', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('paren-list-implicit-structure-space.tsv', j)
   })
 
 
-  test('jsonic-base', () => {
+  describe('jsonic-base', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('jsonic-base.tsv', j)
   })
 
 
-  test('add-infix', () => {
+  describe('add-infix', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         foo: { infix: true, left: 3500000, right: 3600000, src: 'foo' },
@@ -347,7 +347,7 @@ describe('spec', () => {
   })
 
 
-  test('add-paren', () => {
+  describe('add-paren', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         angle: { paren: true, osrc: '<', csrc: '>' },
@@ -358,7 +358,7 @@ describe('spec', () => {
   })
 
 
-  test('paren-preval-basic', () => {
+  describe('paren-preval-basic', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         angle: { osrc: '<', csrc: '>', paren: true, preval: { active: true } },
@@ -369,7 +369,7 @@ describe('spec', () => {
   })
 
 
-  test('paren-preval-overload', () => {
+  describe('paren-preval-overload', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         factorial: { suffix: true, left: 6000000, src: '!' },
@@ -382,7 +382,7 @@ describe('spec', () => {
   })
 
 
-  test('paren-preval-implicit', () => {
+  describe('paren-preval-implicit', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
         plain: { preval: true },
@@ -393,13 +393,13 @@ describe('spec', () => {
   })
 
 
-  test('infix-in-paren-map', () => {
+  describe('infix-in-paren-map', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('infix-in-paren-map.tsv', j)
   })
 
 
-  test('evaluate-math', () => {
+  describe('evaluate-math', () => {
     // Math expression grammar with evaluate callback.
     // Tests the full pipeline: parse → S-expression → evaluate → result.
     // This catches bugs where nested/chained expressions produce
