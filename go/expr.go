@@ -1985,11 +1985,22 @@ func evaluation(
 	}
 	op, isOpV := expr[0].(*Op)
 	if !isOpV {
-		result := make([]interface{}, len(expr))
+		// An implicit list — `f(1+1, 2)`, `1+1, 2+2`.
+		//
+		// In place, rather than into a fresh slice: this runs as each
+		// member's expr rule closes, while the list is still being
+		// collected, and the rules that append the members still to come
+		// hold a reference to this exact slice. Evaluating into a new one
+		// strands them on a slice nobody reads any more, so every member
+		// but the last reaches the caller unevaluated. `expr` shares its
+		// backing array with `node`, so the members are updated for every
+		// holder. Evaluating a member twice is harmless — an
+		// already-evaluated member is no longer an op-array, so it is
+		// returned untouched.
 		for i, el := range expr {
-			result[i] = evaluation(rule, ctx, el, resolve)
+			expr[i] = evaluation(rule, ctx, el, resolve)
 		}
-		return result
+		return expr
 	}
 	terms := make([]interface{}, 0, len(expr)-1)
 	for _, sub := range expr[1:] {
