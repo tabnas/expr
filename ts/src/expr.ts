@@ -1083,6 +1083,7 @@ function makeCloseParen(parenCTM: OpMap) {
 
 function implicitList(rule: Rule, ctx: Context, a: any) {
   let paren: Rule | null = null
+  let parenI = -1
 
   // Find the paren rule that contains this implicit list.
   // If a map or list rule sits between the expression and the paren,
@@ -1091,6 +1092,7 @@ function implicitList(rule: Rule, ctx: Context, a: any) {
   for (let rI = ctx.rsI - 1; -1 < rI; rI--) {
     if ('paren' === ctx.rs[rI].name) {
       paren = ctx.rs[rI]
+      parenI = rI
       break
     }
     if ('map' === ctx.rs[rI].name || 'list' === ctx.rs[rI].name) {
@@ -1114,6 +1116,18 @@ function implicitList(rule: Rule, ctx: Context, a: any) {
     }
 
     rule.node = paren.child.node
+
+    // The rule that sees the comma is not always the paren's own child.
+    // A first argument that nests operators — a prefix whose operand is
+    // itself a prefix, `f(- -1, 2)` — leaves further expr rules on the
+    // stack between the paren and this rule. Each of those still holds
+    // its own node, and on close writes that node back over the paren's,
+    // discarding every element collected after the first: `f(- -1, 2)`
+    // arrived as one argument, not two. Point them at the implicit list
+    // so the close-back is a no-op instead of a truncation.
+    for (let rI = parenI + 1; rI < ctx.rsI; rI++) {
+      ctx.rs[rI].node = paren.child.node
+    }
   }
 
   return a
@@ -1442,6 +1456,24 @@ function evaluation(rule: Rule, ctx: Context, expr: any, evaluate: Evaluate) {
       expr[0],
       expr.slice(1).map((term: any) => evaluation(rule, ctx, term, evaluate)),
     )
+  }
+
+  // An implicit list — `f(1+1, 2)`, `1+1, 2+2` — is a plain array rather
+  // than an op-array, so the recursion above stepped straight over it and
+  // its members reached the caller as raw op-arrays that `evaluate` was
+  // never called on. Descend into the members as well.
+  //
+  // In place, and returning the same array: this runs as each member's
+  // expr rule closes, while the list is still being collected, and the
+  // paren rule and the intermediate expr rules all hold a reference to
+  // this exact array. Handing back a rebuilt one strands the members
+  // still to come on the array nobody reads any more. Evaluating a member
+  // twice is harmless — an already-evaluated member is no longer an
+  // op-array, so it is returned untouched.
+  else if (Array.isArray(expr)) {
+    for (let termI = 0; termI < expr.length; termI++) {
+      expr[termI] = evaluation(rule, ctx, expr[termI], evaluate)
+    }
   }
 
   // console.log('EXPR-EVAL', expr, '->', out)
