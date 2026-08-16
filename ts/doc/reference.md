@@ -199,8 +199,13 @@ function evaluation(rule: Rule, ctx: Context, node: any, evaluate: Evaluate): an
 
 Reduce a parsed S-expression tree to a value, outside of parsing. Use it
 when you parsed with no `evaluate` option (to defer or repeat evaluation).
-`rule`/`ctx` may be `null` if your callback ignores them. Non-expression
-nodes (plain values, plain arrays/maps) pass through unchanged.
+`rule`/`ctx` may be `null` if your callback ignores them. Plain values and
+maps pass through unchanged; a plain array — an implicit list, such as the
+parse of `1+2, 3+4` — is reduced element-wise into a new array.
+
+The tree passed in is never modified, so the same tree can be reduced
+again with different semantics, and `evaluate` is called exactly once per
+operator per reduction.
 
 ```js
 const { Tabnas } = require('@tabnas/parser')

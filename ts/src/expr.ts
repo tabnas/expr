@@ -745,6 +745,34 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         //   'P', r.parent.name, r.parent.i, r.parent.n, p(r.parent.node))
 
         if (options.evaluate && 0 === r.n.expr) {
+          const parentNode: any = r.parent.node
+
+          // The parent holds an implicit list (`f(1+2, 3)`, `1+2, 3`)
+          // rather than this expression's own op-array. A list is a plain
+          // array, not an op-array, so its members used to reach the
+          // caller as raw op-arrays that `evaluate` was never called on.
+          //
+          // Reduce them in place, keeping the array: the list is still
+          // being collected, and the paren rule and the expr rules
+          // between it and here all hold a reference to this exact array,
+          // so replacing it would strand the members still to come. A
+          // member already reduced is returned untouched rather than
+          // reduced again.
+          if (Array.isArray(parentNode) && !isOp(parentNode)) {
+            for (let termI = 0; termI < parentNode.length; termI++) {
+              parentNode[termI] = evaluation(
+                r.parent,
+                ctx,
+                parentNode[termI],
+                options.evaluate,
+              )
+            }
+
+            r.node = parentNode
+
+            return
+          }
+
           // The parent node will contain the root of the expr tree.
           let out = evaluation(
             r.parent,
@@ -1101,6 +1129,10 @@ function implicitList(rule: Rule, ctx: Context, a: any) {
   }
 
   if (paren) {
+    // The node this expression contributes, captured before the
+    // reassignment below replaces it with the list.
+    const exprNode = rule.node
+
     // Create a list value for the paren rule.
     if (null == paren.child.node) {
       paren.child.node = [rule.node]
@@ -1119,14 +1151,27 @@ function implicitList(rule: Rule, ctx: Context, a: any) {
 
     // The rule that sees the comma is not always the paren's own child.
     // A first argument that nests operators — a prefix whose operand is
-    // itself a prefix, `f(- -1, 2)` — leaves further expr rules on the
-    // stack between the paren and this rule. Each of those still holds
-    // its own node, and on close writes that node back over the paren's,
+    // itself a prefix, `f(- -1, 2)` — leaves further rules on the stack
+    // between the paren and this rule, all holding the same expression
+    // node. Each writes that node back over the paren's when it closes,
     // discarding every element collected after the first: `f(- -1, 2)`
     // arrived as one argument, not two. Point them at the implicit list
     // so the close-back is a no-op instead of a truncation.
+    //
+    // Only the frames that carry this expression: the `expr` rules
+    // themselves, and the `val` rules they were pushed from, which hold
+    // either nothing yet or the expression node. A rule a host plugin
+    // stacked in between has a node of its own to close with, and
+    // overwriting it would destroy a value this plugin knows nothing
+    // about.
     for (let rI = parenI + 1; rI < ctx.rsI; rI++) {
-      ctx.rs[rI].node = paren.child.node
+      const frame = ctx.rs[rI]
+
+      if ('expr' === frame.name ||
+        ('val' === frame.name &&
+          (null == frame.node || exprNode === frame.node || isOp(frame.node)))) {
+        frame.node = paren.child.node
+      }
     }
   }
 
@@ -1446,10 +1491,25 @@ function prattify(expr: any, op?: Op, whence?: string): any[] {
 }
 
 
+// Values `evaluate` has already produced. An implicit list is reduced a
+// member at a time as the members close, and again as a whole once the
+// list is complete, so without this a member's reduced value would be
+// handed back to `evaluate` a second time — and a callback that returns
+// another marked S-expression (an identity evaluator, a symbolic
+// rewriter) would transform it twice, making the result depend on the
+// member's position in the list. Weak, so an entry lasts only as long as
+// the value itself.
+const EVALUATED = new WeakSet<any>()
+
+
 function evaluation(rule: Rule, ctx: Context, expr: any, evaluate: Evaluate) {
   let out = expr ?? null
 
-  if (null != expr && isOp(expr)) {
+  if (null == expr || EVALUATED.has(expr)) {
+    return out
+  }
+
+  if (isOp(expr)) {
     out = evaluate(
       rule,
       ctx,
@@ -1458,22 +1518,20 @@ function evaluation(rule: Rule, ctx: Context, expr: any, evaluate: Evaluate) {
     )
   }
 
-  // An implicit list — `f(1+1, 2)`, `1+1, 2+2` — is a plain array rather
-  // than an op-array, so the recursion above stepped straight over it and
-  // its members reached the caller as raw op-arrays that `evaluate` was
-  // never called on. Descend into the members as well.
-  //
-  // In place, and returning the same array: this runs as each member's
-  // expr rule closes, while the list is still being collected, and the
-  // paren rule and the intermediate expr rules all hold a reference to
-  // this exact array. Handing back a rebuilt one strands the members
-  // still to come on the array nobody reads any more. Evaluating a member
-  // twice is harmless — an already-evaluated member is no longer an
-  // op-array, so it is returned untouched.
+  // An implicit list — `f(1+2, 3+4)`, `1+2, 3+4` — is a plain array, not
+  // an op-array, so the branch above does not reach its members. Reduce
+  // them, into a NEW array: this is a documented public entry point
+  // (`ts/doc/reference.md`) and the parse-once/evaluate-many workflow in
+  // `ts/doc/guide.md` needs a caller's tree to survive a reduction
+  // intact. Where the list under construction must be updated in place,
+  // the expr rule's close hook does that itself — mutating its own tree
+  // is the parser's business, not this function's.
   else if (Array.isArray(expr)) {
-    for (let termI = 0; termI < expr.length; termI++) {
-      expr[termI] = evaluation(rule, ctx, expr[termI], evaluate)
-    }
+    out = expr.map((term: any) => evaluation(rule, ctx, term, evaluate))
+  }
+
+  if (null != out && 'object' === typeof out) {
+    EVALUATED.add(out)
   }
 
   // console.log('EXPR-EVAL', expr, '->', out)

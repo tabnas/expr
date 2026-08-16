@@ -2708,4 +2708,79 @@ describe('expr', () => {
   })
 
 
+  test('evaluation-does-not-modify-tree', () => {
+    // The documented parse-once/evaluate-many workflow: the same tree is
+    // reduced twice under different semantics, and the second reduction
+    // must see the operators, not the first reduction's answers. Implicit
+    // lists are the interesting case — they are plain arrays, so a
+    // reduction that walked one in place would consume the caller's tree.
+    const je = new Tabnas().use(jsonic).use(Expr)
+
+    for (const src of ['1+2,3+4', '1+2*3', '1+2,3+4,5+6']) {
+      const tree = je.parse(src)
+      const before = JSON.stringify(tree)
+
+      let sumCalls = 0
+      let productCalls = 0
+
+      const sum: Evaluate = (_r: Rule, _c: Context, op: Op, terms: any) =>
+        (sumCalls++, '+' === op.src ? terms[0] + terms[1] : terms[0] * terms[1])
+
+      const product: Evaluate = (_r: Rule, _c: Context, op: Op, terms: any) =>
+        (productCalls++, '+' === op.src ? terms[0] * terms[1] : terms[0] + terms[1])
+
+      const first = evaluation(null as any, null as any, tree, sum)
+      const second = evaluation(null as any, null as any, tree, product)
+
+      // Both reductions ran against the operators, not against each
+      // other's output.
+      expect(0 < sumCalls).equal(true)
+      expect(sumCalls).equal(productCalls)
+
+      // The tree the caller still holds is the one it parsed.
+      expect(JSON.stringify(tree)).equal(before)
+
+      // Sanity: the two semantics really do disagree, so the assertions
+      // above are not passing because both reductions happened to return
+      // the same thing for an unrelated reason.
+      expect(JSON.stringify(first) !== JSON.stringify(second)).equal(true)
+    }
+  })
+
+
+  test('evaluate-called-once-per-operator', () => {
+    // An evaluate callback is free to return another marked S-expression
+    // — an identity evaluator, a symbolic rewriter. Such a result is
+    // indistinguishable from an unreduced operand, so a reduction that
+    // rescanned an implicit list would transform earlier members again
+    // every time a later one closed, making the number of calls depend on
+    // a member's position in the argument list.
+    const counts: { [key: string]: number } = {}
+
+    const je = new Tabnas().use(jsonic).use(Expr, {
+      op: {
+        func: {
+          paren: true, osrc: '(', csrc: ')', preval: { active: true },
+        },
+      },
+      evaluate: (_r: Rule, _c: Context, op: Op, terms: any) => {
+        const key = op.name + JSON.stringify(terms)
+        counts[key] = (counts[key] || 0) + 1
+        return [op, ...terms]
+      },
+    })
+
+    for (const src of ['f(1+2,3+4,5+6)', 'f(1+2,3+4)', '1+2,3+4,5+6']) {
+      for (const key of Object.keys(counts)) {
+        delete counts[key]
+      }
+
+      je.parse(src)
+
+      const repeated = Object.entries(counts).filter(([, n]) => 1 < n)
+      expect(repeated).equal([])
+    }
+  })
+
+
 })
