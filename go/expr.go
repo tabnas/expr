@@ -1040,6 +1040,26 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		if eopts.Evaluate != nil && r.N["expr"] < 1 {
 			parent := r.Parent
 			if parent != nil && parent != jsonic.NoRule {
+				// The parent holds an implicit list (`f(1+2, 3)`,
+				// `1+2, 3`) rather than this expression's own op-array.
+				// A list is a plain slice, not an op-array, so its
+				// members used to reach the caller as raw op-arrays that
+				// the evaluate callback was never called on.
+				//
+				// Reduce them in place, keeping the slice: the list is
+				// still being collected, and the paren rule and the expr
+				// rules between it and here all hold a reference to this
+				// exact slice, so handing back a rebuilt one strands the
+				// members still to come.
+				if sl, isSlice := unwrapExpr(parent.Node); isSlice &&
+					!isOp(parent.Node) && len(sl) > 0 {
+					for i, el := range sl {
+						sl[i] = evaluation(parent, ctx, el, eopts.Evaluate)
+					}
+					r.Node = parent.Node
+					return
+				}
+
 				out := evaluation(parent, ctx, parent.Node, eopts.Evaluate)
 				parent.Node = out
 				// Also write the evaluated result onto this expr rule's own
@@ -1985,6 +2005,12 @@ func evaluation(
 	}
 	op, isOpV := expr[0].(*Op)
 	if !isOpV {
+		// An implicit list — `f(1+1, 2)`, `1+1, 2+2` — reduced
+		// element-wise into a NEW slice. This is reachable through the
+		// exported Evaluation, and the parse-once/evaluate-many workflow
+		// needs a caller's tree to survive a reduction intact. Where the
+		// list under construction must be updated in place, the expr
+		// rule's AC hook does that itself.
 		result := make([]interface{}, len(expr))
 		for i, el := range expr {
 			result[i] = evaluation(rule, ctx, el, resolve)

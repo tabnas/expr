@@ -781,21 +781,21 @@ func TestSpecEvaluateMath(t *testing.T) {
 					} else {
 						args = rawArgs
 					}
+					// Variadic, as the TypeScript side's `Math.min(...args)`
+					// is. Fixed at two arguments, a three-argument row
+					// agrees with TS only when the third happens not to be
+					// the extremum, so the fixture would silently test less
+					// on this runtime than on the other.
 					switch fname {
-					case "min":
-						x := toNum(args, 0)
-						y := toNum(args, 1)
-						if x < y {
-							return x
+					case "min", "max":
+						best := toNum(args, 0)
+						for argI := 1; argI < len(args); argI++ {
+							n := toNum(args, argI)
+							if ("min" == fname) == (n < best) && n != best {
+								best = n
+							}
 						}
-						return y
-					case "max":
-						x := toNum(args, 0)
-						y := toNum(args, 1)
-						if x > y {
-							return x
-						}
-						return y
+						return best
 					default:
 						return toNum(args, 0)
 					}
