@@ -3,7 +3,7 @@
 
 import { describe, test, beforeEach } from 'node:test'
 
-import { Tabnas, Rule, Context, util } from '@tabnas/parser'
+import { Tabnas, Rule, RuleSpec, Context, util } from '@tabnas/parser'
 import { jsonic } from '@tabnas/jsonic'
 import { Debug } from '@tabnas/debug'
 
@@ -2744,6 +2744,70 @@ describe('expr', () => {
       // above are not passing because both reductions happened to return
       // the same thing for an unrelated reason.
       expect(JSON.stringify(first) !== JSON.stringify(second)).equal(true)
+    }
+  })
+
+
+  test('norule-sentinel-stays-empty', () => {
+    // Mirror of Go's TestNoRuleSentinelStaysEmpty.
+    //
+    // NORULE carries a `node` like any other rule, and a rule seeds its
+    // node from its parent. A top-level implicit list whose first member
+    // is a suffix applied to a prefix — `-1!, 2` — closes with NORULE as
+    // its parent, so an unguarded assignment there is read straight back
+    // out by the rules that follow.
+    //
+    // The two runtimes fail differently on that write, which is why this
+    // test asserts the property rather than either symptom. Go's NoRule
+    // is one package-level value shared by every parser instance in the
+    // process, so a node left on it survives for the life of the process
+    // and every later parse reads it back. The engine builds a fresh
+    // NORULE per parse here, so the blast radius is one parse: the `elem`
+    // that should have collected `2` was seeded with the list instead,
+    // `2` was dropped, and the list ended up containing itself.
+    let norule: any = null
+
+    const Capture = (tn: Tabnas) => {
+      tn.rule('val', (rs: RuleSpec) => {
+        rs.bo((_r: Rule, ctx: Context) => {
+          norule = (ctx as any).NORULE
+        })
+      })
+    }
+
+    const build = (evaluate?: any) =>
+      new Tabnas().use(jsonic).use(Expr, {
+        op: {
+          factorial: { suffix: true, left: 6000000, src: '!' },
+          question: { suffix: true, left: 3500000, src: '?' },
+        },
+        ...(evaluate ? { evaluate } : {}),
+      }).use(Capture)
+
+    // With and without an evaluator: the close hook takes a different
+    // path through the parent node when one is configured.
+    for (const evaluate of [undefined, (_r: Rule, _c: Context, _op: Op, terms: any) => terms[0]]) {
+      for (const src of [
+        '-1!,2', '-1!,2,3', '-1! 2', '-1!', '1,2', 'a,b', '(-1!,2)',
+      ]) {
+        norule = null
+        build(evaluate).parse(src)
+
+        // Nothing was published to the sentinel.
+        expect(null != norule).equal(true)
+        expect(undefined === norule.node).equal(true)
+      }
+
+      // The member after the trigger survives, and is not the first one
+      // over again — the two ways this has gone wrong.
+      const listed = build(evaluate).parse('-1!,2')
+      expect(Array.isArray(listed)).equal(true)
+      expect(listed.length).equal(2)
+      expect(listed[1]).equal(2)
+
+      // A parse after the trigger is unaffected by it.
+      build(evaluate).parse('-1!,2')
+      expect(build(evaluate).parse('a,b')).equal(['a', 'b'])
     }
   })
 

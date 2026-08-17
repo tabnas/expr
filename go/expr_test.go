@@ -985,3 +985,78 @@ func TestPrecedenceStable(t *testing.T) {
 		}
 	}
 }
+
+// TestNoRuleSentinelStaysEmpty locks in the fix for process-wide state
+// corruption. NoRule is a package-level sentinel shared by every parser
+// instance, and it carries a Node field like any other rule. A rule action
+// that assigns to r.Parent.Node without checking leaves that node on the
+// sentinel for the life of the process, and every later parse — on any
+// instance — reads it back as a value of its own.
+//
+// `@x!, 3` was the trigger: a top-level implicit list whose first member is
+// a suffix applied to a prefix closes with NoRule as its parent. One such
+// parse, and an unrelated `a,b` afterwards returned
+// `["a", [["!", ["@", "x"]]]]`.
+//
+// Asserting on the sentinel rather than on any one call site means a new
+// unguarded assignment anywhere in the plugin fails this test.
+func TestNoRuleSentinelStaysEmpty(t *testing.T) {
+	clean, err := json.Marshal(simplifyAndNormalize(jsonic.NoRule.Node))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	check := func(where string) {
+		t.Helper()
+		got, err := json.Marshal(simplifyAndNormalize(jsonic.NoRule.Node))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(clean) {
+			t.Fatalf("NoRule.Node written after %s:\n  got:  %s\n  want: %s",
+				where, got, clean)
+		}
+	}
+
+	check("startup")
+
+	build := func() *jsonic.Jsonic {
+		return makeExprJsonic(map[string]interface{}{
+			"op": map[string]interface{}{
+				"pre-a": map[string]interface{}{
+					"prefix": true, "src": "@", "right": 31000000},
+				"suf-a": map[string]interface{}{
+					"suffix": true, "src": "!", "left": 27000000},
+				"func": map[string]interface{}{
+					"paren": true, "osrc": "(", "csrc": ")",
+					"preval": map[string]interface{}{"active": true}},
+			},
+		})
+	}
+
+	// The known trigger, plus the shapes around it: a top-level implicit
+	// list is the case where a rule's parent is the sentinel.
+	for _, src := range []string{
+		"@x!, 3", "@x!", "x!, 3", "@x, 3", "1+2,3", "a,b", "a b",
+		"@x! 3", "f(@x!, 3)", "[@x!, 3]", "{a: @x!}", "@x!, @y!, 3",
+	} {
+		build().Parse(src)
+		check("parse of " + src)
+	}
+
+	// A parse after the trigger must be unaffected by it.
+	build().Parse("@x!, 3")
+
+	got, err := build().Parse("a,b")
+	if err != nil {
+		t.Fatalf("a,b after @x!, 3: %v", err)
+	}
+
+	b, err := json.Marshal(simplifyAndNormalize(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if `["a","b"]` != string(b) {
+		t.Errorf("a,b after @x!, 3 returned %s, want [\"a\",\"b\"]", b)
+	}
+}

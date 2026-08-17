@@ -697,7 +697,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           c: (r: Rule) => r.d <= 0,
           n: { expr: 0 },
           r: 'elem',
-          a: (r: Rule) => (r.parent.node = r.node = [r.node]),
+          a: (r: Rule, ctx: Context) => (r.node = topList(r, ctx)),
           g: 'expr,comma,list,top',
         },
 
@@ -709,7 +709,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           n: { expr: 0 },
           b: 1,
           r: 'elem',
-          a: (r: Rule) => (r.parent.node = r.node = [r.node]),
+          a: (r: Rule, ctx: Context) => (r.node = topList(r, ctx)),
           g: 'expr,space,list,top',
         },
 
@@ -724,8 +724,19 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         },
 
         // Implicit list indicated by space separated value.
+        //
+        // This alternative carries no token filter, so it also has to be
+        // kept off a pending suffix operator. A suffix belongs to the
+        // expression that just closed, not to a new element: `f(@x!)`
+        // reached here on the `!` of a completed prefix, opened `elem`,
+        // and offered `!` as the start of a value — which nothing matches,
+        // so a valid expression failed as `unexpected`. Leaving the token
+        // alone lets the val-close suffix alternative take it, which is
+        // how the same expression already parses at the top level.
         {
-          c: (r: Rule) => r.lte('pk') && r.lte('expr_suffix'),
+          c: (r: Rule, ctx: Context) =>
+            r.lte('pk') && r.lte('expr_suffix') &&
+            !SUFFIX.includes(ctx.t0.tin),
           n: { expr: 0 },
           h: implicitList,
           g: 'expr,list,val,imp,space',
@@ -1106,6 +1117,41 @@ function makeCloseParen(parenCTM: OpMap) {
       // }
     }
   }
+}
+
+
+// Start a top-level implicit list, publishing it to the rule's parent —
+// unless that parent is the NORULE sentinel.
+//
+// NORULE carries a `node` like any other rule, and a rule seeds its node
+// from its parent, so a list written there is handed straight back out as
+// the starting node of the rules that follow. `@x!, 3` reaches here with
+// NORULE as its parent, because the root val closed early to let the
+// suffix take the completed prefix: the `elem` that should have collected
+// `3` was seeded with the list instead, `3` was dropped, and the list
+// ended up containing itself. The rule's own node is what the parse
+// returns at this depth, so skipping the write costs nothing.
+function topList(rule: Rule, ctx: Context) {
+  const list = [rule.node]
+
+  if (rule.parent && ctx.NORULE !== rule.parent) {
+    rule.parent.node = list
+    return list
+  }
+
+  // No parent to publish to. The list is still built correctly by the
+  // `elem` rules that follow, but nothing would ever read it: the result
+  // came back as the first member alone, with `, 3` silently gone.
+  //
+  // Write it back along the r:-replacement chain instead, so whichever
+  // rule `ctx.root().node` resolves to is holding this list — the same
+  // approach the ternary close hook takes. Members appended later are
+  // visible through it, because every writer shares this one array.
+  for (let cur: any = rule; null != cur && ctx.NORULE !== cur; cur = cur.prev) {
+    cur.node = list
+  }
+
+  return list
 }
 
 
