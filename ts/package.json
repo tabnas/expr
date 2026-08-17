@@ -48,7 +48,7 @@
     "@tabnas/railroad": "*",
     "@tabnas/support": "*",
     "@types/node": "26.2.0",
-    "typescript": "7.0.2"
+    "typescript": "6.0.3"
   },
   "peerDependencies": {
     "@tabnas/jsonic": ">=0",
