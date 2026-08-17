@@ -892,8 +892,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			if isOp(node) {
 				node = cleanExpr(node)
 			}
-			r.Parent.Node = []interface{}{node}
-			r.Node = r.Parent.Node
+			list := []interface{}{node}
+			setParentNode(r, list)
+			r.Node = list
 		},
 		G: "expr,comma,list,top",
 	})
@@ -912,8 +913,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			if isOp(node) {
 				node = cleanExpr(node)
 			}
-			r.Parent.Node = []interface{}{node}
-			r.Node = r.Parent.Node
+			list := []interface{}{node}
+			setParentNode(r, list)
+			r.Node = list
 		},
 		G: "expr,space,list,top",
 	})
@@ -1456,6 +1458,24 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	return nil
 }
 
+// setParentNode assigns a node to a rule's parent, unless that parent is
+// the NoRule sentinel.
+//
+// NoRule is shared by every parser instance in the process and carries a
+// Node field like any other rule, so a node written to it stays there for
+// the life of the process and is read back by every later parse as a value
+// of its own. A top-level implicit list whose first member is an
+// expression reaches its close with NoRule as parent — `@x!, 3` — and used
+// to publish its list there: afterwards an unrelated `a,b`, on a brand-new
+// instance, came back as `["a", [["!", ["@", "x"]]]]`. The rule's own node
+// is the one the parser reads at the top level, so dropping the write
+// loses nothing.
+func setParentNode(r *jsonic.Rule, node interface{}) {
+	if r.Parent != nil && r.Parent != jsonic.NoRule {
+		r.Parent.Node = node
+	}
+}
+
 // prior converts a prior rule's node into the start of a new expression.
 // All expression nodes are returned as *jsonic.ListRef so subsequent rule
 // actions can re-point ListRef.Val and have every reference (including the
@@ -1472,8 +1492,21 @@ func prior(rule *jsonic.Rule, priorRule *jsonic.Rule, op *Op) *jsonic.ListRef {
 	} else {
 		expr = makeExpr(op, priorNode)
 	}
-	priorRule.Node = expr
+
+	// NoRule is a sentinel shared by every parser instance in the process,
+	// and it carries a Node field like any other rule. A suffix whose
+	// operand is a prefix reaches here with no prior rule — `@x!` — and
+	// writing the expression onto the sentinel leaves it there for the
+	// life of the process. Every later parse then reads that node back as
+	// a value of its own: after one `@x!, 3`, an unrelated `a,b` on a
+	// brand-new instance returns `["a", [["!", ["@", "x"]]]]`. There is no
+	// prior rule to hand the expression to, so don't pretend otherwise.
+	if priorRule != nil && priorRule != jsonic.NoRule {
+		priorRule.Node = expr
+	}
+
 	rule.Parent = priorRule
+
 	return expr
 }
 
