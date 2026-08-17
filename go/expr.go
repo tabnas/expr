@@ -9,6 +9,7 @@
 package tabnasexpr
 
 import (
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -96,6 +97,30 @@ func unwrapExpr(node interface{}) ([]interface{}, bool) {
 		return sl, true
 	}
 	return nil, false
+}
+
+// sameNode reports whether two nodes are the same value, by identity
+// rather than by contents. Comparison is on the underlying slice, so a
+// *ListRef and the plain slice it wraps are the same node — which is the
+// case that matters, since a rule collecting a list holds the slice while
+// the val rule between it and an expression holds the wrapper.
+func sameNode(a, b interface{}) bool {
+	sa, aok := unwrapExpr(a)
+	sb, bok := unwrapExpr(b)
+	if !aok || !bok || len(sa) == 0 || len(sa) != len(sb) {
+		return false
+	}
+	if reflect.ValueOf(sa).Pointer() == reflect.ValueOf(sb).Pointer() {
+		return true
+	}
+	// Two op-arrays headed by the same *Op are the same expression even
+	// when the slices differ: a collecting rule may hold a copy of the
+	// member the val rule still points at. An *Op is built per operator
+	// occurrence and carries that occurrence's token, so sharing one is
+	// identity and not merely equal shape.
+	opA, aIsOp := sa[0].(*Op)
+	opB, bIsOp := sb[0].(*Op)
+	return aIsOp && bIsOp && opA == opB
 }
 
 // isOp checks if a node is an expression (slice starting with *Op).
@@ -1062,6 +1087,40 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					return
 				}
 
+				// The same list, one level further up. TypeScript's expr
+				// rule sits directly under the rule collecting the list,
+				// so the branch above is the whole story there; the Go
+				// grammar interposes a val rule between a paren argument
+				// and the paren that collects it, leaving this rule's
+				// parent holding the member's own op-array and the list
+				// out of reach. Without this the member is reduced here,
+				// the result is written to a node the list does not read,
+				// and the raw op-array left in the list is reduced a
+				// second time when the enclosing expression closes —
+				// calling the evaluate callback twice for every member
+				// but the last.
+				//
+				// Identity, not shape, is what makes this safe to reach
+				// for: the list is only treated as this member's when it
+				// still ends with the exact node about to be reduced.
+				if grand := parent.Parent; grand != nil && grand != jsonic.NoRule {
+					if sl, isSlice := unwrapExpr(grand.Node); isSlice &&
+						!isOp(grand.Node) && len(sl) > 0 &&
+						sameNode(sl[len(sl)-1], parent.Node) {
+						for i, el := range sl {
+							sl[i] = evaluation(grand, ctx, el, eopts.Evaluate)
+						}
+						// This rule keeps its own member's value, not the
+						// list: unlike the branch above, the list here
+						// belongs to the enclosing rule, and the val
+						// between the two coalesces from this node.
+						out := sl[len(sl)-1]
+						parent.Node = out
+						r.Node = out
+						return
+					}
+				}
+
 				out := evaluation(parent, ctx, parent.Node, eopts.Evaluate)
 				parent.Node = out
 				// Also write the evaluated result onto this expr rule's own
@@ -2020,6 +2079,66 @@ func Opify(op *Op) *Op {
 	return op
 }
 
+// evaluatedKey identifies a value `evaluate` has already produced, by the
+// address and length of its backing array. Only slices and *ListRef reach
+// it, because those are the only shapes evaluation() re-enters.
+type evaluatedKey struct {
+	ptr uintptr
+	n   int
+}
+
+// evaluatedSet is the Go stand-in for the TypeScript `EVALUATED` WeakSet.
+// An implicit list is reduced a member at a time as the members close, and
+// again as a whole once the list is complete, so without this a member's
+// reduced value would be handed back to `evaluate` a second time — and a
+// callback that returns another marked S-expression (an identity
+// evaluator, a symbolic rewriter) would transform it twice, making the
+// result depend on the member's position in the list.
+//
+// Go has no weak map, so the set is scoped to one parse (it lives in
+// ctx.U, which is per-Context and therefore race-free across concurrent
+// parses on one instance) and holds the value itself. Keeping a strong
+// reference is what makes the address safe to key on: the value cannot be
+// collected and its address cannot be recycled while the key is live.
+type evaluatedSet map[evaluatedKey]interface{}
+
+const evaluatedKeyU = "expr_evaluated"
+
+// evaluatedIdentity returns the key for a value, and whether it is one of
+// the shapes worth tracking. A zero-length slice is excluded: its address
+// is not a meaningful identity.
+func evaluatedIdentity(v interface{}) (evaluatedKey, bool) {
+	switch t := v.(type) {
+	case *jsonic.ListRef:
+		if t == nil {
+			return evaluatedKey{}, false
+		}
+		return evaluatedKey{ptr: reflect.ValueOf(t).Pointer(), n: -1}, true
+	case []interface{}:
+		if len(t) == 0 {
+			return evaluatedKey{}, false
+		}
+		return evaluatedKey{ptr: reflect.ValueOf(t).Pointer(), n: len(t)}, true
+	}
+	return evaluatedKey{}, false
+}
+
+// evaluatedFor returns the parse's set, creating it on first use. A nil
+// ctx — the exported Evaluation called outside a parse — gets no set, so
+// each such reduction stands alone, which is what the documented
+// parse-once/evaluate-many workflow wants.
+func evaluatedFor(ctx *jsonic.Context) evaluatedSet {
+	if ctx == nil || ctx.U == nil {
+		return nil
+	}
+	if set, ok := ctx.U[evaluatedKeyU].(evaluatedSet); ok {
+		return set
+	}
+	set := evaluatedSet{}
+	ctx.U[evaluatedKeyU] = set
+	return set
+}
+
 // Evaluation recursively evaluates an expression tree.
 func Evaluation(
 	rule *jsonic.Rule, ctx *jsonic.Context, node interface{},
@@ -2029,6 +2148,26 @@ func Evaluation(
 }
 
 func evaluation(
+	rule *jsonic.Rule, ctx *jsonic.Context, node interface{},
+	resolve func(*jsonic.Rule, *jsonic.Context, *Op, []interface{}) interface{},
+) interface{} {
+	done := evaluatedFor(ctx)
+	if key, keyed := evaluatedIdentity(node); keyed && done != nil {
+		if _, seen := done[key]; seen {
+			return node
+		}
+	}
+
+	out := evaluationStep(rule, ctx, node, resolve)
+
+	if key, keyed := evaluatedIdentity(out); keyed && done != nil {
+		done[key] = out
+	}
+
+	return out
+}
+
+func evaluationStep(
 	rule *jsonic.Rule, ctx *jsonic.Context, node interface{},
 	resolve func(*jsonic.Rule, *jsonic.Context, *Op, []interface{}) interface{},
 ) interface{} {

@@ -792,7 +792,17 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             options.evaluate,
           )
 
-          r.parent.node = out
+          // Not onto the NORULE sentinel, for the reason `topList` gives:
+          // NORULE carries a `node` like any other rule and a rule seeds
+          // its node from its parent, so a value written there is handed
+          // straight back out as the starting node of the rules that
+          // follow. The Go port guards the same write; this runtime was
+          // left unguarded when that fix landed. `r.node` below is what
+          // the parse reads at this depth, so skipping the write costs
+          // nothing.
+          if (r.parent && ctx.NORULE !== r.parent) {
+            r.parent.node = out
+          }
 
           // Also write the evaluated result onto this expr rule's own
           // node. When the expr rule was PUSHED from a still-open val
