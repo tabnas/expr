@@ -792,7 +792,17 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             options.evaluate,
           )
 
-          r.parent.node = out
+          // Not onto the NORULE sentinel, for the reason `topList` gives:
+          // NORULE carries a `node` like any other rule and a rule seeds
+          // its node from its parent, so a value written there is handed
+          // straight back out as the starting node of the rules that
+          // follow. The Go port guards the same write; this runtime was
+          // left unguarded when that fix landed. `r.node` below is what
+          // the parse reads at this depth, so skipping the write costs
+          // nothing.
+          if (r.parent && ctx.NORULE !== r.parent) {
+            r.parent.node = out
+          }
 
           // Also write the evaluated result onto this expr rule's own
           // node. When the expr rule was PUSHED from a still-open val
@@ -1131,8 +1141,43 @@ function makeCloseParen(parenCTM: OpMap) {
 // `3` was seeded with the list instead, `3` was dropped, and the list
 // ended up containing itself. The rule's own node is what the parse
 // returns at this depth, so skipping the write costs nothing.
+// The completed expression a top-level implicit list should start with.
+//
+// The rule that meets the separator is the last one prattify built, which
+// for a right-leaning tree is a SUB-expression: `1+2*3` leaves it holding
+// `[*,2,3]` while the finished `[+,1,[*,2,3]]` sits on the val this
+// expression publishes to, and on the outermost expr in the r:-
+// replacement chain. Seeding the list from the rule's own node therefore
+// dropped the `1+` — `1+2*3,4` parsed as `[[*,2,3],4]`, a wrong answer
+// with nothing to signal it. A flat first member (`1+2,3`) is unaffected,
+// because there the rule's node already IS the whole expression, which is
+// why this went unnoticed.
+//
+// Only a top-level bare list reaches here; `[1+2*3,4]`, `f(1+2*3,4)` and
+// `{a:1+2*3,b:4}` collect their members by other paths and were correct.
+function exprRoot(rule: Rule, ctx: Context) {
+  const parent: any = rule.parent
+
+  if (parent && ctx.NORULE !== parent && isOp(parent.node)) {
+    return parent.node
+  }
+
+  // No usable parent — the NORULE case topList handles below. The
+  // outermost expr in the chain holds the root; later entries are the
+  // sub-expressions built under it.
+  let root: any = undefined
+  for (let cur: any = rule; null != cur && ctx.NORULE !== cur; cur = cur.prev) {
+    if ('expr' === cur.name && isOp(cur.node)) {
+      root = cur.node
+    }
+  }
+
+  return undefined === root ? rule.node : root
+}
+
+
 function topList(rule: Rule, ctx: Context) {
-  const list = [rule.node]
+  const list = [exprRoot(rule, ctx)]
 
   if (rule.parent && ctx.NORULE !== rule.parent) {
     rule.parent.node = list

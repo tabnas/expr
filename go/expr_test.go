@@ -1060,3 +1060,51 @@ func TestNoRuleSentinelStaysEmpty(t *testing.T) {
 		t.Errorf("a,b after @x!, 3 returned %s, want [\"a\",\"b\"]", b)
 	}
 }
+
+// Mirror of the TypeScript suite's `evaluate-called-once-per-operator`.
+//
+// An evaluate callback is free to return another marked S-expression — an
+// identity evaluator, a symbolic rewriter — and is free to have effects.
+// A member of an implicit list is reduced when it closes and the list is
+// reduced again as a whole, so a reduction that did not land its result
+// where the list can see it would hand the same operator to the callback
+// a second time, once per member except the last.
+func TestEvaluateCalledOncePerOperator(t *testing.T) {
+	for _, src := range []string{
+		"f(1+2,3+4,5+6)", "f(1+2,3+4)", "1+2,3+4,5+6", "f(1+2,3)",
+		"f(-1+2,3+4)", "f(g(1+2,3+4),5+6)", "f(1+2,(3+4,5+6))",
+		"(1+2,3+4)", "[f(1+2,3+4)]", "{k:f(1+2,3+4)}",
+		"f(1+2,3+4),f(5+6,7+8)",
+	} {
+		counts := map[string]int{}
+
+		j := jsonic.Make()
+		_ = j.Use(Expr, map[string]interface{}{
+			"op": map[string]interface{}{
+				"func": map[string]interface{}{
+					"paren": true, "osrc": "(", "csrc": ")",
+					"preval": map[string]interface{}{"active": true}},
+			},
+			"evaluate": func(
+				_ *jsonic.Rule, _ *jsonic.Context, op *Op, terms []interface{},
+			) interface{} {
+				b, err := json.Marshal(Simplify(terms))
+				if err != nil {
+					t.Fatal(err)
+				}
+				counts[op.Name+string(b)]++
+				return append([]interface{}{op}, terms...)
+			},
+		})
+
+		if _, err := j.Parse(src); err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+
+		for key, n := range counts {
+			if 1 < n {
+				t.Errorf("%s: evaluate called %d times for %s", src, n, key)
+			}
+		}
+	}
+}
