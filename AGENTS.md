@@ -49,8 +49,9 @@ package registries — no sibling checkout or local linking is needed:
   `npm i` resolves them all from the npm registry. `engines.node` is
   `">=24"`.
 - Go: `go/go.mod` requires `github.com/tabnas/jsonic/go` (currently
-  `v0.4.1`, with `json/go` + `parser/go` as indirect deps), resolved from
-  the Go module proxy. The Go jsonic package re-exports the engine types
+  `v0.6.2`) and `github.com/tabnas/support/go` (`v0.3.0`), with `json/go`
+  + `parser/go` as indirect deps, all resolved from the Go module proxy.
+  The Go jsonic package re-exports the engine types
   (`jsonic.Make`, `jsonic.Rule`, `jsonic.Context`, …), so `go/expr.go`
   imports `jsonic`, not `parser`, directly.
 

@@ -9,5 +9,5 @@ require (
 
 require (
 	github.com/tabnas/json/go v0.5.2 // indirect
-	github.com/tabnas/parser/go v0.8.2 // indirect
+	github.com/tabnas/parser/go v0.8.7 // indirect
 )
