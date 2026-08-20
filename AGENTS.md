@@ -248,8 +248,14 @@ Narrower, when iterating:
 (cd go && go test ./...)     # unit tests + the shared .tsv fixtures
 ```
 
-Unlike most of the fleet, a bare `npm test` here **does** compile — the
-`pretest` script is `npm run build` — so it is safe on a fresh checkout.
+A bare `npm test` here compiles first — the `pretest` script is
+`npm run build` — so it is safe on a fresh checkout. `test-some` now has
+its own `pretest-some` for the same reason: npm runs `pre<name>` only for
+the exactly matching name, so `pretest` never covered the focused runner
+and a focused run executed whatever was compiled last. That is the shape
+you hit most, because a focused run is what you reach for while iterating
+on one test.
+
 Note that CI runs only the TypeScript job (see "CI" below): the local
 `make test` (or `cd go && go test ./...`) is the only check that exercises
 the Go port at all, so never skip it.
