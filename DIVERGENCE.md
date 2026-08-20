@@ -20,15 +20,30 @@ Measured on the simplest expression that shows it, `{a:1+2}`:
 | TypeScript | `[{"src":"+","left":2000000,"right":2100000,"name":"addition-infix", …}]` |
 | Go | `{"Val":[{"Name":"addition-infix","Src":"+","Left":2000000, …}], "Child":null,"Implicit":false,"Meta":{"expr":true}}` |
 
-Two independent differences:
+Two **independently repairable** differences, so each has its own
+paragraph and its own pair of pins. Closing one does not close the other,
+and the pins say so: a partial repair deletes only the matching paragraph
+and the matching pin.
 
-1. **A wrapper.** TypeScript yields the term list directly; Go yields an
-   object carrying it under `Val`, alongside `Child`, `Implicit` and
-   `Meta`.
-2. **Field naming.** Go's AST structs (`Op` and friends in `go/expr.go`)
-   carry **no `json` tags**, so `encoding/json` emits the exported Go
-   names — `Name`, `Src`, `Left` — where TypeScript emits `name`, `src`,
-   `left`.
+### Wrapper
+
+TypeScript yields the term list directly; Go yields an object carrying it
+under `Val`, alongside `Child`, `Implicit` and `Meta`.
+
+Pinned by `TestASTShapeWrapperDiverges` (`go/expr_test.go`) and
+*"yields the term list directly, where Go wraps it"*
+(`ts/test/ast-shape.test.ts`).
+
+### Field naming
+
+Go's AST structs (`Op` and friends in `go/expr.go`) carry **no `json`
+tags**, so `encoding/json` emits the exported Go names — `Name`, `Src`,
+`Left` — where TypeScript emits `name`, `src`, `left`.
+
+Pinned by `TestASTShapeNamingDiverges` and *"serialises lower-case keys,
+where Go emits Go names"*.
+
+Adding `json` tags closes **this half only**. The wrapper survives it.
 
 The second is not merely cosmetic and the first is not merely a wrapper:
 lower-casing every Go key does **not** make the two key sets equal.
@@ -36,6 +51,15 @@ TypeScript additionally carries `OP_MARK` and a `token` object (`sI`,
 `rI`, `cI`, `len`, `isToken`, `why`); Go additionally carries
 `Preval.Allow`. So a consumer serialising the parse cannot read both ports
 with one shape.
+
+### Where the pins measure
+
+Every pin marshals and round-trips through JSON — the **serialised**
+shape, because that is what a consumer sees and what this entry is about.
+Inspecting TypeScript's live object instead would keep passing if those
+objects ever gained a `toJSON` emitting Go-compatible keys, while the
+consumer-visible difference had in fact been repaired. Both ports must
+measure the same boundary or the pair is not a pair.
 
 ### Why it is recorded and not fixed
 

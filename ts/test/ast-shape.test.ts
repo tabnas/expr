@@ -8,42 +8,51 @@ import { jsonic } from '@tabnas/jsonic'
 
 import { Expr } from '..'
 
-// The TypeScript twin of go/ast_shape_test.go. Together they pin a
-// DIVERGENCE, not a contract — see DIVERGENCE.md: the two ports serialise
-// the parsed AST to different shapes, and closing that is a breaking
-// change to the Go port's public types.
+// The TypeScript twins of go/expr_test.go's TestASTShape* pair. Together
+// they pin a DIVERGENCE, not a contract — see DIVERGENCE.md.
 //
-// Pinned on BOTH sides so the record cannot outlive what it records:
-// repairing either port turns that port's test red and forces the pair
-// and the DIVERGENCE.md entry to be deleted together (ADR-14).
+// TWO pins, deliberately separate. The halves can be repaired
+// independently: adding json tags on the Go side closes the naming half
+// and leaves the Val wrapper. One test covering both would fail on that
+// partial repair and, following its own instruction, take the record for
+// a still-live wrapper divergence with it.
 //
-// Measured on `{a:1+2}`, the simplest expression that shows it:
-//
-//   TypeScript  a -> [ {src:"+", left:…, name:"addition-infix", …} ]
-//   Go          a -> { Val: [ {Name:"addition-infix", Src:"+", …} ], … }
+// Both sides measure the SERIALISED shape. This file round-trips through
+// JSON rather than inspecting the live object, because the divergence and
+// the Go twin are about what a consumer serialises — if these objects ever
+// gain `toJSON` emitting Go-compatible keys, inspecting the live object
+// would keep passing while the consumer-visible difference was gone.
+function astShapeDoc(): any {
+  const tn = new Tabnas().use(jsonic).use(Expr)
+  const out = JSON.parse(JSON.stringify(tn.parse('{a:1+2}')))
+  assert.notEqual(out?.a, undefined,
+    'no `a` key, so these tests prove nothing')
+  return out.a
+}
+
 describe('AST shape', () => {
-  test('this port yields the term list directly, where Go wraps it', () => {
-    const tn = new Tabnas().use(jsonic).use(Expr)
-    const out: any = tn.parse('{a:1+2}')
-
-    const a = out?.a
-    assert.notEqual(a, undefined, 'no `a` key, so this test proves nothing')
-
-    // 1. No wrapper. Go yields { Val: [...], Child, Implicit, Meta }.
+  // The FIRST half: this port yields the term list directly, Go wraps it
+  // under Val.
+  test('yields the term list directly, where Go wraps it', () => {
+    const a = astShapeDoc()
     assert.ok(Array.isArray(a),
-      '`a` is not an array — if this port has grown Go\'s wrapper, delete ' +
-      'this test, its twin in go/ast_shape_test.go, and the ' +
-      'DIVERGENCE.md entry together')
-    assert.notEqual(a.length, 0,
-      'no terms, so the naming check below would pass vacuously')
+      'serialised `a` is not an array. If this port has grown Go\'s ' +
+      'wrapper, delete THIS test, its twin in go/expr_test.go, and the ' +
+      'wrapper paragraph of the DIVERGENCE.md entry — leave the naming ' +
+      'pin and paragraph alone unless that half was repaired too')
+  })
 
-    // 2. Lower-case naming. Go's structs carry no json tags, so it emits
-    // the exported Go names.
+  // The SECOND half: lower-case keys, where Go emits the exported Go names.
+  test('serialises lower-case keys, where Go emits Go names', () => {
+    const a = astShapeDoc()
+    assert.ok(Array.isArray(a) && 0 !== a.length,
+      'no terms, so the checks below would pass vacuously')
     const op = a[0]
-    assert.ok('name' in op,
-      'the first term has no `name` key — see the note above')
+    assert.ok('name' in op, 'the first term has no `name` key')
     assert.equal('Name' in op, false,
       'the first term has a PascalCase `Name` key, so this port now ' +
-      'matches Go — see the note above')
+      'matches Go. Delete THIS test, its twin, and the naming paragraph ' +
+      'of the DIVERGENCE.md entry — leave the wrapper pin and paragraph ' +
+      'alone unless that half was repaired too')
   })
 })

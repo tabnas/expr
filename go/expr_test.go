@@ -1108,3 +1108,86 @@ func TestEvaluateCalledOncePerOperator(t *testing.T) {
 		}
 	}
 }
+
+// --- AST shape divergence (see DIVERGENCE.md) ------------------------------
+//
+// TWO pins, deliberately separate. The two halves of the divergence can be
+// repaired independently: adding json tags closes the naming half and
+// leaves the Val wrapper. A single test covering both would fail on that
+// partial repair and, following its own instruction, take the record for a
+// still-live wrapper divergence with it.
+//
+// Each pin therefore names only its own half, and DIVERGENCE.md says which
+// paragraph goes with which.
+//
+// The TypeScript twins are in ts/test/ast-shape.test.ts. Both sides measure
+// the SERIALISED shape — the boundary a consumer sees, and the one the
+// entry is about — so the TS side round-trips through JSON rather than
+// inspecting the live object.
+
+// astShapeDoc parses `{a:1+2}` and returns the serialised form of `a`, the
+// simplest expression that shows both halves of the divergence.
+func astShapeDoc(t *testing.T) map[string]any {
+	t.Helper()
+	v, err := Parse("{a:1+2}")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	a, ok := doc["a"]
+	if !ok {
+		t.Fatal("no `a` key, so these tests prove nothing")
+	}
+	obj, isObj := a.(map[string]any)
+	if !isObj {
+		t.Fatalf("`a` serialises as %T, not an object — the wrapper is "+
+			"gone. See TestASTShapeWrapperDiverges", a)
+	}
+	return obj
+}
+
+// TestASTShapeWrapperDiverges pins the FIRST half: this port wraps the term
+// list under Val, TypeScript yields it directly.
+func TestASTShapeWrapperDiverges(t *testing.T) {
+	obj := astShapeDoc(t)
+	if _, hasVal := obj["Val"]; !hasVal {
+		t.Error("`a` no longer carries Val. If the wrapper has been " +
+			"removed to match TypeScript, delete THIS test, its twin in " +
+			"ts/test/ast-shape.test.ts, and the wrapper paragraph of the " +
+			"DIVERGENCE.md entry — leave the naming pin and paragraph " +
+			"alone unless that half was repaired too")
+	}
+}
+
+// TestASTShapeNamingDiverges pins the SECOND half: this port's AST structs
+// carry no json tags, so encoding/json emits the exported Go names where
+// TypeScript emits lower-case ones.
+func TestASTShapeNamingDiverges(t *testing.T) {
+	obj := astShapeDoc(t)
+	terms, _ := obj["Val"].([]any)
+	if 0 == len(terms) {
+		t.Fatalf("Val is %T with no terms, so the checks below would pass "+
+			"vacuously", obj["Val"])
+	}
+	op, isOp := terms[0].(map[string]any)
+	if !isOp {
+		t.Fatalf("first term is %T, not an object", terms[0])
+	}
+	if _, pascal := op["Name"]; !pascal {
+		t.Error("the first term has no `Name` key")
+	}
+	if _, lower := op["name"]; lower {
+		t.Error("the first term has a lower-case `name` key, so this port " +
+			"now agrees with TypeScript. If json tags have been added, " +
+			"delete THIS test, its twin, and the naming paragraph of the " +
+			"DIVERGENCE.md entry — leave the wrapper pin and paragraph " +
+			"alone unless that half was repaired too")
+	}
+}
