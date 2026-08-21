@@ -10,6 +10,8 @@
 An expression-syntax plugin for the [Tabnas](https://github.com/tabnas/jsonic)
 JSON parser, available in both TypeScript and Go.
 
+Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
+
 It adds Pratt-parser expressions to Tabnas: infix, prefix, suffix, ternary,
 and paren operators with a configurable binding-power (precedence) scale, so
 values can include arithmetic, logical, and other expression syntax.
