@@ -61,14 +61,14 @@ j.parse('(1+2)*3')   // => 9
 
 Docs follow the [Diátaxis](https://diataxis.fr) framework:
 
-- **[Tutorial](doc/tutorial.md)** — parse and evaluate your first
+- **[Tutorial](doc/tutorial.md)**. Parse and evaluate your first
   expression, step by step.
-- **[Guide](doc/guide.md)** — recipes: add a custom operator, build
+- **[Guide](doc/guide.md)**. Recipes: add a custom operator, build
   function-call syntax with paren-preval, add a ternary, restrict to strict
   math, walk the tree yourself.
-- **[Reference](doc/reference.md)** — exports, `OpDef` options, the `Op` /
+- **[Reference](doc/reference.md)**. Exports, `OpDef` options, the `Op` /
   `Evaluate` types, and the default operator table.
-- **[Concepts](doc/concepts.md)** — how Pratt parsing works, the
+- **[Concepts](doc/concepts.md)**. How Pratt parsing works, the
   binding-power scale, and the design trade-offs.
 
 Go port docs: [tutorial](../go/doc/tutorial.md) ·

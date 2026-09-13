@@ -54,12 +54,12 @@ Docs follow the [Diátaxis](https://diataxis.fr) framework.
 
 TypeScript (canonical):
 
-- [Tutorial](ts/doc/tutorial.md) — parse and evaluate your first expression.
-- [Guide](ts/doc/guide.md) — recipes: custom operators, function calls,
+- [Tutorial](ts/doc/tutorial.md). Parse and evaluate your first expression.
+- [Guide](ts/doc/guide.md). Recipes: custom operators, function calls,
   ternaries, strict math.
-- [Reference](ts/doc/reference.md) — exports, `OpDef` options, types, the
+- [Reference](ts/doc/reference.md). Exports, `OpDef` options, types, the
   default operator table.
-- [Concepts](ts/doc/concepts.md) — Pratt parsing, the binding-power scale,
+- [Concepts](ts/doc/concepts.md). Pratt parsing, the binding-power scale,
   design trade-offs.
 
 Go port:

@@ -10,19 +10,19 @@ semantics, and the design trade-offs behind them.
 
 `@tabnas/expr` is **not** a standalone parser. There are three layers:
 
-1. **`@tabnas/parser`** — the Tabnas engine: a configurable, rule-based
+1. **`@tabnas/parser`**. The Tabnas engine: a configurable, rule-based
    parser with a lexer. It provides the `Rule`/`RuleSpec`/`Context`
    machinery and the plugin system.
-2. **`@tabnas/jsonic`** — the relaxed-JSON grammar (`val`, `map`, `list`,
+2. **`@tabnas/jsonic`**. The relaxed-JSON grammar (`val`, `map`, `list`,
    `pair`, `elem` rules) built on the engine. This is what understands
    objects, arrays, bare words, comments, implicit structure, etc.
-3. **`@tabnas/expr`** — this plugin. It hooks new alternates onto jsonic's
+3. **`@tabnas/expr`**. This plugin. It hooks new alternates onto jsonic's
    existing `val` rule and adds two of its own rules (`expr`, `paren`, plus
    `ternary` when configured), so that operator syntax becomes available
    anywhere a jsonic *value* can appear.
 
 That layering is why an expression can live inside a JSON object value, a
-list element, or at the top level — the expression grammar is woven into the
+list element, or at the top level: the expression grammar is woven into the
 value rule, not bolted on beside it.
 
 The plugin uses the engine's `tn.rule(name, …)` API (imperative rule
@@ -48,18 +48,18 @@ values, objects, or arrays.
 
 Why an array-of-op-first? Three reasons:
 
-- It is **uniform**: every operator — unary, binary, ternary, paren — is the
+- It is **uniform**: every operator (unary, binary, ternary, paren) is the
   same array shape, just with a different operand count (`op.terms`). One
   evaluator walks them all.
 - It is **inspectable**: the tree is plain data. You can transform, print,
   or evaluate it however you like, and you can defer evaluation entirely.
-- It **carries metadata**: because the head is the full `Op` (not just a
-  string), an evaluator gets precedence, kind flags, source location, and
+- It **carries metadata**: because the head is the full `Op` rather than a
+  string, an evaluator gets precedence, kind flags, source location, and
   your custom `use` data for free.
 
 Evaluation (`evaluation()` or the `evaluate` option) is a simple bottom-up
 fold: recurse into operands, then call the resolver with the op and the
-evaluated operand array. Parsing and evaluation are deliberately separable —
+evaluated operand array. Parsing and evaluation are deliberately separable:
 parse once, evaluate zero or many times.
 
 ## Pratt parsing in one paragraph
@@ -78,7 +78,7 @@ precedences and associativities. The core lives in the `prattify` function.
 
 Tabnas builds one JSON AST incrementally as it consumes tokens. An
 expression is part of that AST, so the plugin cannot simply swap a node out
-for a reshaped one — other rules already hold references to it. Instead, the
+for a reshaped one, because other rules already hold references to it. Instead, the
 partial expression array is **rewritten in place** (`updateExprNode`
 overwrites slots and adjusts `length`), preserving referential integrity
 while precedence reshapes the tree. This is an implementation detail you
@@ -91,7 +91,7 @@ share a header the way JS arrays share identity).
 This is the most important concept for configuring operators.
 
 A binding power is just an integer. The Pratt core compares powers **only**
-with `<` and `<=` — it never depends on the *distance* between two numbers,
+with `<` and `<=`; it never depends on the *distance* between two numbers,
 only on their **order**. So:
 
 > Only the ORDER of the magnitudes is a contract. The magnitudes themselves
@@ -126,7 +126,7 @@ addition) open for your operators:
     5000000  exponent          (** ^, right-assoc)
     6000000  postfix / suffix  (! ? ++)
     7000000  call / index / member  (f() a[i] a.b)
-    8000000+ free — the whole range above 4000000 is open for client ops
+    8000000+ free: the whole range above 4000000 is open for client ops
 ```
 
 Tiers are `1000000` apart; the `+100000` offset on the `right` of a
@@ -143,12 +143,12 @@ To add an operator, pick a tier base `N * 1000000`:
   call/member).
 - **Looser than addition**: use below `2000000` (logical, comparison,
   assignment, ternary).
-- **Need a sub-tier in a gap**: each `1000000`-wide gap holds ~4 sub-tiers —
-  use `base + 200000`, `base + 400000`, etc.
+- **Need a sub-tier in a gap**: each `1000000`-wide gap holds about four sub-tiers,
+  so use `base + 200000`, `base + 400000`, and so on.
 
 You never need to rescale the existing numbers to insert a new operator;
 just choose a free tier. If you ever *do* rescale the whole ladder, it must
-be an **order-preserving** remap — change relative order and you change the
+be an **order-preserving** remap: change relative order and you change the
 grammar.
 
 ## Parens, ternaries, and preval
@@ -157,7 +157,7 @@ These three are variations on the same idea: a structural operator that
 brackets a sub-expression.
 
 - **Parens** (`plain` `(`…`)`) are grouping. They are not infix/prefix/suffix
-  and carry no binding power — they override precedence by being an explicit
+  and carry no binding power; they override precedence by being an explicit
   boundary. The AST keeps the paren as a node (`['(', inner]`) so an
   evaluator can act on grouping if it wants; a typical evaluator just returns
   the inner value.
@@ -174,8 +174,8 @@ brackets a sub-expression.
   call/index syntax: a paren with `preval` turns `foo(1,2)` into
   `['(', 'foo', [1,2]]`. `required: true` forces a leading value (so `[1]`
   is a list literal but `a[1]` is an index op); `allow` restricts which
-  leading names qualify. Preval parens also **chain** — each picks up the
-  previous result — giving `f(x)(y)`, `a[0][1]`, and mixed forms.
+  leading names qualify. Preval parens also **chain**, each picking up the
+  previous result, giving `f(x)(y)`, `a[0][1]`, and mixed forms.
 
 ## Implicit structure, and the edge cases
 
@@ -183,7 +183,7 @@ jsonic allows implicit lists and maps at the top level (`a,b` → `['a','b']`,
 `x:1 y:2` → `{x:1, y:2}`). This plugin extends implicits to work **inside
 parens** too, so `foo(1,2)` and `(1 2 3)` produce list operands. Supporting
 that required extra counters (`expr_paren`, `expr_ternary`, …) on the parse
-context and a fair amount of context-sensitive edge handling — most visibly,
+context and a fair amount of context-sensitive edge handling: most visibly,
 care to *not* embed a surrounding implicit list inside an expression when the
 expression is the first item of that list. These are correctness details of
 the grammar wiring, not configuration you touch.
@@ -191,13 +191,13 @@ the grammar wiring, not configuration you touch.
 ## Trade-offs
 
 - **Imperative rule editing over declarative grammar.** More code and more
-  intricate node bookkeeping, but it is the only way to express in-place
+  node bookkeeping to follow, but it is the only way to express in-place
   precedence reshaping. The plugin accepts the complexity to keep the output
   a single, clean JSON AST.
 - **S-expression output, not direct values.** Parsing returns structure by
-  default; you opt into evaluation. This decouples syntax from semantics —
+  default; you opt into evaluation. This decouples syntax from semantics:
   the same parsed `1+2` can mean integer addition, set union, or string
-  concatenation depending on the evaluator — at the cost of one extra fold to
+  concatenation depending on the evaluator, at the cost of one extra fold to
   get a value.
 - **Order-only binding powers.** Trades a tidy small enum for raw integers,
   but buys downstream clients unlimited headroom to slot operators between
@@ -205,6 +205,6 @@ the grammar wiring, not configuration you touch.
 
 ## See also
 
-- [Tutorial](tutorial.md) — the happy path end to end.
-- [Guide](guide.md) — recipes for custom operators, calls, ternaries.
-- [Reference](reference.md) — exact options, types, and default table.
+- [Tutorial](tutorial.md). The happy path end to end.
+- [Guide](guide.md). Recipes for custom operators, calls, ternaries.
+- [Reference](reference.md). Exact options, types, and default table.

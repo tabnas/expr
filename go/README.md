@@ -1,6 +1,6 @@
 # tabnasexpr (`github.com/tabnas/expr/go`)
 
-The Go port of [`@tabnas/expr`](../ts/README.md) — an expression-syntax
+The Go port of [`@tabnas/expr`](../ts/README.md), an expression-syntax
 plugin for the Tabnas/jsonic parser.
 
 It adds Pratt-parser expressions: infix, prefix, suffix, ternary, and paren
@@ -71,13 +71,13 @@ w, _ := tabnasexpr.Parse("(1+2)*3", opts) // 9
 
 Docs follow the [Diátaxis](https://diataxis.fr) framework:
 
-- **[Tutorial](doc/tutorial.md)** — parse and evaluate your first
+- **[Tutorial](doc/tutorial.md)**. Parse and evaluate your first
   expression.
-- **[Guide](doc/guide.md)** — recipes: custom operators, function-call
+- **[Guide](doc/guide.md)**. Recipes: custom operators, function-call
   syntax, ternaries, strict math, walking the tree.
-- **[Reference](doc/reference.md)** — exported functions and types, the
+- **[Reference](doc/reference.md)**. Exported functions and types, the
   options map, and the default operator table.
-- **[Concepts](doc/concepts.md)** — Pratt parsing, the binding-power scale,
+- **[Concepts](doc/concepts.md)**. Pratt parsing, the binding-power scale,
   and the differences from the TS version.
 
 TypeScript (canonical) docs: [tutorial](../ts/doc/tutorial.md) ·

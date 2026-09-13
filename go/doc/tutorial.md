@@ -56,7 +56,7 @@ func main() {
 
 The result is a LISP-style S-expression: a slice whose **first element is
 the operator** and whose remaining elements are the operands. `*` binds
-tighter than `+`, so `2*3` became a nested sub-expression — precedence did
+tighter than `+`, so `2*3` became a nested sub-expression; precedence did
 that without any parentheses.
 
 A few more shapes:
@@ -71,7 +71,7 @@ tabnasexpr.Simplify(must(tabnasexpr.Parse("-1+2")))   // ["+" ["-" 1] 2]
 ## 3. Evaluate to a value
 
 A parse tree is structure, not a number. To compute, supply an `evaluate`
-callback through the options map. It runs bottom-up — operands are already
+callback through the options map. It runs bottom-up: operands are already
 evaluated when your callback sees an operator. Its signature is
 `func(rule *jsonic.Rule, ctx *jsonic.Context, op *tabnasexpr.Op, terms []interface{}) interface{}`,
 where `terms` is the slice of already-evaluated operands.
@@ -138,7 +138,7 @@ plus the kind booleans (`op.Prefix`, `op.Infix`, `op.Paren`).
 ## 4. Expressions inside JSON
 
 Because the plugin layers on jsonic, expressions slot into any value
-position — map values, list elements, nested objects — and your evaluator
+position (map values, list elements, nested objects) and your evaluator
 runs on each:
 
 ```go
@@ -163,9 +163,9 @@ _ = y
 
 ## Next steps
 
-- [Guide](guide.md) — recipes: custom operators, function-call syntax,
+- [Guide](guide.md). Recipes: custom operators, function-call syntax,
   ternaries, strict math, walking the tree yourself.
-- [Reference](reference.md) — exact exported types and functions, the
+- [Reference](reference.md). Exact exported types and functions, the
   `OpDef` options, and the default operator table.
-- [Concepts](concepts.md) — Pratt parsing, the binding-power scale, and the
+- [Concepts](concepts.md). Pratt parsing, the binding-power scale, and the
   differences from the TS version.
