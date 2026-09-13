@@ -29,7 +29,7 @@ func Parse(src string, opts ...map[string]interface{}) (interface{}, error)
 Convenience parser. With **no** options it reuses a single lazily-created,
 concurrency-safe default instance (so repeated calls don't rebuild the
 grammar). With options it builds a fresh instance per call. Returns the raw
-result — pass it through `Simplify` for a readable tree, or supply an
+result; pass it through `Simplify` for a readable tree, or supply an
 `"evaluate"` option to get evaluated values.
 
 ### `MakeJsonic`
@@ -77,7 +77,7 @@ func Prattify(expr interface{}, op *Op) *jsonic.ListRef
 The core Pratt algorithm, exported for unit testing (mirrors the TS module's
 `testing.prattify`). Embeds `op` into the expression tree `expr` (mutated in
 place) according to binding power, returning the sub-expression the new
-operator now heads — the attachment point where the operator's next term
+operator now heads: the attachment point where the operator's next term
 belongs. Build operator values with `Opify`.
 
 ### `Opify`
@@ -107,8 +107,8 @@ for you.
 const VERSION = "0.4.2"
 ```
 
-The plugin's version. It always equals the `version` in `ts/package.json`
-— `TestVersionMatchesPackageJSON` fails the build if the two drift.
+The plugin's version. It always equals the `version` in `ts/package.json`;
+`TestVersionMatchesPackageJSON` fails the build if the two drift.
 
 ## Options map
 
@@ -124,16 +124,16 @@ Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 
 | Field | Type | Applies to | Description |
 |---|---|---|---|
-| `"src"` | `string` or `[]interface{}` | infix/prefix/suffix; ternary | Operator text, e.g. `"+"`. For ternary, a two-element slice `[]interface{}{"?", ":"}`. |
-| `"osrc"` | `string` | paren | Opening token text, e.g. `"("`. |
-| `"csrc"` | `string` | paren | Closing token text, e.g. `")"`. |
+| `"src"` | `string` or `[]interface{}` | infix/prefix/suffix; ternary | Operator text, for example `"+"`. For ternary, a two-element slice `[]interface{}{"?", ":"}`. |
+| `"osrc"` | `string` | paren | Opening token text, for example `"("`. |
+| `"csrc"` | `string` | paren | Closing token text, for example `")"`. |
 | `"left"` | `int` (or `float64`) | infix, suffix | Left binding power. Higher binds tighter. |
 | `"right"` | `int` (or `float64`) | infix, prefix | Right binding power. Higher binds tighter. |
-| `"infix"` | `bool` | — | Binary infix operator (2 terms). |
-| `"prefix"` | `bool` | — | Unary prefix operator (1 term). |
-| `"suffix"` | `bool` | — | Unary suffix operator (1 term). |
-| `"ternary"` | `bool` | — | Ternary operator (3 terms). Requires `"src": []interface{}{open, close}`. |
-| `"paren"` | `bool` | — | Paren/grouping operator. Requires `"osrc"`/`"csrc"`. |
+| `"infix"` | `bool` | (none) | Binary infix operator (2 terms). |
+| `"prefix"` | `bool` | (none) | Unary prefix operator (1 term). |
+| `"suffix"` | `bool` | (none) | Unary suffix operator (1 term). |
+| `"ternary"` | `bool` | (none) | Ternary operator (3 terms). Requires `"src": []interface{}{open, close}`. |
+| `"paren"` | `bool` | (none) | Paren/grouping operator. Requires `"osrc"`/`"csrc"`. |
 | `"preval"` | `bool` or `map[string]interface{}` | paren | Allow a preceding value (call/index syntax). See [Preval](#preval). |
 | `"use"` | `interface{}` | any | Arbitrary data carried onto the resolved `Op.Use`. |
 
@@ -183,8 +183,8 @@ third argument to an evaluate/resolve callback.
 
 ```go
 type Op struct {
-    Name    string // decorated name, e.g. "addition-infix"
-    Src     string // operator source, e.g. "+"
+    Name    string // decorated name, for example "addition-infix"
+    Src     string // operator source, for example "+"
     Left    int
     Right   int
     Prefix  bool
@@ -250,14 +250,14 @@ order matters):
 
 | Name | Kind | Source | `Left` | `Right` |
 |---|---|---|---|---|
-| `positive` | prefix | `+` | — | `4000000` |
-| `negative` | prefix | `-` | — | `4000000` |
+| `positive` | prefix | `+` | (none) | `4000000` |
+| `negative` | prefix | `-` | (none) | `4000000` |
 | `addition` | infix | `+` | `2000000` | `2100000` |
 | `subtraction` | infix | `-` | `2000000` | `2100000` |
 | `multiplication` | infix | `*` | `3000000` | `3100000` |
 | `division` | infix | `/` | `3000000` | `3100000` |
 | `remainder` | infix | `%` | `3000000` | `3100000` |
-| `plain` | paren | `(` `)` | — | — |
+| `plain` | paren | `(` `)` | (none) | (none) |
 
 Precedence order (loosest → tightest): addition/subtraction <
 multiplication/division/remainder < unary prefix. Supply the same key in your

@@ -3,9 +3,9 @@
 Understanding-oriented. This is the Go companion to the
 [TypeScript concepts doc](../../ts/doc/concepts.md). The TypeScript
 implementation is canonical; the Go package `tabnasexpr` is a faithful port
-and produces identical results. This page covers the same ideas — the engine
+and produces identical results. This page covers the same ideas (the engine
 relationship, the S-expression AST, the Pratt binding-power scale, and
-paren/ternary/preval semantics — and then lists where the Go port differs
+paren/ternary/preval semantics) and then lists where the Go port differs
 mechanically.
 
 ---
@@ -14,14 +14,14 @@ mechanically.
 
 `tabnasexpr` is **not** a standalone parser. Three layers stack:
 
-1. **The Tabnas engine** — a configurable, rule-based parser with a lexer.
+1. **The Tabnas engine**. A configurable, rule-based parser with a lexer.
    In Go it is re-exported through `github.com/tabnas/jsonic/go`
    (`jsonic.Make`, `jsonic.Rule`, `jsonic.Context`, …), so the plugin imports
    only `jsonic`.
-2. **jsonic** — the relaxed-JSON grammar (`val`, `map`, `list`, `pair`,
+2. **jsonic**. The relaxed-JSON grammar (`val`, `map`, `list`, `pair`,
    `elem` rules). This understands objects, arrays, bare words, comments, and
    implicit structure.
-3. **`tabnasexpr`** — this plugin. It hooks new alternates onto jsonic's
+3. **`tabnasexpr`**. This plugin. It hooks new alternates onto jsonic's
    `val` rule and adds its own `expr` and `paren` rules (plus `ternary` when
    configured), so operator syntax is available anywhere a jsonic *value* can
    appear.
@@ -74,7 +74,7 @@ any mix of precedences and associativities. The core lives in `prattify`
 This is the most important concept for configuring operators.
 
 A binding power is just an integer. The Pratt core compares powers **only**
-with `<` and `<=` — never the *distance* between two numbers, only their
+with `<` and `<=`, never the *distance* between two numbers, only their
 **order**:
 
 > Only the ORDER of the magnitudes is a contract. The magnitudes themselves
@@ -106,7 +106,7 @@ leaving the range above the tightest built-in open for your operators:
     5000000  exponent          (** ^, right-assoc)
     6000000  postfix / suffix  (! ? ++)
     7000000  call / index / member  (f() a[i] a.b)
-    8000000+ free — the whole range above 4000000 is open for client ops
+    8000000+ free: the whole range above 4000000 is open for client ops
 ```
 
 Tiers are `1000000` apart; the `+100000` offset on a left-associative op's
@@ -123,7 +123,7 @@ Pick a tier base `N * 1000000`:
 - **Looser than addition**: below `2000000`.
 - **Sub-tier in a gap**: `base + 200000`, `base + 400000`, … (~4 per gap).
 
-You never rescale existing numbers to insert an operator — just pick a free
+You never rescale existing numbers to insert an operator; just pick a free
 tier. A full rescale, if ever done, must be an **order-preserving** remap of
 both the defaults and every operator power baked into the tests.
 
@@ -144,8 +144,8 @@ sub-expression.
 - **Preval** parens absorb the value immediately to their left as a first
   operand: `foo(1,2)` → `["(" "foo" [1 2]]`. `required: true` forces a
   leading value (so `[1]` is a list literal but `a[1]` is an index op);
-  `allow` restricts which leading names qualify. Preval parens **chain** —
-  each picks up the previous result — giving `f(x)(y)`, `a[0][1]`, and mixed
+  `allow` restricts which leading names qualify. Preval parens **chain**,
+  each picking up the previous result, giving `f(x)(y)`, `a[0][1]`, and mixed
   forms.
 
 ## Implicit structure
@@ -154,7 +154,7 @@ jsonic allows implicit lists and maps (`a,b` → `["a","b"]`, `x:1 y:2` →
 `{x:1, y:2}`). This plugin extends implicits to work inside parens too, so
 `foo(1,2)` and `(1 2 3)` produce list operands. That required extra
 context counters (`expr_paren`, `expr_ternary`, …) and context-sensitive edge
-handling — correctness details of the grammar wiring, not configuration.
+handling: correctness details of the grammar wiring, not configuration.
 
 ## Differences from the TS version
 
@@ -168,7 +168,7 @@ from Go's static typing:
   sees the change because JS arrays share identity. Go slices do **not** share
   a header, so the port wraps each expression in a `*jsonic.ListRef` (a
   pointer to a struct holding the slice). Re-pointing `ListRef.Val` in one
-  rule's action is then visible to every holder of the pointer — recovering
+  rule's action is then visible to every holder of the pointer, recovering
   the property TS arrays get for free. `Simplify` and `Evaluation` unwrap
   these boxes for you.
 
@@ -202,10 +202,10 @@ from Go's static typing:
   instead, so there is no `OP_MARK` field.
 
 None of these change the grammar, the operator set, the precedence rules, or
-the output shapes — they are how the same behaviour is achieved in Go.
+the output shapes: they are how the same behaviour is achieved in Go.
 
 ## See also
 
-- [Tutorial](tutorial.md) — the happy path end to end.
-- [Guide](guide.md) — recipes for custom operators, calls, ternaries.
-- [Reference](reference.md) — exact functions, types, and the default table.
+- [Tutorial](tutorial.md). The happy path end to end.
+- [Guide](guide.md). Recipes for custom operators, calls, ternaries.
+- [Reference](reference.md). Exact functions, types, and the default table.

@@ -87,7 +87,7 @@ Names: `factorial` → `factorial-suffix`, `at` → `at-prefix`.
 
 ## Define a function-call syntax (paren-preval)
 
-A "preval" paren absorbs the value to its left as a first operand — the shape
+A "preval" paren absorbs the value to its left as a first operand: the shape
 of a function call `f(args)`. Add `"preval"` to a paren op. With
 `"preval": {"active": true}` the paren works with or without a leading
 value:
@@ -204,7 +204,7 @@ b, _ := j.Parse("f(x)[i]")
 fmt.Println(tabnasexpr.Simplify(b)) // ["[" ["(" "f" "x"] "i"]
 ```
 
-Setting an op entry to `nil` removes it — here it removes the default
+Setting an op entry to `nil` removes it; here it removes the default
 `plain` paren so `(` is unambiguously `call`.
 
 ## Add a ternary (conditional) operator

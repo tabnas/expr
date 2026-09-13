@@ -16,7 +16,7 @@ import { Expr, evaluation, testing } from '@tabnas/expr'
 import type { ExprOptions, OpDef, Op, Evaluate } from '@tabnas/expr'
 ```
 
-The package is library-only — there is no CLI. `main` is `dist/expr.js`,
+The package is library-only: there is no CLI. `main` is `dist/expr.js`,
 types are `dist/expr.d.ts`.
 
 ## Exports
@@ -92,16 +92,16 @@ type OpDef = {
 
 | Field | Applies to | Description |
 |---|---|---|
-| `src` | infix, prefix, suffix | The operator token text, e.g. `'+'`. For `ternary`, a two-element array `[open, close]`, e.g. `['?', ':']`. |
-| `osrc` | paren | The opening token text, e.g. `'('`, `'['`, `'<'`. |
-| `csrc` | paren | The closing token text, e.g. `')'`, `']'`, `'>'`. |
+| `src` | infix, prefix, suffix | The operator token text, for example `'+'`. For `ternary`, a two-element array `[open, close]`, for example `['?', ':']`. |
+| `osrc` | paren | The opening token text, for example `'('`, `'['`, `'<'`. |
+| `csrc` | paren | The closing token text, for example `')'`, `']'`, `'>'`. |
 | `left` | infix, suffix | Left binding power. Higher binds tighter. Defaults to `Number.MIN_SAFE_INTEGER` (loosest). |
 | `right` | infix, prefix | Right binding power. Higher binds tighter. Defaults to `Number.MAX_SAFE_INTEGER` (tightest). |
-| `infix` | — | Mark as a binary infix operator (2 terms). |
-| `prefix` | — | Mark as a unary prefix operator (1 term). |
-| `suffix` | — | Mark as a unary suffix/postfix operator (1 term). |
-| `ternary` | — | Mark as a ternary operator (3 terms). Requires `src: [open, close]`. |
-| `paren` | — | Mark as a paren/grouping operator. Requires `osrc`/`csrc`. |
+| `infix` | (none) | Mark as a binary infix operator (2 terms). |
+| `prefix` | (none) | Mark as a unary prefix operator (1 term). |
+| `suffix` | (none) | Mark as a unary suffix/postfix operator (1 term). |
+| `ternary` | (none) | Mark as a ternary operator (3 terms). Requires `src: [open, close]`. |
+| `paren` | (none) | Mark as a paren/grouping operator. Requires `osrc`/`csrc`. |
 | `preval` | paren | Allow a preceding value (function-call / index syntax). See [Preval](#preval). |
 | `use` | any | Arbitrary data carried through onto the resolved `Op.use`. |
 
@@ -109,14 +109,14 @@ type OpDef = {
 [Concepts → binding-power scale](concepts.md#the-binding-power-scale).
 `left < right` is left-associative; `left > right` is right-associative.
 
-The same `src` may appear under two entries of different kinds — e.g. `+`
+The same `src` may appear under two entries of different kinds. For example `+`
 is both a `prefix` (`positive`) and an `infix` (`addition`). They share a
 token; the parser disambiguates by position.
 
 ### Preval
 
 `preval` makes a paren operator able to absorb the value immediately to its
-left as its first operand — the shape of `f(args)` and `a[i]`.
+left as its first operand: the shape of `f(args)` and `a[i]`.
 
 | Field | Default | Description |
 |---|---|---|
@@ -133,8 +133,8 @@ expression array, and the third argument to an `Evaluate` callback.
 
 ```ts
 type Op = {
-  name: string       // decorated name, e.g. 'addition-infix'
-  src: string        // operator source, e.g. '+'  (osrc for parens)
+  name: string       // decorated name, for example 'addition-infix'
+  src: string        // operator source, for example '+'  (osrc for parens)
   left: number
   right: number
   use: any
@@ -185,9 +185,9 @@ invoked **bottom-up**: by the time it sees an `op`, each entry of `terms` is
 the already-evaluated value of the corresponding operand. Return the value
 this sub-expression reduces to.
 
-- `rule`, `ctx` — the current parse `Rule` and `Context` (often unused).
-- `op` — the resolved `Op` (above).
-- `terms` — array of evaluated operands: length 1 (unary), 2 (infix), 3
+- `rule`, `ctx`. The current parse `Rule` and `Context` (often unused).
+- `op`. The resolved `Op` (above).
+- `terms`. Array of evaluated operands: length 1 (unary), 2 (infix), 3
   (ternary). For a preval paren call like `f(1,2)`, terms are
   `[funcName, argsValue]`.
 
@@ -200,8 +200,8 @@ function evaluation(rule: Rule, ctx: Context, node: any, evaluate: Evaluate): an
 Reduce a parsed S-expression tree to a value, outside of parsing. Use it
 when you parsed with no `evaluate` option (to defer or repeat evaluation).
 `rule`/`ctx` may be `null` if your callback ignores them. Plain values and
-maps pass through unchanged; a plain array — an implicit list, such as the
-parse of `1+2, 3+4` — is reduced element-wise into a new array.
+maps pass through unchanged; a plain array (an implicit list, such as the
+parse of `1+2, 3+4`) is reduced element-wise into a new array.
 
 The tree passed in is never modified, so the same tree can be reduced
 again with different semantics, and `evaluate` is called exactly once per
@@ -230,14 +230,14 @@ base-1,000,000 ladder; only their order matters.
 
 | Name | Kind | `src` | `left` | `right` | Notes |
 |---|---|---|---|---|---|
-| `positive` | prefix | `+` | — | `4000000` | unary plus |
-| `negative` | prefix | `-` | — | `4000000` | unary minus |
+| `positive` | prefix | `+` | (none) | `4000000` | unary plus |
+| `negative` | prefix | `-` | (none) | `4000000` | unary minus |
 | `addition` | infix | `+` | `2000000` | `2100000` | left-assoc |
 | `subtraction` | infix | `-` | `2000000` | `2100000` | left-assoc |
 | `multiplication` | infix | `*` | `3000000` | `3100000` | left-assoc |
 | `division` | infix | `/` | `3000000` | `3100000` | left-assoc |
 | `remainder` | infix | `%` | `3000000` | `3100000` | left-assoc |
-| `plain` | paren | `(` `)` | — | — | grouping |
+| `plain` | paren | `(` `)` | (none) | (none) | grouping |
 
 Precedence order (loosest → tightest): addition/subtraction <
 multiplication/division/remainder < unary prefix. Parens have neither power

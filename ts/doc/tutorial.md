@@ -12,7 +12,7 @@ By the end you will have:
 4. Dropped an expression inside ordinary JSON.
 
 `@tabnas/expr` is a plugin for the Tabnas/jsonic parser. It does not parse
-on its own — you stack it on top of the relaxed-JSON `jsonic` grammar.
+on its own; you stack it on top of the relaxed-JSON `jsonic` grammar.
 
 ---
 
@@ -49,7 +49,7 @@ shape of `1+2*3` is:
 ```
 
 Notice that `*` binds tighter than `+`, so `2*3` became a nested
-sub-expression. You did not write any parentheses — precedence did that.
+sub-expression. You did not write any parentheses; precedence did that.
 
 To make the tree easy to read (and to assert on), replace each `Op` with
 its `src` string. Here is a tiny helper plus a check the test harness
@@ -80,7 +80,7 @@ expression `['-', 1]`.
 ## 3. Evaluate to a value
 
 A parse tree is structure, not a number. To compute, supply an
-`evaluate` callback. It is called bottom-up — operands are already
+`evaluate` callback. It is called bottom-up: operands are already
 evaluated by the time your callback sees an operator. Its signature is
 `(rule, ctx, op, terms)`, where `terms` is the **array** of
 already-evaluated operands.
@@ -118,7 +118,7 @@ Two things to note:
 ## 4. Expressions inside JSON
 
 Because `Expr` layers on jsonic, expressions slot into any value
-position — map values, list elements, nested objects — and your
+position (map values, list elements, nested objects) and your
 evaluator runs on each one:
 
 ```js
@@ -145,9 +145,9 @@ That is the whole happy path: install, parse, evaluate, embed.
 
 ## Next steps
 
-- [Guide](guide.md) — recipes: add a custom operator, build function-call
+- [Guide](guide.md). Recipes: add a custom operator, build function-call
   syntax, restrict to strict math, walk the tree yourself.
-- [Reference](reference.md) — the exact exports, `OpDef` options, the
+- [Reference](reference.md). The exact exports, `OpDef` options, the
   default operator table, and the `Op`/`Evaluate` types.
-- [Concepts](concepts.md) — how Pratt parsing and the binding-power scale
+- [Concepts](concepts.md). How Pratt parsing and the binding-power scale
   work, and why the AST is built the way it is.

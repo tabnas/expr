@@ -79,7 +79,7 @@ The factorial binds tighter than `+`, so it grabs only the `2`; the prefix
 ## Define a function-call syntax (paren-preval)
 
 A "preval" paren is a paren operator that may take a **preceding value** as
-its first term — exactly the shape of a function call `f(args)` or an index
+its first term: exactly the shape of a function call `f(args)` or an index
 `a[i]`. Add `preval` to a `paren` op.
 
 With `preval: { active: true }`, the paren works both with and without a
@@ -173,12 +173,12 @@ show('a[0][1]')   // => ['[', ['[', 'a', 0], 1]
 show('f(x)[i]')   // => ['[', ['(', 'f', 'x'], 'i']
 ```
 
-Setting an op entry to `null` removes it — here it removes the default
+Setting an op entry to `null` removes it; here it removes the default
 `plain` paren so that `(` is unambiguously the `call` operator.
 
 ## Add a ternary (conditional) operator
 
-A ternary op has two source markers in `src` (open and close, e.g. `?` and
+A ternary op has two source markers in `src` (open and close, for example `?` and
 `:`). Ternaries are right-associative, so they chain like `cond ? a : cond2
 ? b : c`.
 
