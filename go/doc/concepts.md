@@ -180,7 +180,7 @@ from Go's static typing:
 
 - **Entry points.** The Go port exposes package-level `Parse`, `MakeJsonic`,
   `Simplify`, and `Evaluation` (capitalised, exported). The no-options
-  `Parse` reuses one lazily-built, concurrency-safe default instance because
+  `Parse` reuses one lazily built, concurrency-safe default instance because
   building the grammar dominates parse time. The TS package is library-only
   (`new Tabnas().use(jsonic).use(Expr)`); there is no `Parse`/`MakeJsonic`
   convenience there.

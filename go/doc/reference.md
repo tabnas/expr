@@ -26,7 +26,7 @@ no separate `parser` import.
 func Parse(src string, opts ...map[string]interface{}) (interface{}, error)
 ```
 
-Convenience parser. With **no** options it reuses a single lazily-created,
+Convenience parser. With **no** options it reuses a single lazily created,
 concurrency-safe default instance (so repeated calls don't rebuild the
 grammar). With options it builds a fresh instance per call. Returns the raw
 result; pass it through `Simplify` for a readable tree, or supply an
@@ -178,7 +178,7 @@ The struct form of an operator definition. (In practice you usually pass the
 
 ### `Op`
 
-The fully-resolved operator. It is the head of every expression slice and the
+The fully resolved operator. It is the head of every expression slice and the
 third argument to an evaluate/resolve callback.
 
 ```go

@@ -128,7 +128,7 @@ left as its first operand: the shape of `f(args)` and `a[i]`.
 
 ## `Op`
 
-The fully-resolved operator object. It is the **first element** of every
+The fully resolved operator object. It is the **first element** of every
 expression array, and the third argument to an `Evaluate` callback.
 
 ```ts
