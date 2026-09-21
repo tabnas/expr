@@ -109,6 +109,10 @@ package-lock.json
 yarn.lock
 
 
+# Rust build output (rs/target). rs/Cargo.lock IS committed.
+target/
+
+
 *~
 
 dist-test/

@@ -1,0 +1,34 @@
+[package]
+name = "tabnas-expr"
+version = "0.5.8"
+edition = "2021"
+rust-version = "1.85"
+authors = ["Richard Rodger <http://richardrodger.com>"]
+description = "Pratt expression-operator plugin for the tabnas parsing engine, over the jsonic base grammar"
+license = "MIT"
+repository = "https://github.com/tabnas/expr"
+readme = "README.md"
+keywords = ["parser", "grammar", "json", "plugin", "expression"]
+categories = ["parsing"]
+
+[lib]
+name = "tabnas_expr"
+path = "src/lib.rs"
+
+[dependencies]
+# The engine and the jsonic base grammar are consumed as SIBLING CHECKOUTS,
+# the standard tabnas development model: clone https://github.com/tabnas/parser
+# and https://github.com/tabnas/jsonic next to this repo. Neither crate is
+# published, so there is no registry version to fall back on. jsonic in turn
+# takes https://github.com/tabnas/json the same way.
+tabnas = { path = "../../parser/rs" }
+tabnas-jsonic = { path = "../../jsonic/rs" }
+indexmap = "2"
+
+[dev-dependencies]
+# The shared fixture loader and runner: the Rust half of @tabnas/support,
+# another sibling checkout (https://github.com/tabnas/support). The
+# `serde_json` feature is the bridge from the engine's `Value::to_json` to
+# the runner's fixture value.
+tabnas-support = { path = "../../support/rs", features = ["serde_json"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
