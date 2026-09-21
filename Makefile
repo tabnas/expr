@@ -1,20 +1,20 @@
-# Build, test and publish both the TypeScript (ts/) and Go (go/)
-# implementations. ts/ is canonical; go/ tracks it.
+# Build, test and publish the TypeScript (ts/), Go (go/) and Rust (rs/)
+# implementations. ts/ is canonical; go/ and rs/ track it.
 #
 # Local build/test resolve the unpublished @tabnas siblings via the
 # repo-set go.work + node_modules symlinks (admin/scripts/link.sh).
 
-.PHONY: all build test clean build-ts build-go test-ts test-go \
-        clean-ts clean-go publish-ts publish-go tags-go reset \
+.PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
+        clean-ts clean-go clean-rs publish-ts publish-go version-rs tags-go reset \
         prose prose-counts
 
 all: build test
 
-build: build-ts build-go
+build: build-ts build-go build-rs
 
-test: test-ts test-go
+test: test-ts test-go test-rs
 
-clean: clean-ts clean-go
+clean: clean-ts clean-go clean-rs
 
 # --- TypeScript (package in ts/) ---
 build-ts:
@@ -25,6 +25,31 @@ test-ts:
 
 clean-ts:
 	rm -rf ts/dist ts/dist-test
+
+# --- Rust (crate in rs/) ---
+build-rs:
+	cd rs && cargo build --all-targets
+
+# `--all-targets` does NOT include doctests (cargo documents the selector
+# as "Test all targets (does not include doctests)"), so the README
+# examples need their own run.
+test-rs:
+	cd rs && cargo test --all-targets && cargo test --doc
+	cd rs && cargo clippy --all-targets --all-features -- -D warnings
+
+clean-rs:
+	cd rs && cargo clean
+
+# Set the Rust crate version: make version-rs V=x.y.z
+#
+# Rewrites both Rust version sites and refreshes the crate's own entry in
+# rs/Cargo.lock, which rs/tests/version_test.rs holds to ts/package.json.
+version-rs:
+	@test -n "$(V)" || (echo "Usage: make version-rs V=x.y.z" && exit 1)
+	sed -i.bak 's/^version = ".*"/version = "$(V)"/' rs/Cargo.toml
+	sed -i.bak 's/^pub const VERSION: &str = ".*";/pub const VERSION: \&str = "$(V)";/' rs/src/lib.rs
+	rm -f rs/Cargo.toml.bak rs/src/lib.rs.bak
+	cd rs && cargo metadata --format-version 1 --offline >/dev/null
 
 # Publish the TypeScript package at its current package.json version.
 publish-ts: test-ts
@@ -60,6 +85,7 @@ tags-go:
 reset:
 	cd ts && npm run reset
 	cd go && go clean -cache && go build ./... && go test -v ./...
+	cd rs && cargo clean && cargo test --all-targets && cargo test --doc
 
 # The prose gate (see docs/STYLE-GUIDE.md). Vale over the reader-facing
 # pages, at the levels set in .vale.ini, on the same file list

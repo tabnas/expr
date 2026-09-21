@@ -8,7 +8,7 @@
 <!-- /tabnas-badges -->
 
 An expression-syntax plugin for the [Tabnas](https://github.com/tabnas/jsonic)
-JSON parser, available in both TypeScript and Go.
+JSON parser, available in TypeScript, Go and Rust.
 
 Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
 
@@ -24,7 +24,8 @@ This repository contains:
 |---|---|
 | [`ts/`](ts/) | TypeScript / JavaScript implementation (canonical). |
 | [`go/`](go/) | Go port. |
-| [`test/spec/`](test/spec/) | Shared conformance fixtures, exercised by both runtimes. |
+| [`rs/`](rs/) | Rust port (crate `tabnas-expr`). See [`rs/README.md`](rs/README.md). |
+| [`test/spec/`](test/spec/) | Shared conformance fixtures, exercised by all three runtimes. |
 
 ## Tiny example
 
@@ -68,6 +69,9 @@ Go port:
   [Guide](go/doc/guide.md) ·
   [Reference](go/doc/reference.md) ·
   [Concepts](go/doc/concepts.md)
+
+Rust port: [`rs/README.md`](rs/README.md) covers use, install, and the
+differences from the canonical TypeScript.
 
 ## Grammar diagram
 

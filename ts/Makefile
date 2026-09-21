@@ -1,12 +1,13 @@
-.PHONY: all build test clean build-ts build-go test-ts test-go clean-ts clean-go publish-go tags-go tidy-go reset
+.PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
+        clean-ts clean-go clean-rs publish-go tags-go tidy-go reset
 
 all: build test
 
-build: build-ts build-go
+build: build-ts build-go build-rs
 
-test: test-ts test-go
+test: test-ts test-go test-rs
 
-clean: clean-ts clean-go
+clean: clean-ts clean-go clean-rs
 
 # TypeScript
 build-ts:
@@ -27,6 +28,17 @@ test-go:
 
 clean-go:
 	cd ../go && go clean -cache
+
+# Rust
+build-rs:
+	cd ../rs && cargo build --all-targets
+
+test-rs:
+	cd ../rs && cargo test --all-targets && cargo test --doc
+	cd ../rs && cargo clippy --all-targets --all-features -- -D warnings
+
+clean-rs:
+	cd ../rs && cargo clean
 
 # Publish Go module: make publish-go V=0.1.7
 publish-go: test-go
@@ -49,3 +61,5 @@ reset:
 	cd ../go && go clean -cache
 	cd ../go && go build ./...
 	cd ../go && go test -v ./...
+	cd ../rs && cargo clean
+	cd ../rs && cargo test --all-targets && cargo test --doc

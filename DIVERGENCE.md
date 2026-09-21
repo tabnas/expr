@@ -1,8 +1,9 @@
 # Divergences — @tabnas/expr
 
-Differences between the TypeScript and Go ports that are **recorded rather
-than repaired**, each pinned by a test in both ports so the record cannot
-outlive what it records (admin `DECISIONS.md` ADR-14).
+Differences between the TypeScript implementation and a port that are
+**recorded rather than repaired**, each pinned by a test in the ports it
+names so the record cannot outlive what it records (admin `DECISIONS.md`
+ADR-14).
 
 A pin here fails when the divergence is REPAIRED, not only when it
 regresses. That is deliberate: it is the signal to delete the entry along
@@ -19,6 +20,14 @@ Measured on the simplest expression that shows it, `{a:1+2}`:
 | --- | --- |
 | TypeScript | `[{"src":"+","left":2000000,"right":2100000,"name":"addition-infix", …}]` |
 | Go | `{"Val":[{"Name":"addition-infix","Src":"+","Left":2000000, …}], "Child":null,"Implicit":false,"Meta":{"expr":true}}` |
+| Rust | `[{"src":"+","left":2000000.0,"right":2100000.0,"name":"addition-infix", …},1.0,2.0]` |
+
+**The Rust port is on the TypeScript side of both halves**, deliberately:
+the term list directly, and lower-case keys. It is pinned by
+*"the AST shape is the TypeScript one"* (`rs/tests/expr_test.rs`), which
+fails if either half ever drifts to the Go shape. The `.0` on the numbers
+is the JSON renderer, not the shape: every engine number is an `f64`, and
+`Value::to_string` prints the same values as TypeScript does.
 
 Two **independently repairable** differences, so each has its own
 paragraph and its own pair of pins. Closing one does not close the other,
@@ -86,3 +95,53 @@ Those three were reported under the probe's `signed-zero` input class,
 which is what the inputs were, not what the difference is. Reading the
 label rather than the payload would suggest a signed-zero bug in this
 port. There is none.
+
+## The Rust port refuses a very large expression
+
+**Not repaired** — it is a crash fix, and removing it would make a
+pathological document end the process rather than fail.
+
+`tabnas_expr::NODE_LIMIT` is 127. An expression that grows past that many
+nodes is refused with the engine's `cancel` code. A flat sum of `n` terms
+is `n-1` nodes, so 128 terms is the largest one this port accepts.
+
+Measured on `0+1+2+…`, at the sizes that separate the three:
+
+| terms | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| 128 | the expression | the expression | the expression |
+| 129 | the expression | the expression | `ERROR:cancel` |
+| 3200 | the expression | the expression | `ERROR:cancel` |
+| 5000 | `RangeError: Maximum call stack size exceeded` | the expression | `ERROR:cancel` |
+
+None of the three is unbounded, and only one of them fails cleanly.
+TypeScript raises a JavaScript `RangeError` rather than a tabnas error,
+somewhere between 3200 and 5000 terms on the measuring machine, because
+the value walk is recursive there too; Go grows its stacks and keeps
+going.
+
+The Rust engine walks a value with the CALL STACK to display it, convert
+it to JSON or drop it, and a fixed-size thread stack turns that into an
+ABORT rather than an error: the process ends, and no caller can catch it.
+Refusing early is what turns the abort back into a parse error. The limit
+is the one [`tabnas-jsonic`](https://github.com/tabnas/jsonic) already
+applies to nested containers for the same reason, so a document parsed by
+this plugin cannot nest deeper than this anyway.
+
+`tabnas_expr::RULE_LIMIT` is the second half of the same fix. An
+UNTERMINATED nesting, `(((((` with no closer, builds no expression at
+all, so the node limit never sees it, and the engine's cost per step
+grows with the rule stack: 1000 openers took 5 seconds and 2000 took 23,
+which is the super-linear behaviour hostile input must not be able to
+buy. A parse whose rule stack passes 1024 frames is refused with `cancel`
+as well. The deepest document the base grammar accepts, 127 nested
+containers, measures 378 frames.
+
+Pinned by *"an expression past the node limit is refused"*
+(`rs/tests/expr_test.rs`), which fails if either limit is removed as well
+as if it regresses.
+
+It is deliberately NOT in the shared fixtures: a row asserting `cancel`
+would be red in TypeScript and Go, and a row asserting the expression
+would be red in Rust. The rule in [`test/AGENTS.md`](test/AGENTS.md) keeps
+intentional divergences out of `test/spec`.

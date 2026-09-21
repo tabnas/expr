@@ -10,12 +10,14 @@
 
 [Aa]ssociativities
 [Bb]ooleans
+[Cc]lippy
 [Dd]isambiguates
 [Ee]num
 [Ee]xpr
 [Ii]mplicits
 [Ii]nspectable
 [Jj]sonic
+[Ll]ockfile
 [Nn]pm
 [Pp]aren
 [Pp]arens
