@@ -62,7 +62,16 @@ Consequences to keep in mind:
   drives, and at the START of the next parse for a caller driving the
   engine directly. So a result read straight off `Tabnas::parse` must go
   through `realize` before the next parse on that thread. `parse`,
-  `parse_with`, `parse_simplified` and `parse_scope` do it for you.
+  `parse_with` and `parse_simplified` do it for you. `parse_scope` does
+  NOT: holding the handles live is what it is for, and its closure returns
+  a type parameter, so neither the signature nor the body can realize what
+  comes back or refuse a handle in it. A handle that escapes it names a
+  node the arena has dropped, and `realize` and `simplify` PANIC on one.
+  They used to report it as an empty array, which handed a caller a
+  well-formed value that had silently lost the whole expression: the worst
+  of the three outcomes, because nothing downstream could tell it from a
+  parse of an empty document. Node identities never repeat, so a stale
+  handle can never be read as a live node of a later parse.
 - **`NODE_LIMIT` is a crash fix, not a style choice.** The engine walks a
   value with the call stack to display, convert or drop it, and a flat
   sum of a few thousand terms builds a tree as deep as it is long: the
@@ -144,6 +153,17 @@ PARENT, which this engine exposes as a snapshot; the ternary rule hands
 the evaluator itself, and does so here too. `site.flag("paren_preval")`
 is the test a function-paren evaluator needs to tell a preval call from a
 plain group.
+
+`site.token()` is the OCCURRENCE. The `Op` handed over is the shared
+description, one `Arc` per entry in the operator table, so it is the same
+value for every `+` in a document and cannot say which one is being
+reduced. The canonical `makeOp` copies the description and attaches the
+token for exactly that reason; this port keeps the token in the node
+beside the op, and `evaluation` moves it onto the site around the
+`evaluate` call, restoring what was there so an outer reduction keeps
+pointing at its own operator. The position is the engine's `Site` triple:
+`token.site.pos`, `.ri` and `.ci`. A node built by calling `prattify`
+directly has no token, and the site reports `None`.
 
 `EVALUATED` is the port of the canonical `WeakSet`: an implicit list is
 reduced a member at a time as its members close and again as a whole once

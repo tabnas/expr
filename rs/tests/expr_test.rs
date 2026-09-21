@@ -12,7 +12,7 @@ mod common;
 use std::collections::HashMap;
 
 use serde_json::json;
-use tabnas::{Context, Rule, Tabnas, Value};
+use tabnas::{Context, LexCheckResult, Rule, Tabnas, Value};
 use tabnas_expr::{
     is_op, opify, prattify, simplify, EvalSite, ExprOptions, Op, OpDef, OpRef, PrevalDef,
 };
@@ -688,6 +688,62 @@ fn evaluation_reduces_a_finished_tree() {
     }
 }
 
+/// The evaluator is told which OCCURRENCE of an operator it is reducing.
+///
+/// The `Op` it receives is the shared description, one per entry in the
+/// operator table, so it is the same value for every `+` in a document.
+/// The canonical `makeOp` copies the description and attaches the token
+/// for exactly that reason; this port keeps the token beside the node and
+/// hands it over on the site. Without it an evaluator could not report the
+/// row and column of the operator it is reducing.
+#[test]
+fn the_evaluator_is_given_the_occurrence_token() {
+    let parser = parser_for(json!({}));
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let record = seen.clone();
+    let note: tabnas_expr::Evaluate =
+        std::sync::Arc::new(move |site: &mut EvalSite<'_>, op: &Op, terms: &[Value]| {
+            let token = site.token().expect("an occurrence carries its token");
+            record.lock().expect("not poisoned").push(format!(
+                "{} {} {} {} {}",
+                op.name, token.src, token.site.pos, token.site.ri, token.site.ci
+            ));
+            terms.first().cloned().unwrap_or(Value::Null)
+        });
+
+    tabnas_expr::parse_scope(&parser, "1+2*3", |value| {
+        tabnas_expr::evaluation(&mut EvalSite::detached(), &value, &note)
+    })
+    .expect("parses");
+
+    // Innermost first, and each one carries its own token: the `*` at
+    // column 4 and the `+` at column 2, the positions the canonical
+    // attaches to its copy of the description.
+    assert_eq!(
+        *seen.lock().expect("not poisoned"),
+        vec![
+            "multiplication-infix * 3 1 4".to_string(),
+            "addition-infix + 1 1 2".to_string(),
+        ]
+    );
+}
+
+/// A tree built without a parse behind it has no token to report, and
+/// says so rather than inventing one.
+#[test]
+fn a_handmade_node_has_no_occurrence_token() {
+    let add = infix("+", 2000000, 2100000);
+    let node = expr(&add, &[1.0, 2.0]);
+    let asked: tabnas_expr::Evaluate =
+        std::sync::Arc::new(|site: &mut EvalSite<'_>, _op: &Op, _terms: &[Value]| {
+            Value::Bool(site.token().is_none())
+        });
+    assert_eq!(
+        tabnas_expr::evaluation(&mut EvalSite::detached(), &node, &asked),
+        Value::Bool(true)
+    );
+}
+
 // --- the operator table ----------------------------------------------------
 
 /// An operator's token identity comes from the INSTANCE, not from a global
@@ -718,6 +774,41 @@ fn operators_bind_to_instance_fixed_tokens() {
     );
     // The host's identity is still the one bound to the source.
     assert_eq!(Some(host), parser.fixed("@"));
+}
+
+/// A host that already configured `options.fixed.check` still gets its
+/// comments lexed as comments.
+///
+/// The default `/` operator is a prefix of both `//` and `/*`, and the
+/// fixed matcher runs before the comment one, so the plugin makes the
+/// fixed family stand aside where a comment starts. Omitting that because
+/// the host had claimed the hook cut `// note` into two `/` operators and
+/// the document failed with `unexpected`. The canonical reorders the
+/// matchers instead, so a host check never sees a comment opener there
+/// either, and `1/2 // note` parses in TypeScript whether or not a host
+/// check is installed.
+#[test]
+fn a_host_fixed_check_keeps_the_comment_guard() {
+    let mut parser = tabnas_jsonic::make();
+    parser.lex_check_ref("@host-fixed", |_remaining: &str| LexCheckResult::Continue);
+    parser
+        .grammar_json(r#"{"options":{"fixed":{"check":"@host-fixed"}}}"#)
+        .expect("the host check installs");
+    parser
+        .use_plugin(tabnas_expr::plugin(), None)
+        .expect("the plugin installs");
+
+    for (src, want) in [
+        ("1/2 // note", json!(["/", 1, 2])),
+        ("1/2 /* note */", json!(["/", 1, 2])),
+        ("a:1/2 // note", json!({ "a": ["/", 1, 2] })),
+    ] {
+        assert_eq!(
+            norm(parse_simplified(&parser, src).unwrap_or_else(|error| panic!("{src:?}: {error}"))),
+            norm(want),
+            "parse {src:?}"
+        );
+    }
 }
 
 /// Operator setup is deterministic, so precedence never varies between
@@ -751,6 +842,40 @@ fn a_later_operator_wins_a_shared_source() {
         norm(parse_simplified(&parser, "f(1)").expect("parses")),
         norm(json!(["(", "f", 1]))
     );
+}
+
+/// A binding power of ZERO is an UNSET binding power, as it is in the
+/// canonical `opdef.left || Number.MIN_SAFE_INTEGER` and
+/// `opdef.right || Number.MAX_SAFE_INTEGER`: JavaScript's `||` is
+/// falsy-based, so a zero falls through to the fallback exactly as an
+/// absent power does.
+///
+/// It shows in the tree when a zero-power operator meets one with a
+/// NEGATIVE power, the only way to sit below zero. Keeping the zero made
+/// `1@2~3` parse as `["@",1,["~",2,3]]`, because `~`'s left of `0` no
+/// longer bound looser than `@`'s right of `-2`. Measured against the
+/// canonical; Go keeps the zero here, which `../DIVERGENCE.md` records,
+/// so the case cannot be a shared fixture row.
+#[test]
+fn a_zero_binding_power_is_unset() {
+    let parser = parser_for(json!({
+        "op": {
+            "at": { "infix": true, "src": "@", "left": -2, "right": -2 },
+            "tilde": { "infix": true, "src": "~", "left": 0, "right": 0 },
+        }
+    }));
+    for (src, want) in [
+        ("1@2~3", json!(["~", ["@", 1, 2], 3])),
+        ("1~2@3", json!(["@", ["~", 1, 2], 3])),
+        ("1~2~3", json!(["~", ["~", 1, 2], 3])),
+        ("1@2@3", json!(["@", ["@", 1, 2], 3])),
+    ] {
+        assert_eq!(
+            norm(parse_simplified(&parser, src).expect("parses")),
+            norm(want),
+            "parse {src:?}"
+        );
+    }
 }
 
 /// The plugin layers on the base grammar, and says so rather than
@@ -875,6 +1000,39 @@ fn realize_converts_an_engine_parse() {
     );
     let value = tabnas_expr::realize(&raw);
     assert_eq!(norm(simplify(&value).to_json()), norm(json!(["+", 1, 2])));
+}
+
+/// A handle that escapes `parse_scope` is REFUSED, not quietly reported
+/// as an empty expression.
+///
+/// The closure's return type is a type parameter, so the signature can
+/// neither realize what comes back nor stop a handle from being in it.
+/// The arena is released as `parse_scope` returns, and a later walk of an
+/// escaped handle used to hand back `[]`: a well-formed value that had
+/// silently lost the whole expression, which no caller could tell from a
+/// parse of an empty document.
+#[test]
+fn a_handle_that_escapes_the_scope_is_refused() {
+    let parser = parser_for(json!({}));
+
+    // Returned directly.
+    let escaped = tabnas_expr::parse_scope(&parser, "1+2*3", |value| value).expect("parses");
+    let realized = std::panic::catch_unwind(|| tabnas_expr::realize(&escaped));
+    assert!(realized.is_err(), "realize must refuse a released handle");
+
+    // Embedded in another return value.
+    let wrapped = tabnas_expr::parse_scope(&parser, "1+2*3", |value| vec![value]).expect("parses");
+    let simplified = std::panic::catch_unwind(|| simplify(&wrapped[0]));
+    assert!(simplified.is_err(), "simplify must refuse it too");
+
+    // Realizing INSIDE the scope is what a caller does instead, and the
+    // realized value outlives the arena.
+    let kept = tabnas_expr::parse_scope(&parser, "1+2*3", |value| tabnas_expr::realize(&value))
+        .expect("parses");
+    assert_eq!(
+        norm(simplify(&kept).to_json()),
+        norm(json!(["+", 1, ["*", 2, 3]]))
+    );
 }
 
 /// The expression arena is per-thread, so parsers are usable from several

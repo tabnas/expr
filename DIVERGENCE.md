@@ -96,6 +96,58 @@ which is what the inputs were, not what the difference is. Reading the
 label rather than the payload would suggest a signed-zero bug in this
 port. There is none.
 
+## Go keeps a binding power of zero, where TypeScript treats it as unset
+
+**Not repaired here** — the repair belongs to the Go port, and this entry
+records where the three stand until it lands.
+
+The canonical `makeOpMap` reads a custom operator's powers as
+`opdef.left || Number.MIN_SAFE_INTEGER` and
+`opdef.right || Number.MAX_SAFE_INTEGER`. JavaScript's `||` is
+falsy-based, so a power of `0` is not a power of zero: it falls through to
+the fallback exactly as an absent power does. Go copies `def.Left` and
+`def.Right` straight across with no fallback at all, so a zero stays a
+zero there — and an UNSET power is also zero, because that is the Go
+zero value. The Rust port kept the zero too, through
+`def.left.unwrap_or(MIN_SAFE_INTEGER)`; it now matches TypeScript.
+
+It is invisible until a zero-power operator meets one with a NEGATIVE
+power, the only way to sit below zero. Measured with two custom infix
+operators, `@` at `left: -2, right: -2` and `~` at `left: 0, right: 0`:
+
+| input | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `1@2~3` | `["~",["@",1,2],3]` | `["@",1,["~",2,3]]` | `["~",["@",1,2],3]` |
+| `1~2@3` | `["@",["~",1,2],3]` | `["@",["~",1,2],3]` | `["@",["~",1,2],3]` |
+| `1~2~3` | `["~",["~",1,2],3]` | `["~",["~",1,2],3]` | `["~",["~",1,2],3]` |
+| `1@2@3` | `["@",["@",1,2],3]` | `["@",["@",1,2],3]` | `["@",["@",1,2],3]` |
+
+Where each cell comes from:
+
+- **TypeScript**: `node` over `ts/dist/expr.js`, the build of the
+  canonical `ts/src/expr.ts`, installed on `@tabnas/jsonic` with those two
+  operators and reduced by the suite's own `S` helper. It printed
+  `1@2~3 => ["~",["@",1,2],3]`.
+- **Go**: a probe test in `go/`, `makeExprJsonic` with the same two
+  operators through `simplifyAndNormalize`. It printed
+  `1@2~3 => ["@",1,["~",2,3]]`.
+- **Rust**: `cargo test` over `parse_simplified` with the same two
+  operators. Before the repair it printed `["@",1.0,["~",2.0,3.0]]`; it
+  now prints `["~",["@",1.0,2.0],3.0]`. The `.0` is the JSON renderer:
+  every engine number is an `f64`.
+
+Only the first row separates the three, and the other three rows are here
+to show that the rest of the table agrees, so the difference is the
+fallback and not the comparison.
+
+Pinned by *"a zero binding power is unset"* (`rs/tests/expr_test.rs`),
+which fails if this port ever keeps the zero again.
+
+It is deliberately NOT a shared fixture row: the row would be red in Go,
+and [`test/AGENTS.md`](test/AGENTS.md) keeps intentional divergences out
+of `test/spec`. When the Go port takes the fallback, the row can move
+there and this entry goes with it.
+
 ## The Rust port refuses a very large expression
 
 **Not repaired** — it is a crash fix, and removing it would make a

@@ -153,8 +153,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 A tree can also be reduced after the parse, which is the parse-once,
 evaluate-many workflow. The expression nodes are live only while the
-arena of that parse is open, so the reduction runs inside
-`parse_scope`:
+arena of that parse is open, so the reduction runs inside `parse_scope`
+and what the closure returns is the reduced value, never the tree:
 
 ```rust
 use tabnas::Value;
@@ -227,16 +227,23 @@ points where the host language has no way to say what JavaScript says:
   option bag, so it sits on `ExprOptions` outside serialization and
   reaches the grammar through `plugin_with` and `make_with`. It receives
   an `EvalSite` in place of the rule and context pair, through which the
-  rule's `paren_preval` flag and the live context are reachable.
+  rule's `paren_preval` flag, the live context and the token of the
+  operator OCCURRENCE being reduced are reachable. The `Op` itself is the
+  shared description, one per entry in the operator table, so the token is
+  what tells one `+` in a document from another; TypeScript attaches it to
+  its copy of the description for the same reason.
 - **Expressions are rewritten in place through a per-parse arena.** The
   algorithm rewrites a partly built expression while several rules hold
   it, which JavaScript gets from array identity. An engine value is
   copied on write, so a parse builds its expressions in a per-thread
   arena and the value that travels through the parse is a handle into it.
-  `parse`, `parse_with`, `parse_simplified` and `parse_scope` resolve the
-  handles at the parse boundary; a caller driving a `tabnas` instance
-  directly calls `realize` on the result, before the next parse on that
-  thread.
+  `parse`, `parse_with` and `parse_simplified` resolve the handles at the
+  parse boundary; a caller driving a `tabnas` instance directly calls
+  `realize` on the result, before the next parse on that thread.
+  `parse_scope` does not resolve them, because holding them live is its
+  whole purpose, so a handle must not escape what its closure returns:
+  `realize` and `simplify` PANIC on a handle whose nodes have been
+  released rather than reporting the lost expression as an empty array.
 - **An expression of more than 127 nodes is refused** with the engine's
   `cancel` code, so a flat sum of at most 128 terms. The engine walks a
   value with the call stack to display, convert or drop it, and a flat
@@ -255,7 +262,11 @@ points where the host language has no way to say what JavaScript says:
 - **A comment marker beats an operator token.** Where an operator source
   is a prefix of a comment opener, `/` and `//` for instance, the fixed
   matcher stands aside so the comment matcher takes the run. TypeScript
-  reorders the two to the same end; the Go port does neither.
+  reorders the two to the same end; the Go port does neither. The engine
+  allows one check on the fixed family, so a check a host had already
+  configured is displaced by this one rather than chained to it. A host
+  that needs both installs its own check after this plugin and skips the
+  comment openers itself.
 - **Lone surrogates fold to U+FFFD**, and the regular expression dialect
   is the `regex` crate's. Both come from the engine, and both are
   recorded there.

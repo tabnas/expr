@@ -359,6 +359,7 @@ fn token_value(token: Option<&Token>) -> Value {
 pub struct EvalSite<'a> {
     rule: Option<Rc<RuleSnapshot>>,
     context: Option<&'a mut Context>,
+    token: Option<Token>,
 }
 
 impl<'a> EvalSite<'a> {
@@ -367,6 +368,7 @@ impl<'a> EvalSite<'a> {
         EvalSite {
             rule: None,
             context: None,
+            token: None,
         }
     }
 
@@ -375,12 +377,29 @@ impl<'a> EvalSite<'a> {
         EvalSite {
             rule,
             context: Some(context),
+            token: None,
         }
     }
 
     /// The rule the reduction belongs to, when there is one.
     pub fn rule(&self) -> Option<&RuleSnapshot> {
         self.rule.as_deref()
+    }
+
+    /// The token this OCCURRENCE of the operator was matched from.
+    ///
+    /// The `Op` an evaluator receives is the shared description, one per
+    /// entry in the operator table, so it cannot say which occurrence is
+    /// being reduced. The canonical `makeOp` attaches the token to its
+    /// copy of the description for exactly that reason; this port keeps
+    /// the token beside the node instead, and hands it over here. The
+    /// position is the engine's `Site` triple: `token.site.pos`, `.ri`
+    /// (row) and `.ci` (column).
+    ///
+    /// It is `None` when the node was built without one, which is what
+    /// [`prattify`] called directly produces.
+    pub fn token(&self) -> Option<&Token> {
+        self.token.as_ref()
     }
 
     /// The live parse context, when there is one.
@@ -397,11 +416,14 @@ impl<'a> EvalSite<'a> {
             .is_some_and(|rule| matches!(rule.u.get(name), Some(Value::Bool(true))))
     }
 
-    /// Reborrow, so a recursive reduction passes the same site down.
+    /// Reborrow, so a recursive reduction passes the same site down. The
+    /// token is not carried: it belongs to one occurrence, and the nested
+    /// reduction sets the one it is reducing.
     fn reborrow(&mut self) -> EvalSite<'_> {
         EvalSite {
             rule: self.rule.clone(),
             context: self.context.as_deref_mut(),
+            token: None,
         }
     }
 }
@@ -1007,6 +1029,29 @@ fn term_count(node: &Value) -> usize {
     with_node(node, |entry| entry.terms.len()).unwrap_or(0)
 }
 
+/// Refuse a handle whose node the arena no longer holds.
+///
+/// A node leaves the arena only when a parse releases it wholesale, so a
+/// handle that names a missing one is a value that outlived the scope its
+/// nodes were live in: taken out of [`parse_scope`], or read straight off
+/// [`Tabnas::parse`] and kept across the next parse on this thread. Node
+/// identities never repeat, so the handle cannot have been captured by a
+/// later parse either: the expression it headed is simply gone.
+///
+/// This is loud on purpose. Reporting the missing node as an empty array
+/// let a walk finish and hand back a well-formed value that had silently
+/// lost the whole expression, which is worse than either a correct answer
+/// or no answer: nothing downstream could tell the two apart.
+fn released_handle(id: u64) -> ! {
+    panic!(
+        "tabnas-expr: expression node {id} has been released. The value \
+         holding this handle outlived its parse: realize it with \
+         `tabnas_expr::realize` inside the `parse_scope` closure, or before \
+         the next parse on this thread, and let the realized value escape \
+         instead."
+    )
+}
+
 /// Drop every node this thread's arena holds.
 ///
 /// The arena is per-thread and is released when the outermost parse
@@ -1087,7 +1132,7 @@ fn realize_seen(value: &Value, open: &mut Vec<u64>) -> Value {
             let Some((op, token, terms)) = with_node(value, |entry| {
                 (entry.op.clone(), entry.token.clone(), entry.terms.clone())
             }) else {
-                return Value::array(Vec::new());
+                released_handle(id)
             };
             open.push(id);
             let mut out = Vec::with_capacity(terms.len() + 1);
@@ -1153,7 +1198,7 @@ fn simplify_seen(value: &Value, open: &mut Vec<u64>) -> Value {
             let Some((op, terms)) =
                 with_node(value, |entry| (entry.op.clone(), entry.terms.clone()))
             else {
-                return Value::array(Vec::new());
+                released_handle(id)
             };
             open.push(id);
             let mut out = Vec::with_capacity(terms.len() + 1);
@@ -1456,16 +1501,23 @@ pub fn evaluation(site: &mut EvalSite<'_>, value: &Value, evaluate: &Evaluate) -
     }
 
     let out = if is_op(value) {
-        let Some((Some(op), terms)) =
-            with_node(value, |entry| (entry.op.clone(), entry.terms.clone()))
-        else {
+        let Some((Some(op), token, terms)) = with_node(value, |entry| {
+            (entry.op.clone(), entry.token.clone(), entry.terms.clone())
+        }) else {
             return value.clone();
         };
         let reduced: Vec<Value> = terms
             .iter()
             .map(|term| evaluation(&mut site.reborrow(), term, evaluate))
             .collect();
-        evaluate(site, &op, &reduced)
+        // The occurrence token travels on the site, not on the shared
+        // description: `op` is one entry of the operator table and is the
+        // same object for every occurrence. Restoring the previous token
+        // keeps an outer reduction pointing at its own operator.
+        let previous = std::mem::replace(&mut site.token, token);
+        let reduction = evaluate(site, &op, &reduced);
+        site.token = previous;
+        reduction
     } else if let Value::Array(entries) = value {
         // An implicit list is a plain array, not an expression node, so
         // the branch above does not reach its members. Reduce them into a
@@ -1545,6 +1597,22 @@ fn operator_tin(parser: &mut Tabnas, src: &str) -> (Tin, String) {
     (tin, name)
 }
 
+/// An operator definition's binding power, or the fallback when it is
+/// unset.
+///
+/// The canonical `makeOpMap` writes `opdef.left || Number.MIN_SAFE_INTEGER`
+/// and `opdef.right || Number.MAX_SAFE_INTEGER`. JavaScript's `||` is
+/// falsy-based, so a power of ZERO is not a power of zero there: it falls
+/// through to the fallback exactly as an absent one does. Keeping the zero
+/// changes the tree a zero-power operator builds against one with a
+/// negative power, which `../DIVERGENCE.md` measures.
+fn binding_power(power: Option<i64>, unset: i64) -> i64 {
+    match power {
+        Some(0) | None => unset,
+        Some(power) => power,
+    }
+}
+
 /// Build one token-led operator map, the port of the canonical
 /// `makeOpMap`.
 fn make_op_map(
@@ -1564,8 +1632,8 @@ fn make_op_map(
         let suffix = format!("-{}", anyfix.name());
         let op = Op {
             src: src.clone(),
-            left: def.left.unwrap_or(MIN_SAFE_INTEGER),
-            right: def.right.unwrap_or(MAX_SAFE_INTEGER),
+            left: binding_power(def.left, MIN_SAFE_INTEGER),
+            right: binding_power(def.right, MAX_SAFE_INTEGER),
             name: if name.ends_with(&suffix) {
                 name.clone()
             } else {
@@ -1947,13 +2015,24 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
 /// from a `check` on the fixed family: where a comment starts, the fixed
 /// matcher stands aside and the comment matcher takes the run.
 ///
-/// It is installed only when some operator source really is a prefix of a
-/// comment marker, and only when nothing else has claimed the hook.
+/// It is installed whenever some operator source really is a prefix of a
+/// comment marker, INCLUDING on a host that already configured
+/// `options.fixed.check`. Omitting it there left the host's check in place
+/// and the `/` operator ahead of `//` and `/*`, so a valid comment lexed
+/// as operators and the document failed; the canonical runs a host check
+/// and lexes comments correctly at the same time, because reordering the
+/// matchers means the fixed family, its check included, is never reached
+/// at a comment opener. Standing aside there is the same behaviour.
+///
+/// A host check is DISPLACED rather than chained. `LexCheck` holds its
+/// callback privately and the engine offers no way to run one from
+/// outside, so the check installed here cannot call through to the one it
+/// replaces; everywhere but a contested comment opener it returns
+/// `Continue`, which is what the fixed family does with no check at all. A
+/// host that needs both installs its own check AFTER this plugin and skips
+/// the comment openers itself.
 fn comment_before_fixed(parser: &mut Tabnas, grammar: &Grammar) {
     let options = parser.config();
-    if options.fixed.check.is_some() {
-        return;
-    }
     let markers: Vec<String> = options
         .comment
         .definitions
@@ -3480,6 +3559,16 @@ pub fn parse_with(parser: &Tabnas, src: &str) -> Result<Value, TabnasError> {
 /// This is the parse-once, evaluate-many workflow: inside the closure the
 /// expression nodes are live, so [`evaluation`] can reduce them, and
 /// whatever the closure returns outlives them.
+///
+/// The arena is released when this returns, so the closure must not let an
+/// expression HANDLE escape in what it returns. Return a reduced value, as
+/// the example below does, or call [`realize`] on the tree and return
+/// that; [`parse_with`] is the same parse with the realizing already done.
+/// A handle that escapes names a node that no longer exists, and
+/// [`realize`] and [`simplify`] then PANIC rather than report the lost
+/// expression as an empty array. The closure return type is a type
+/// parameter, so nothing in the signature can realize it for a caller, and
+/// nothing in it can stop a handle from being returned.
 ///
 /// ```
 /// use tabnas::Value;
