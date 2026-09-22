@@ -462,3 +462,57 @@ fn spec_evaluate_math() {
         });
     run_spec("evaluate-math.tsv", parser_with(options));
 }
+
+// --- the coverage itself ---------------------------------------------------
+
+/// Every shared fixture on disk is run by a test in this file.
+///
+/// Fixture coverage was a prose claim before this: `../AGENTS.md` said all
+/// three runtimes run `test/spec/*.tsv`, and nothing failed when one of
+/// them did not. A fixture only some runtimes run proves nothing, and the
+/// runtime that quietly skips one is the runtime that has drifted.
+///
+/// The check reads this source file rather than a hand-kept list, because
+/// a hand-kept list is the same claim one indirection further away: a
+/// fixture could be added to it without a `run_spec` call and the gate
+/// would still be green. A fixture name is "run" when it appears as a
+/// string literal here, which is exactly how `run_spec` is handed one.
+#[test]
+fn every_shared_fixture_is_run() {
+    let source = std::fs::read_to_string(
+        common::repo_root()
+            .join("rs")
+            .join("tests")
+            .join("parity_test.rs"),
+    )
+    .expect("this test file is readable");
+
+    let mut fixtures: Vec<String> = std::fs::read_dir(spec_dir())
+        .expect("the shared fixture directory is readable")
+        .map(|entry| entry.expect("a readable directory entry").file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".tsv"))
+        .collect();
+    fixtures.sort();
+
+    assert!(
+        !fixtures.is_empty(),
+        "no fixtures in {}; the coverage gate would pass over nothing",
+        spec_dir().display()
+    );
+
+    let missing: Vec<&String> = fixtures
+        .iter()
+        .filter(|name| !source.contains(&format!("\"{name}\"")))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "no Rust runner for {} of {} shared fixtures: {:?}. \
+         Add a `run_spec` test with the operator table the file assumes, \
+         matching the TypeScript and Go runners.",
+        missing.len(),
+        fixtures.len(),
+        missing
+    );
+}

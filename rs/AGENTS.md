@@ -10,7 +10,7 @@ is specific to this crate.
 | Path | |
 |---|---|
 | `src/lib.rs` | the whole port: the operator model, the options, the expression arena, the Pratt core, every rule the plugin adds, the evaluator, `realize` / `simplify`, and `plugin` / `plugin_with` / `apply` / `make` / `make_with` / `parse` |
-| `tests/parity_test.rs` | every shared `../test/spec/*.tsv` fixture through `tabnas_support::Runner`, each with the operator table its file assumes |
+| `tests/parity_test.rs` | every shared `../test/spec/*.tsv` fixture through `tabnas_support::Runner`, each with the operator table its file assumes, plus `every_shared_fixture_is_run`, which reads the fixture directory and fails when a file has no runner here |
 | `tests/expr_test.rs` | in-language behaviour: the Pratt core, comma-operator suppression, the evaluator, the ternary after-close, the instance token binding, the parsed shape, threads, hostile input |
 | `tests/perf_test.rs` | the machine-independent instance-reuse guards |
 | `tests/version_test.rs` | `Cargo.toml` equals `VERSION` equals `ts/package.json` |
