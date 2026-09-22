@@ -982,6 +982,31 @@ func TestOperatorOrderDeterministic(t *testing.T) {
 	}
 }
 
+// TestCommentAfterOperatorDiverges pins the Go half of the comment-marker
+// entry in DIVERGENCE.md: once `/` is an operator, this port lexes no
+// comment at all, where TypeScript and Rust both read one.
+//
+// The repair is not available from this repository. This port reaches the
+// engine through github.com/tabnas/jsonic/go, whose engine.go re-exports
+// the engine types but not the matcher factories, so there is no
+// MakeCommentMatcher to register below the fixed matcher's order of
+// 2000000 — which is how TypeScript gets the same effect, with
+// lex.match.comment.order of 1e5.
+//
+// The test fails when this port starts reading the comment, which is the
+// signal to delete this pin and the matching DIVERGENCE.md paragraph.
+func TestCommentAfterOperatorDiverges(t *testing.T) {
+	j := makeExprJsonic()
+	for _, src := range []string{"1 //c", "1/2 //c", "1/2 /* c */"} {
+		if _, err := j.Parse(src); err == nil {
+			t.Errorf("%q now parses; TypeScript and Rust already read the "+
+				"comment, so the Go half of the comment-marker DIVERGENCE.md "+
+				"entry is repaired — delete this pin and that paragraph, and "+
+				"move the rows into test/spec", src)
+		}
+	}
+}
+
 // TestZeroBindingPowerIsUnset reads the built operators rather than a parse
 // result, because that is where the defect lived: a declared power of 0 has
 // to leave makeAllOps as the unset sentinel, exactly as the canonical

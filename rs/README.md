@@ -261,12 +261,19 @@ points where the host language has no way to say what JavaScript says:
   `sync.Once`.
 - **A comment marker beats an operator token.** Where an operator source
   is a prefix of a comment opener, `/` and `//` for instance, the fixed
-  matcher stands aside so the comment matcher takes the run. TypeScript
-  reorders the two to the same end; the Go port does neither. The engine
+  matcher stands aside so the comment matcher takes the run. The engine
   allows one check on the fixed family, so a check a host had already
   configured is displaced by this one rather than chained to it. A host
   that needs both installs its own check after this plugin and skips the
   comment openers itself.
+
+  This port reads MORE comments than the canonical, not the same ones.
+  TypeScript reorders the two matchers instead, which reads a marker
+  separated from the operator by a space (`1/2 // note`) but not one
+  adjacent to a value (`1//note`); the Go port reads neither. Bare jsonic
+  reads the adjacent one in every runtime, so the canonical is the
+  defective side there and the repair belongs to its engine, not to this
+  port. [`../DIVERGENCE.md`](../DIVERGENCE.md) measures all three.
 - **Lone surrogates fold to U+FFFD**, and the regular expression dialect
   is the `regex` crate's. Both come from the engine, and both are
   recorded there.

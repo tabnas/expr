@@ -96,6 +96,79 @@ which is what the inputs were, not what the difference is. Reading the
 label rather than the payload would suggest a signed-zero bug in this
 port. There is none.
 
+## A comment marker adjacent to an operator lexes differently in all three
+
+**Not repaired** — the residue is in the three engines' lexers, not in
+this plugin, and the two halves below need changes in repositories this
+plugin does not own.
+
+The default `/` operator is a prefix of the comment openers `//` and
+`/*`, so the fixed-token matcher and the comment matcher contend for the
+same run of characters. Each runtime resolves that differently:
+TypeScript sets `lex.match.comment.order` to `1e5` so the comment matcher
+runs before the fixed one; the Rust port puts a `check` on the fixed
+family, so the fixed matcher stands aside where a contested marker
+begins; the Go port does neither.
+
+Measured on the default operator table, with the operator objects reduced
+to their `src`:
+
+| input | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `1 //c` | `1` | `ERROR:unexpected` | `1` |
+| `1/2 //c` | `["/",1,2]` | `ERROR:unexpected` | `["/",1,2]` |
+| `1//c` | `ERROR:unexpected` | `ERROR:unexpected` | `1` |
+| `1/2//c` | `ERROR:unexpected` | `ERROR:unexpected` | `["/",1,2]` |
+| `a:1//c` | `ERROR:unexpected` | `ERROR:unexpected` | `{"a":1}` |
+| `1/*c*/` | `ERROR:unexpected` | `ERROR:unexpected` | `1` |
+
+Two **independently repairable** halves, so each has its own paragraph
+and its own pin. Closing one does not close the other.
+
+### Go lexes no comment at all once `/` is an operator
+
+Rows 1 and 2: TypeScript and Rust read the comment, Go reports the `/`
+as unexpected. This is the half `ADR-13` puts squarely on the port, and
+it is not repairable from this repository today. `go/expr.go` reaches the
+engine through `github.com/tabnas/jsonic/go`, whose `engine.go` re-exports
+the engine types but not the matcher factories, so there is no
+`MakeCommentMatcher` to register at an order below the fixed matcher's
+`2000000`. The repair needs `tabnas/jsonic` to re-export it, after which
+the Go plugin registers it the way TypeScript sets the order.
+
+Pinned by `TestCommentAfterOperatorDiverges` (`go/expr_test.go`), which
+fails when Go starts reading the comment.
+
+### Rust reads a comment marker TypeScript does not
+
+Rows 3 to 6: the marker sits immediately after a value, with no space
+before it, and only Rust reads it. This half is NOT a port defect to
+repair. Bare `jsonic` reads `1//c` as `1` in every runtime; it is
+registering `/` as a fixed token that breaks it in TypeScript, and the
+break survives the reorder. Measured on the canonical engine with no
+plugin involved:
+
+| parser | `1//c` |
+| --- | --- |
+| bare jsonic | `1` |
+| bare jsonic, `/` added as a fixed token | `ERROR:unexpected` |
+| the same, plus `lex.match.comment.order: 1e5` | `ERROR:unexpected` |
+
+So the canonical is the defective side, and `ADR-13` puts the repair
+there rather than in a port: making Rust reject `1//c` would copy a
+TypeScript defect into a port, which is the one thing a port must not do.
+The repair belongs to the TypeScript engine's fixed matcher, in
+`tabnas/parser`.
+
+Pinned by *"a comment marker adjacent to a value is read"*
+(`rs/tests/expr_test.rs`) and *"a comment marker adjacent to a value is
+not read"* (`ts/test/expr.test.ts`), which fail together when the two
+agree again.
+
+It is deliberately NOT a shared fixture: every row above is red in at
+least one runtime, and [`test/AGENTS.md`](test/AGENTS.md) keeps
+intentional divergences out of `test/spec`.
+
 ## The Rust port refuses a very large expression
 
 **Not repaired** — it is a crash fix, and removing it would make a
