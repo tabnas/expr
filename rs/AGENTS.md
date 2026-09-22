@@ -31,8 +31,12 @@ cargo fmt
 ```
 
 `make test-rs` from the repository root is the fast loop; `ci/rust/run.sh`
-is the full gate and adds `fmt --check`, the lockfile check and the MSRV
-pin.
+is the full gate and adds `fmt --check`, the lockfile check, the MSRV pin
+and `cargo doc --no-deps` under `RUSTDOCFLAGS=-D warnings`. rustdoc is the
+only one of the three compilers over this crate that resolves an intra-doc
+link, and a doctest fence is executed rather than linked, so a link naming
+a type the crate does not have passed every other check and rendered as
+plain text.
 
 ## The expression arena, and why there is one
 
