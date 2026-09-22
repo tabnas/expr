@@ -605,8 +605,12 @@ there, not in this repo.
 
 Workflow files cannot be written by session credentials (admin
 `DECISIONS.md` ADR-8); a maintainer promotes them via the admin
-`rollout/apply-ci-folders.sh` script. The now-empty `ci/` staging
-directory is a leftover of that flow.
+`rollout/apply-ci-folders.sh` script. `ci/` is the staging directory for
+that flow, and it is not empty: `ci/workflows/docs.yml` (the Vale prose
+gate) and `ci/workflows/rust.yml` (the Rust gate, which runs
+`ci/rust/run.sh`) are both waiting on a promotion. `ci/README.md` says
+what each one does. Until they are promoted, `ci/rust/run.sh` run locally
+is the only full check of the Rust port, as "Verify your work" says.
 
 ## Agent tooling
 
