@@ -27,8 +27,8 @@ type OpDef struct {
 	Src     interface{} // string or []string (for ternary)
 	OSrc    string
 	CSrc    string
-	Left    int
-	Right   int
+	Left    int64
+	Right   int64
 	Prefix  bool
 	Suffix  bool
 	Infix   bool
@@ -42,8 +42,8 @@ type OpDef struct {
 type Op struct {
 	Name    string
 	Src     string
-	Left    int
-	Right   int
+	Left    int64
+	Right   int64
 	Prefix  bool
 	Suffix  bool
 	Infix   bool
@@ -1819,13 +1819,17 @@ func resolveOptions(opts map[string]interface{}) *ExprOptions {
 						od.CSrc = v
 					}
 					if v, ok := defMap["left"].(float64); ok {
-						od.Left = int(v)
+						od.Left = int64(v)
 					} else if v, ok := defMap["left"].(int); ok {
+						od.Left = int64(v)
+					} else if v, ok := defMap["left"].(int64); ok {
 						od.Left = v
 					}
 					if v, ok := defMap["right"].(float64); ok {
-						od.Right = int(v)
+						od.Right = int64(v)
 					} else if v, ok := defMap["right"].(int); ok {
+						od.Right = int64(v)
+					} else if v, ok := defMap["right"].(int64); ok {
 						od.Right = v
 					}
 					if v, ok := defMap["prefix"].(bool); ok {
@@ -1909,9 +1913,17 @@ func addDefaultOps(eopts *ExprOptions) {
 // values the canonical makeOpMap falls back to, rather than math.MinInt /
 // math.MaxInt: a Go-width sentinel would order differently against a
 // legitimately huge binding power than the canonical one does.
+//
+// Both are typed int64, as are the Left/Right fields that carry them and
+// the Rust port's equivalents. The pair needs 54 bits, and int is 32 bits
+// wide on GOARCH=386, arm, mips and the other 32-bit targets, where an
+// untyped 54-bit constant is a COMPILE error rather than a wrong answer.
+// Nothing that runs on one architecture can see that, so `make build-go`
+// cross-compiles with `GOARCH=386 go vet ./...` and
+// TestBindingPowerCarriersAreInt64 states the requirement here.
 const (
-	MinSafeInteger = -(1 << 53) + 1
-	MaxSafeInteger = (1 << 53) - 1
+	MinSafeInteger int64 = -(1 << 53) + 1
+	MaxSafeInteger int64 = (1 << 53) - 1
 )
 
 // bindingPower reads a declared binding power, substituting the unset
@@ -1927,7 +1939,7 @@ const (
 // zero-power operator bind as an ordinary very-low precedence, which
 // builds a different tree against an operator on a negative tier
 // (`test/spec/binding-power-zero.tsv`).
-func bindingPower(power, unset int) int {
+func bindingPower(power, unset int64) int64 {
 	if 0 == power {
 		return unset
 	}

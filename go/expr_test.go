@@ -1031,8 +1031,8 @@ func TestZeroBindingPowerIsUnset(t *testing.T) {
 
 	for _, kase := range []struct {
 		name  string
-		left  int
-		right int
+		left  int64
+		right int64
 	}{
 		// Declared as zero.
 		{"zero-infix", MinSafeInteger, MaxSafeInteger},
@@ -1058,6 +1058,34 @@ func TestZeroBindingPowerIsUnset(t *testing.T) {
 	if MinSafeInteger != -9007199254740991 || MaxSafeInteger != 9007199254740991 {
 		t.Errorf("sentinels are %d and %d, not the JavaScript safe-integer pair",
 			MinSafeInteger, MaxSafeInteger)
+	}
+}
+
+// TestBindingPowerCarriersAreInt64 pins the WIDTH of the binding-power
+// fields. The sentinels are the JavaScript safe-integer pair, which needs
+// 54 bits; `int` is 32 bits wide on GOARCH=386, arm, mips and the other
+// 32-bit targets, so carrying a binding power in `int` makes this module
+// fail to compile there rather than fail a test. `go vet` and `go test`
+// run on one architecture, so nothing else in this suite would notice.
+// The cross-compile step in the Makefile's `build-go` target is the other
+// half of this guard; this test states the requirement in the source.
+func TestBindingPowerCarriersAreInt64(t *testing.T) {
+	for _, kase := range []struct {
+		what  string
+		field reflect.Type
+	}{
+		{"OpDef.Left", reflect.TypeOf(OpDef{}.Left)},
+		{"OpDef.Right", reflect.TypeOf(OpDef{}.Right)},
+		{"Op.Left", reflect.TypeOf(Op{}.Left)},
+		{"Op.Right", reflect.TypeOf(Op{}.Right)},
+		{"MinSafeInteger", reflect.TypeOf(MinSafeInteger)},
+		{"MaxSafeInteger", reflect.TypeOf(MaxSafeInteger)},
+	} {
+		if reflect.Int64 != kase.field.Kind() {
+			t.Errorf("%s is %s, not int64: the safe-integer sentinels do not "+
+				"fit a 32-bit int, so this module stops compiling on 32-bit "+
+				"targets", kase.what, kase.field)
+		}
 	}
 }
 

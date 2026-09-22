@@ -195,9 +195,9 @@ way it does so the fixes are not "simplified" back into bugs.
    builds an operator's powers with `opdef.left || Number.MIN_SAFE_INTEGER`
    and `opdef.right || Number.MAX_SAFE_INTEGER`, and `0` is falsy in
    JavaScript, so a declared zero takes the fallback exactly as an omitted
-   power does. Go copied `def.Left`/`def.Right` across untouched, and an
-   `int` field is `0` whether it was omitted or declared, so a zero bound as
-   an ordinary very-low precedence. `bindingPower` in `makeAllOps`
+   power does. Go copied `def.Left`/`def.Right` across untouched, and a
+   numeric field is `0` whether it was omitted or declared, so a zero bound
+   as an ordinary very-low precedence. `bindingPower` in `makeAllOps`
    substitutes `MinSafeInteger` / `MaxSafeInteger` for a zero. Those
    sentinels are the JavaScript safe-integer pair rather than `math.MinInt` /
    `math.MaxInt`, so comparisons against a legitimately huge binding power
@@ -205,6 +205,16 @@ way it does so the fixes are not "simplified" back into bugs.
    NEGATIVE tier, which is what the `binding-power-zero.tsv` shared fixture
    supplies; `TestZeroBindingPowerIsUnset` reads the built operators
    directly. The Rust port has taken the fallback since it was written.
+
+   The sentinels also fix the WIDTH of the carriers. They need 54 bits, so
+   `OpDef.Left`/`Right`, `Op.Left`/`Right` and `bindingPower` are `int64`,
+   matching the Rust port's `i64`. An `int` is 32 bits wide on `386`, `arm`
+   and `mips`, where an untyped 54-bit constant is a COMPILE error rather
+   than a wrong answer, and nothing that runs on one architecture can see
+   it. `make build-go` therefore runs `GOARCH=386 go vet ./...` after
+   `go build ./...` (`vet` rather than `build` because it type-checks the
+   test files too), and `TestBindingPowerCarriersAreInt64` states the
+   requirement in the source.
 
 When porting a behaviour change, keep all four invariants: instance-level
 `FixedSrc` lookups, sorted op iteration, the suffix paren-guard/infix
@@ -250,7 +260,8 @@ Go (from `go/`):
 
 ```bash
 go build ./...
-go test -v ./...       # unit tests + shared .tsv fixtures
+GOARCH=386 go vet ./...  # 32-bit cross-check; see the parity note on int64
+go test -v ./...         # unit tests + shared .tsv fixtures
 ```
 
 Rust (from `rs/`; needs the sibling checkouts named above):
@@ -294,6 +305,7 @@ Narrower, when iterating:
 ```bash
 (cd ts && npm test)          # `pretest` builds first, then node --test over dist-test/
 (cd go && go test ./...)     # unit tests + the shared .tsv fixtures
+(cd go && GOARCH=386 go vet ./...)   # the port must build 32-bit too
 (cd rs && cargo test --all-targets && cargo test --doc)
 ```
 

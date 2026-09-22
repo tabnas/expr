@@ -114,8 +114,8 @@ The plugin's version. It always equals the `version` in `ts/package.json`;
 
 ```go
 const (
-	MinSafeInteger = -(1 << 53) + 1
-	MaxSafeInteger = (1 << 53) - 1
+	MinSafeInteger int64 = -(1 << 53) + 1
+	MaxSafeInteger int64 = (1 << 53) - 1
 )
 ```
 
@@ -125,6 +125,13 @@ declares `0`. They are the integer equivalents of JavaScript's
 canonical falls back to, rather than `math.MinInt` / `math.MaxInt`: a
 Go-width sentinel would order differently against a legitimately huge
 binding power.
+
+Both are typed `int64`, and so are the `Left` / `Right` fields that carry
+them, because the pair needs 54 bits and `int` is 32 bits wide on `386`,
+`arm`, `mips` and the other 32-bit targets. Typing them `int` there is not
+a narrowing at run time but a build failure, so `make build-go`
+cross-compiles the port with `GOARCH=386 go vet ./...`. The Rust port
+carries the same powers as `i64`.
 
 ## Options map
 
@@ -143,8 +150,8 @@ Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 | `"src"` | `string` or `[]interface{}` | infix/prefix/suffix; ternary | Operator text, for example `"+"`. For ternary, a two-element slice `[]interface{}{"?", ":"}`. |
 | `"osrc"` | `string` | paren | Opening token text, for example `"("`. |
 | `"csrc"` | `string` | paren | Closing token text, for example `")"`. |
-| `"left"` | `int` (or `float64`) | infix, suffix | Left binding power. Higher binds tighter. Defaults to `MinSafeInteger` (loosest); a declared `0` takes that default too. |
-| `"right"` | `int` (or `float64`) | infix, prefix | Right binding power. Higher binds tighter. Defaults to `MaxSafeInteger` (tightest); a declared `0` takes that default too. |
+| `"left"` | `int64` (or `int`, or `float64`) | infix, suffix | Left binding power. Higher binds tighter. Defaults to `MinSafeInteger` (loosest); a declared `0` takes that default too. |
+| `"right"` | `int64` (or `int`, or `float64`) | infix, prefix | Right binding power. Higher binds tighter. Defaults to `MaxSafeInteger` (tightest); a declared `0` takes that default too. |
 | `"infix"` | `bool` | (none) | Binary infix operator (2 terms). |
 | `"prefix"` | `bool` | (none) | Unary prefix operator (1 term). |
 | `"suffix"` | `bool` | (none) | Unary suffix operator (1 term). |
@@ -176,8 +183,8 @@ type OpDef struct {
     Src     interface{} // string or []string (ternary)
     OSrc    string
     CSrc    string
-    Left    int
-    Right   int
+    Left    int64
+    Right   int64
     Prefix  bool
     Suffix  bool
     Infix   bool
@@ -201,8 +208,8 @@ third argument to an evaluate/resolve callback.
 type Op struct {
     Name    string // decorated name, for example "addition-infix"
     Src     string // operator source, for example "+"
-    Left    int
-    Right   int
+    Left    int64
+    Right   int64
     Prefix  bool
     Suffix  bool
     Infix   bool
