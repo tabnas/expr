@@ -90,7 +90,14 @@ Each infix operator has a `Left` and `Right` power:
   `2^(3^2)`.
 
 Prefix operators have only `Right` (no left term), suffix operators only
-`Left`. The unset side falls back to the loosest/tightest extreme.
+`Left`. The unset side falls back to the loosest/tightest extreme,
+`MinSafeInteger` and `MaxSafeInteger`.
+
+A declared power of `0` is unset too. Go cannot tell an omitted `int` field
+from an explicit `0`, and neither can the canonical, which writes the
+fallback as `opdef.left || Number.MIN_SAFE_INTEGER` over a falsy zero. An
+operator that has to bind looser than everything on the ladder therefore
+needs a negative power rather than a zero.
 
 ### The default ladder
 

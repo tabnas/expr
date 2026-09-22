@@ -97,6 +97,23 @@ func TestSpecStructure(t *testing.T) {
 	runSpec(t, "structure.tsv", j)
 }
 
+func TestSpecBindingPowerZero(t *testing.T) {
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			// "zero" declares both powers as 0, which the canonical reads as
+			// unset; "below" sits on a negative tier, the only place a
+			// genuine zero would differ from the unset fallback.
+			"zero": map[string]interface{}{
+				"infix": true, "left": 0, "right": 0, "src": "~",
+			},
+			"below": map[string]interface{}{
+				"infix": true, "left": -2000000, "right": -1900000, "src": "@",
+			},
+		},
+	})
+	runSpec(t, "binding-power-zero.tsv", j)
+}
+
 func TestSpecUnaryPrefixBasic(t *testing.T) {
 	j := makeExprJsonic()
 	runSpec(t, "unary-prefix-basic.tsv", j)
@@ -962,6 +979,60 @@ func TestOperatorOrderDeterministic(t *testing.T) {
 		if !reflect.DeepEqual(got, first) {
 			t.Fatalf("operator order not deterministic across builds:\n first: %v\n got:   %v", first, got)
 		}
+	}
+}
+
+// TestZeroBindingPowerIsUnset reads the built operators rather than a parse
+// result, because that is where the defect lived: a declared power of 0 has
+// to leave makeAllOps as the unset sentinel, exactly as the canonical
+// `opdef.left || Number.MIN_SAFE_INTEGER` leaves it. An omitted power is the
+// same int zero in Go, so both arrive here as "unset" — which is also all the
+// canonical can tell them apart as. The tree this builds is pinned by the
+// shared `binding-power-zero.tsv` fixture.
+func TestZeroBindingPowerIsUnset(t *testing.T) {
+	j := jsonic.Make()
+	ops := makeAllOps(j, resolveOptions(map[string]interface{}{
+		"op": map[string]interface{}{
+			"zero": map[string]interface{}{
+				"infix": true, "left": 0, "right": 0, "src": "~",
+			},
+		},
+	}))
+
+	byName := make(map[string]*Op, len(ops))
+	for _, op := range ops {
+		byName[op.Name] = op
+	}
+
+	for _, kase := range []struct {
+		name  string
+		left  int
+		right int
+	}{
+		// Declared as zero.
+		{"zero-infix", MinSafeInteger, MaxSafeInteger},
+		// Omitted: a prefix op gives only right, a paren op neither.
+		{"negative-prefix", MinSafeInteger, 4000000},
+		{"plain-paren", MinSafeInteger, MaxSafeInteger},
+		// Declared and non-zero: carried across untouched.
+		{"addition-infix", 2000000, 2100000},
+	} {
+		op := byName[kase.name]
+		if op == nil {
+			t.Fatalf("no operator %q in %v", kase.name, byName)
+		}
+		if op.Left != kase.left || op.Right != kase.right {
+			t.Errorf("%s: got left=%d right=%d, want left=%d right=%d",
+				kase.name, op.Left, op.Right, kase.left, kase.right)
+		}
+	}
+
+	// The sentinels are the JavaScript ones, not math.MinInt/math.MaxInt: a
+	// Go-width sentinel orders differently against a legitimately huge
+	// binding power than the canonical one does.
+	if MinSafeInteger != -9007199254740991 || MaxSafeInteger != 9007199254740991 {
+		t.Errorf("sentinels are %d and %d, not the JavaScript safe-integer pair",
+			MinSafeInteger, MaxSafeInteger)
 	}
 }
 

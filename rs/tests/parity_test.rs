@@ -153,6 +153,22 @@ fn suffix_ops() -> serde_json::Value {
 }
 
 #[test]
+fn spec_binding_power_zero() {
+    run_spec(
+        "binding-power-zero.tsv",
+        parser_for(json!({
+            "op": {
+                // `zero` declares both powers as 0, which the canonical
+                // reads as unset; `below` sits on a negative tier, the only
+                // place a genuine zero would differ from the fallback.
+                "zero": { "infix": true, "left": 0, "right": 0, "src": "~" },
+                "below": { "infix": true, "left": -2000000, "right": -1900000, "src": "@" },
+            }
+        })),
+    );
+}
+
+#[test]
 fn spec_unary_prefix_edge() {
     run_spec(
         "unary-prefix-edge.tsv",

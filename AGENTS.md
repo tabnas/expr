@@ -146,9 +146,9 @@ Two consequences agents must internalise:
   tier base `N*1000000` (left = base, right = base+100000 for
   left-assoc) — no rescale needed.
 
-## Go-port parity: instance tins, deterministic op order, suffix drilling
+## Go-port parity: instance tins, op order, suffix drilling, zero powers
 
-Three defects in the Go port (`go/expr.go`) diverged from the canonical
+Four defects in the Go port (`go/expr.go`) diverged from the canonical
 TS behaviour. The first two bit downstream hosts that embed this plugin
 (notably the `@tabnas/c` parser, which hands `expr` a `(`/`+`/`*`/… op
 table and a host lexer that emits its own punctuation tins). All are
@@ -179,9 +179,10 @@ way it does so the fixes are not "simplified" back into bugs.
    integrates a suffix into the assembled expression tree. Two TS behaviours
    the Go port initially missed: (a) a suffix applied to a **paren** group
    must wrap it (`(1-2)!` → `["!",["(",...]]`), never drill inside — in TS a
-   paren op has no `right`, so `right <= left` is false (JS `undefined <= n`
-   is false) and it falls through to the wrap branch; in Go a paren op's
-   `Right` is the `0` zero-value, so it must be excluded explicitly. (b) a
+   paren op's `right` is `MAX_SAFE_INTEGER`, so `right <= left` is false and
+   it falls through to the wrap branch; `bindingPower` (item 4) now gives a
+   Go paren op the same `right`, and the explicit `!exprOp.Paren` test states
+   the intent rather than carrying it alone. (b) a
    higher-precedence suffix must drill into a lower-precedence **prefix OR
    infix** sub-expression so it binds to the rightmost operand (`0!-1!*2!` →
    `["-",["!",0],["*",["!",1],["!",2]]]`). TS reaches (b) via parse flow
@@ -190,9 +191,24 @@ way it does so the fixes are not "simplified" back into bugs.
    must also drill through infix sub-ops. Locked in by the
    `unary-suffix-arith.tsv` shared fixture.
 
-When porting a behaviour change, keep all three invariants: instance-level
-`FixedSrc` lookups, sorted op iteration, and the suffix paren-guard/infix
-drill.
+4. **A binding power of ZERO is an UNSET binding power.** The canonical
+   builds an operator's powers with `opdef.left || Number.MIN_SAFE_INTEGER`
+   and `opdef.right || Number.MAX_SAFE_INTEGER`, and `0` is falsy in
+   JavaScript, so a declared zero takes the fallback exactly as an omitted
+   power does. Go copied `def.Left`/`def.Right` across untouched, and an
+   `int` field is `0` whether it was omitted or declared, so a zero bound as
+   an ordinary very-low precedence. `bindingPower` in `makeAllOps`
+   substitutes `MinSafeInteger` / `MaxSafeInteger` for a zero. Those
+   sentinels are the JavaScript safe-integer pair rather than `math.MinInt` /
+   `math.MaxInt`, so comparisons against a legitimately huge binding power
+   order as the canonical orders them. It shows only against an operator on a
+   NEGATIVE tier, which is what the `binding-power-zero.tsv` shared fixture
+   supplies; `TestZeroBindingPowerIsUnset` reads the built operators
+   directly. The Rust port has taken the fallback since it was written.
+
+When porting a behaviour change, keep all four invariants: instance-level
+`FixedSrc` lookups, sorted op iteration, the suffix paren-guard/infix
+drill, and the zero-is-unset fallback.
 
 ## debug-model composition test (@tabnas/debug)
 

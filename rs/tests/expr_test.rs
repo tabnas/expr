@@ -853,9 +853,10 @@ fn a_later_operator_wins_a_shared_source() {
 /// It shows in the tree when a zero-power operator meets one with a
 /// NEGATIVE power, the only way to sit below zero. Keeping the zero made
 /// `1@2~3` parse as `["@",1,["~",2,3]]`, because `~`'s left of `0` no
-/// longer bound looser than `@`'s right of `-2`. Measured against the
-/// canonical; Go keeps the zero here, which `../DIVERGENCE.md` records,
-/// so the case cannot be a shared fixture row.
+/// longer bound looser than `@`'s right of `-2`. All three runtimes take
+/// the fallback now, so the behaviour is also a shared fixture
+/// (`binding-power-zero.tsv`); this case keeps the small powers the
+/// original measurement used.
 #[test]
 fn a_zero_binding_power_is_unset() {
     let parser = parser_for(json!({

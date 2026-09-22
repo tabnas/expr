@@ -104,11 +104,27 @@ for you.
 ### `VERSION`
 
 ```go
-const VERSION = "0.4.2"
+const VERSION = "0.5.8"
 ```
 
 The plugin's version. It always equals the `version` in `ts/package.json`;
 `TestVersionMatchesPackageJSON` fails the build if the two drift.
+
+### `MinSafeInteger` / `MaxSafeInteger`
+
+```go
+const (
+	MinSafeInteger = -(1 << 53) + 1
+	MaxSafeInteger = (1 << 53) - 1
+)
+```
+
+The binding powers an operator gets when it declares none, and when it
+declares `0`. They are the integer equivalents of JavaScript's
+`Number.MIN_SAFE_INTEGER` and `Number.MAX_SAFE_INTEGER`, which is what the
+canonical falls back to, rather than `math.MinInt` / `math.MaxInt`: a
+Go-width sentinel would order differently against a legitimately huge
+binding power.
 
 ## Options map
 
@@ -127,8 +143,8 @@ Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 | `"src"` | `string` or `[]interface{}` | infix/prefix/suffix; ternary | Operator text, for example `"+"`. For ternary, a two-element slice `[]interface{}{"?", ":"}`. |
 | `"osrc"` | `string` | paren | Opening token text, for example `"("`. |
 | `"csrc"` | `string` | paren | Closing token text, for example `")"`. |
-| `"left"` | `int` (or `float64`) | infix, suffix | Left binding power. Higher binds tighter. |
-| `"right"` | `int` (or `float64`) | infix, prefix | Right binding power. Higher binds tighter. |
+| `"left"` | `int` (or `float64`) | infix, suffix | Left binding power. Higher binds tighter. Defaults to `MinSafeInteger` (loosest); a declared `0` takes that default too. |
+| `"right"` | `int` (or `float64`) | infix, prefix | Right binding power. Higher binds tighter. Defaults to `MaxSafeInteger` (tightest); a declared `0` takes that default too. |
 | `"infix"` | `bool` | (none) | Binary infix operator (2 terms). |
 | `"prefix"` | `bool` | (none) | Unary prefix operator (1 term). |
 | `"suffix"` | `bool` | (none) | Unary suffix operator (1 term). |

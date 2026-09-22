@@ -1605,7 +1605,7 @@ fn operator_tin(parser: &mut Tabnas, src: &str) -> (Tin, String) {
 /// falsy-based, so a power of ZERO is not a power of zero there: it falls
 /// through to the fallback exactly as an absent one does. Keeping the zero
 /// changes the tree a zero-power operator builds against one with a
-/// negative power, which `../DIVERGENCE.md` measures.
+/// negative power, which `../test/spec/binding-power-zero.tsv` pins.
 fn binding_power(power: Option<i64>, unset: i64) -> i64 {
     match power {
         Some(0) | None => unset,
