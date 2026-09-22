@@ -1103,9 +1103,9 @@ impl Drop for ArenaGuard {
 /// the canonical port returns: the operator description followed by the
 /// operand terms.
 ///
-/// A parse through [`parse`], [`Parser::parse`] or [`Parser::parse_value`]
-/// is realized already. A caller driving a `Tabnas` instance directly
-/// calls this on the result.
+/// A parse through [`parse`], [`parse_with`] or [`parse_simplified`] is
+/// realized already. A caller driving a [`Tabnas`] instance directly calls
+/// this on the result.
 pub fn realize(value: &Value) -> Value {
     let mut open: Vec<u64> = Vec::new();
     realize_seen(value, &mut open)

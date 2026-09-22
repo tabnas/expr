@@ -123,6 +123,13 @@ trap 'if [ -f "$LOCK_BEFORE" ] && ! cmp -s "$LOCK_BEFORE" Cargo.lock; then cp "$
 # in the crate docs passes a gate that only runs it.
 "${CARGO[@]}" test --doc
 "${CARGO[@]}" clippy --all-targets --all-features -- -D warnings
+# rustdoc is the third compiler over this crate, and the only one that
+# resolves an intra-doc link. A `[\`Parser::parse\`]` naming a type this
+# crate does not have rendered as plain text on docs.rs and went green
+# through fmt, build, test, doctest and clippy alike: the doctest runner
+# executes a fence, it does not resolve a link. `-D warnings` is what makes
+# the broken link fail rather than scroll past.
+RUSTDOCFLAGS="-D warnings" "${CARGO[@]}" doc --no-deps
 
 # Now that cargo has had every chance to rewrite it, the lock must still
 # describe the same resolution it did when committed.
