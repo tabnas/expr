@@ -95,8 +95,8 @@ type OpDef = {
 | `src` | infix, prefix, suffix | The operator token text, for example `'+'`. For `ternary`, a two-element array `[open, close]`, for example `['?', ':']`. |
 | `osrc` | paren | The opening token text, for example `'('`, `'['`, `'<'`. |
 | `csrc` | paren | The closing token text, for example `')'`, `']'`, `'>'`. |
-| `left` | infix, suffix | Left binding power. Higher binds tighter. Defaults to `Number.MIN_SAFE_INTEGER` (loosest). |
-| `right` | infix, prefix | Right binding power. Higher binds tighter. Defaults to `Number.MAX_SAFE_INTEGER` (tightest). |
+| `left` | infix, suffix | Left binding power. Higher binds tighter. Defaults to `Number.MIN_SAFE_INTEGER` (loosest); a declared `0` takes that default too. |
+| `right` | infix, prefix | Right binding power. Higher binds tighter. Defaults to `Number.MAX_SAFE_INTEGER` (tightest); a declared `0` takes that default too. |
 | `infix` | (none) | Mark as a binary infix operator (2 terms). |
 | `prefix` | (none) | Mark as a unary prefix operator (1 term). |
 | `suffix` | (none) | Mark as a unary suffix/postfix operator (1 term). |

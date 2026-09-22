@@ -99,6 +99,21 @@ describe('spec', () => {
   })
 
 
+  describe('binding-power-zero', () => {
+    const je = new Tabnas().use(jsonic).use(Expr, {
+      op: {
+        // `zero` declares both powers as 0, which the canonical reads as
+        // unset; `below` sits on a negative tier, the only place a genuine
+        // zero would differ from the unset fallback.
+        zero: { infix: true, left: 0, right: 0, src: '~' },
+        below: { infix: true, left: -2000000, right: -1900000, src: '@' },
+      }
+    })
+    const j = mj(je)
+    runSpec('binding-power-zero.tsv', j)
+  })
+
+
   describe('unary-prefix-basic', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('unary-prefix-basic.tsv', j)

@@ -1103,9 +1103,9 @@ impl Drop for ArenaGuard {
 /// the canonical port returns: the operator description followed by the
 /// operand terms.
 ///
-/// A parse through [`parse`], [`Parser::parse`] or [`Parser::parse_value`]
-/// is realized already. A caller driving a `Tabnas` instance directly
-/// calls this on the result.
+/// A parse through [`parse`], [`parse_with`] or [`parse_simplified`] is
+/// realized already. A caller driving a [`Tabnas`] instance directly calls
+/// this on the result.
 pub fn realize(value: &Value) -> Value {
     let mut open: Vec<u64> = Vec::new();
     realize_seen(value, &mut open)
@@ -1605,7 +1605,7 @@ fn operator_tin(parser: &mut Tabnas, src: &str) -> (Tin, String) {
 /// falsy-based, so a power of ZERO is not a power of zero there: it falls
 /// through to the fallback exactly as an absent one does. Keeping the zero
 /// changes the tree a zero-power operator builds against one with a
-/// negative power, which `../DIVERGENCE.md` measures.
+/// negative power, which `../test/spec/binding-power-zero.tsv` pins.
 fn binding_power(power: Option<i64>, unset: i64) -> i64 {
     match power {
         Some(0) | None => unset,

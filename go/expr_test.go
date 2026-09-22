@@ -97,6 +97,23 @@ func TestSpecStructure(t *testing.T) {
 	runSpec(t, "structure.tsv", j)
 }
 
+func TestSpecBindingPowerZero(t *testing.T) {
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			// "zero" declares both powers as 0, which the canonical reads as
+			// unset; "below" sits on a negative tier, the only place a
+			// genuine zero would differ from the unset fallback.
+			"zero": map[string]interface{}{
+				"infix": true, "left": 0, "right": 0, "src": "~",
+			},
+			"below": map[string]interface{}{
+				"infix": true, "left": -2000000, "right": -1900000, "src": "@",
+			},
+		},
+	})
+	runSpec(t, "binding-power-zero.tsv", j)
+}
+
 func TestSpecUnaryPrefixBasic(t *testing.T) {
 	j := makeExprJsonic()
 	runSpec(t, "unary-prefix-basic.tsv", j)
@@ -961,6 +978,113 @@ func TestOperatorOrderDeterministic(t *testing.T) {
 		got := build()
 		if !reflect.DeepEqual(got, first) {
 			t.Fatalf("operator order not deterministic across builds:\n first: %v\n got:   %v", first, got)
+		}
+	}
+}
+
+// TestCommentAfterOperatorDiverges pins the Go half of the comment-marker
+// entry in DIVERGENCE.md: once `/` is an operator, this port lexes no
+// comment at all, where TypeScript and Rust both read one.
+//
+// The repair is not available from this repository. This port reaches the
+// engine through github.com/tabnas/jsonic/go, whose engine.go re-exports
+// the engine types but not the matcher factories, so there is no
+// MakeCommentMatcher to register below the fixed matcher's order of
+// 2000000 — which is how TypeScript gets the same effect, with
+// lex.match.comment.order of 1e5.
+//
+// The test fails when this port starts reading the comment, which is the
+// signal to delete this pin and the matching DIVERGENCE.md paragraph.
+func TestCommentAfterOperatorDiverges(t *testing.T) {
+	j := makeExprJsonic()
+	for _, src := range []string{"1 //c", "1/2 //c", "1/2 /* c */"} {
+		if _, err := j.Parse(src); err == nil {
+			t.Errorf("%q now parses; TypeScript and Rust already read the "+
+				"comment, so the Go half of the comment-marker DIVERGENCE.md "+
+				"entry is repaired — delete this pin and that paragraph, and "+
+				"move the rows into test/spec", src)
+		}
+	}
+}
+
+// TestZeroBindingPowerIsUnset reads the built operators rather than a parse
+// result, because that is where the defect lived: a declared power of 0 has
+// to leave makeAllOps as the unset sentinel, exactly as the canonical
+// `opdef.left || Number.MIN_SAFE_INTEGER` leaves it. An omitted power is the
+// same int zero in Go, so both arrive here as "unset" — which is also all the
+// canonical can tell them apart as. The tree this builds is pinned by the
+// shared `binding-power-zero.tsv` fixture.
+func TestZeroBindingPowerIsUnset(t *testing.T) {
+	j := jsonic.Make()
+	ops := makeAllOps(j, resolveOptions(map[string]interface{}{
+		"op": map[string]interface{}{
+			"zero": map[string]interface{}{
+				"infix": true, "left": 0, "right": 0, "src": "~",
+			},
+		},
+	}))
+
+	byName := make(map[string]*Op, len(ops))
+	for _, op := range ops {
+		byName[op.Name] = op
+	}
+
+	for _, kase := range []struct {
+		name  string
+		left  int64
+		right int64
+	}{
+		// Declared as zero.
+		{"zero-infix", MinSafeInteger, MaxSafeInteger},
+		// Omitted: a prefix op gives only right, a paren op neither.
+		{"negative-prefix", MinSafeInteger, 4000000},
+		{"plain-paren", MinSafeInteger, MaxSafeInteger},
+		// Declared and non-zero: carried across untouched.
+		{"addition-infix", 2000000, 2100000},
+	} {
+		op := byName[kase.name]
+		if op == nil {
+			t.Fatalf("no operator %q in %v", kase.name, byName)
+		}
+		if op.Left != kase.left || op.Right != kase.right {
+			t.Errorf("%s: got left=%d right=%d, want left=%d right=%d",
+				kase.name, op.Left, op.Right, kase.left, kase.right)
+		}
+	}
+
+	// The sentinels are the JavaScript ones, not math.MinInt/math.MaxInt: a
+	// Go-width sentinel orders differently against a legitimately huge
+	// binding power than the canonical one does.
+	if MinSafeInteger != -9007199254740991 || MaxSafeInteger != 9007199254740991 {
+		t.Errorf("sentinels are %d and %d, not the JavaScript safe-integer pair",
+			MinSafeInteger, MaxSafeInteger)
+	}
+}
+
+// TestBindingPowerCarriersAreInt64 pins the WIDTH of the binding-power
+// fields. The sentinels are the JavaScript safe-integer pair, which needs
+// 54 bits; `int` is 32 bits wide on GOARCH=386, arm, mips and the other
+// 32-bit targets, so carrying a binding power in `int` makes this module
+// fail to compile there rather than fail a test. `go vet` and `go test`
+// run on one architecture, so nothing else in this suite would notice.
+// The cross-compile step in the Makefile's `build-go` target is the other
+// half of this guard; this test states the requirement in the source.
+func TestBindingPowerCarriersAreInt64(t *testing.T) {
+	for _, kase := range []struct {
+		what  string
+		field reflect.Type
+	}{
+		{"OpDef.Left", reflect.TypeOf(OpDef{}.Left)},
+		{"OpDef.Right", reflect.TypeOf(OpDef{}.Right)},
+		{"Op.Left", reflect.TypeOf(Op{}.Left)},
+		{"Op.Right", reflect.TypeOf(Op{}.Right)},
+		{"MinSafeInteger", reflect.TypeOf(MinSafeInteger)},
+		{"MaxSafeInteger", reflect.TypeOf(MaxSafeInteger)},
+	} {
+		if reflect.Int64 != kase.field.Kind() {
+			t.Errorf("%s is %s, not int64: the safe-integer sentinels do not "+
+				"fit a 32-bit int, so this module stops compiling on 32-bit "+
+				"targets", kase.what, kase.field)
 		}
 	}
 }

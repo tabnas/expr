@@ -111,6 +111,12 @@ operators only a `left`. The unset side falls back to
 `Number.MIN_SAFE_INTEGER` (loosest) / `Number.MAX_SAFE_INTEGER` (tightest),
 which is why prefix gives only `right` and parens give neither.
 
+A declared power of `0` is unset too. The fallback is written
+`opdef.left || Number.MIN_SAFE_INTEGER`, and `0` is falsy, so `left: 0` and
+an omitted `left` are the same declaration. The Go and Rust ports read a
+zero the same way. An operator that has to bind looser than everything on
+the ladder therefore needs a negative power rather than a zero.
+
 ### The default ladder
 
 The built-in operators occupy a compact low block on a **base-1,000,000**

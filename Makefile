@@ -56,8 +56,15 @@ publish-ts: test-ts
 	cd ts && npm publish --access public
 
 # --- Go (module in go/) ---
+# The 32-bit cross-compile is part of building the port, not an extra.
+# `int` is 32 bits wide on GOARCH=386, arm and mips, while the
+# binding-power sentinels (`MinSafeInteger` / `MaxSafeInteger`) need 54,
+# so a constant that overflows a 32-bit `int` compiles on this machine
+# and breaks in a consumer's build. `go vet` rather than `go build`
+# because it type-checks the test files too, where `go build` skips them.
 build-go:
 	cd go && go build ./...
+	cd go && GOARCH=386 go vet ./...
 
 test-go:
 	cd go && go test -v ./...

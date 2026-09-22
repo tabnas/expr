@@ -90,7 +90,18 @@ Each infix operator has a `Left` and `Right` power:
   `2^(3^2)`.
 
 Prefix operators have only `Right` (no left term), suffix operators only
-`Left`. The unset side falls back to the loosest/tightest extreme.
+`Left`. The unset side falls back to the loosest/tightest extreme,
+`MinSafeInteger` and `MaxSafeInteger`.
+
+A declared power of `0` is unset too. Go cannot tell an omitted numeric
+field from an explicit `0`, and neither can the canonical, which writes the
+fallback as `opdef.left || Number.MIN_SAFE_INTEGER` over a falsy zero. An
+operator that has to bind looser than everything on the ladder therefore
+needs a negative power rather than a zero.
+
+`Left` and `Right` are `int64`, not `int`. The two sentinels need 54 bits,
+which an `int` does not have on a 32-bit target, so the wider type is what
+lets the port compile everywhere the module is consumed.
 
 ### The default ladder
 

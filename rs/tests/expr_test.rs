@@ -811,6 +811,32 @@ fn a_host_fixed_check_keeps_the_comment_guard() {
     }
 }
 
+/// A comment marker adjacent to a value is read as a comment.
+///
+/// The fixed matcher stands aside wherever a contested marker begins, so
+/// `1//c` is the value `1` followed by a comment. TypeScript rejects the
+/// same document, and `../DIVERGENCE.md` records why: bare jsonic reads it
+/// in every runtime, and registering `/` as a fixed token is what breaks
+/// it there, which puts the repair on the canonical engine rather than on
+/// this port. This pin fails if this port is ever brought down to the
+/// TypeScript behaviour instead, and the register entry says so.
+#[test]
+fn a_comment_marker_adjacent_to_a_value_is_read() {
+    let parser = parser_for(json!({}));
+    for (src, want) in [
+        ("1//c", json!(1)),
+        ("1/2//c", json!(["/", 1, 2])),
+        ("a:1//c", json!({ "a": 1 })),
+        ("1/*c*/", json!(1)),
+    ] {
+        assert_eq!(
+            norm(parse_simplified(&parser, src).unwrap_or_else(|error| panic!("{src:?}: {error}"))),
+            norm(want),
+            "parse {src:?}"
+        );
+    }
+}
+
 /// Operator setup is deterministic, so precedence never varies between
 /// runs: `1 + 2 * 3` is `1 + (2*3)` every time.
 #[test]
@@ -853,9 +879,10 @@ fn a_later_operator_wins_a_shared_source() {
 /// It shows in the tree when a zero-power operator meets one with a
 /// NEGATIVE power, the only way to sit below zero. Keeping the zero made
 /// `1@2~3` parse as `["@",1,["~",2,3]]`, because `~`'s left of `0` no
-/// longer bound looser than `@`'s right of `-2`. Measured against the
-/// canonical; Go keeps the zero here, which `../DIVERGENCE.md` records,
-/// so the case cannot be a shared fixture row.
+/// longer bound looser than `@`'s right of `-2`. All three runtimes take
+/// the fallback now, so the behaviour is also a shared fixture
+/// (`binding-power-zero.tsv`); this case keeps the small powers the
+/// original measurement used.
 #[test]
 fn a_zero_binding_power_is_unset() {
     let parser = parser_for(json!({

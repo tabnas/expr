@@ -65,6 +65,7 @@ jobs:
           git clone --depth 1 https://github.com/tabnas/json.git json
           git clone --depth 1 https://github.com/tabnas/jsonic.git jsonic
           git clone --depth 1 https://github.com/tabnas/support.git support
+          git clone --depth 1 https://github.com/tabnas/debug.git debug
 
       # Pinned to the MSRV in rs/Cargo.toml rather than to `stable`, so
       # this fails on a change that needs a newer compiler instead of

@@ -27,8 +27,8 @@ type OpDef struct {
 	Src     interface{} // string or []string (for ternary)
 	OSrc    string
 	CSrc    string
-	Left    int
-	Right   int
+	Left    int64
+	Right   int64
 	Prefix  bool
 	Suffix  bool
 	Infix   bool
@@ -42,8 +42,8 @@ type OpDef struct {
 type Op struct {
 	Name    string
 	Src     string
-	Left    int
-	Right   int
+	Left    int64
+	Right   int64
 	Prefix  bool
 	Suffix  bool
 	Infix   bool
@@ -1615,10 +1615,11 @@ func prattify(exprNode interface{}, op *Op) *jsonic.ListRef {
 				box.Val[end] = subBox
 				subOp := subBox.Val[0].(*Op)
 				// Never drill into paren/ternary sub-units: they are
-				// complete structural groups. (TS reaches the same result
-				// because their unset `right` defaults to MAX_SAFE_INTEGER,
-				// making this comparison false; Go zero-values Right to 0,
-				// so they must be excluded explicitly.)
+				// complete structural groups. The canonical reaches the same
+				// result through the unset fallback alone, because a paren
+				// op's right is MAX_SAFE_INTEGER and this comparison is then
+				// false; bindingPower gives them the same right here, so the
+				// test is belt and braces rather than the only guard.
 				if !subOp.Paren && !subOp.Ternary && subOp.Right < op.Left {
 					return prattify(subBox, op)
 				}
@@ -1687,9 +1688,10 @@ func prattifySuffix(node interface{}, op *Op) *jsonic.ListRef {
 
 	// Paren expressions are complete units — a suffix wraps the whole group,
 	// it never drills inside (mirrors prattify's infix paren guard). In the TS
-	// port a paren op has no `right`, so `right <= left` is false and it falls
-	// through to the wrap branch; in Go a paren op's Right is the 0 zero-value,
-	// so it must be excluded explicitly or `(1-2)!` wrongly becomes
+	// port a paren op's right is MAX_SAFE_INTEGER, so `right <= left` is false
+	// and it falls through to the wrap branch; bindingPower gives a paren op
+	// the same right here, so the explicit test states the intent rather than
+	// carrying it alone. Without either, `(1-2)!` wrongly becomes
 	// ["(",["!",...]] instead of ["!",["(",...]].
 	if !exprOp.Paren && !exprOp.Suffix && exprOp.Right <= op.Left {
 		end := exprOp.Terms
@@ -1817,13 +1819,17 @@ func resolveOptions(opts map[string]interface{}) *ExprOptions {
 						od.CSrc = v
 					}
 					if v, ok := defMap["left"].(float64); ok {
-						od.Left = int(v)
+						od.Left = int64(v)
 					} else if v, ok := defMap["left"].(int); ok {
+						od.Left = int64(v)
+					} else if v, ok := defMap["left"].(int64); ok {
 						od.Left = v
 					}
 					if v, ok := defMap["right"].(float64); ok {
-						od.Right = int(v)
+						od.Right = int64(v)
 					} else if v, ok := defMap["right"].(int); ok {
+						od.Right = int64(v)
+					} else if v, ok := defMap["right"].(int64); ok {
 						od.Right = v
 					}
 					if v, ok := defMap["prefix"].(bool); ok {
@@ -1901,6 +1907,45 @@ func addDefaultOps(eopts *ExprOptions) {
 	}
 }
 
+// MinSafeInteger and MaxSafeInteger are the binding powers an operator
+// gets when it declares none. They are the integer equivalents of
+// JavaScript's Number.MIN_SAFE_INTEGER and Number.MAX_SAFE_INTEGER, the
+// values the canonical makeOpMap falls back to, rather than math.MinInt /
+// math.MaxInt: a Go-width sentinel would order differently against a
+// legitimately huge binding power than the canonical one does.
+//
+// Both are typed int64, as are the Left/Right fields that carry them and
+// the Rust port's equivalents. The pair needs 54 bits, and int is 32 bits
+// wide on GOARCH=386, arm, mips and the other 32-bit targets, where an
+// untyped 54-bit constant is a COMPILE error rather than a wrong answer.
+// Nothing that runs on one architecture can see that, so `make build-go`
+// cross-compiles with `GOARCH=386 go vet ./...` and
+// TestBindingPowerCarriersAreInt64 states the requirement here.
+const (
+	MinSafeInteger int64 = -(1 << 53) + 1
+	MaxSafeInteger int64 = (1 << 53) - 1
+)
+
+// bindingPower reads a declared binding power, substituting the unset
+// fallback for zero.
+//
+// The canonical writes `opdef.left || Number.MIN_SAFE_INTEGER` and
+// `opdef.right || Number.MAX_SAFE_INTEGER`. JavaScript's `||` is
+// falsy-based, so a power of 0 is not a power of zero there: it takes the
+// fallback exactly as an absent power does. Go cannot tell an omitted
+// field from an explicit 0 either, because both arrive as the int zero
+// value — and neither can the canonical, so matching it costs nothing an
+// operator author could otherwise have had. Keeping the zero made a
+// zero-power operator bind as an ordinary very-low precedence, which
+// builds a different tree against an operator on a negative tier
+// (`test/spec/binding-power-zero.tsv`).
+func bindingPower(power, unset int64) int64 {
+	if 0 == power {
+		return unset
+	}
+	return power
+}
+
 func makeAllOps(j *jsonic.Jsonic, eopts *ExprOptions) []*Op {
 	// Track registered tins by source string to share between operators
 	// (e.g., "+" is both prefix "positive" and infix "addition").
@@ -1959,7 +2004,9 @@ func makeAllOps(j *jsonic.Jsonic, eopts *ExprOptions) []*Op {
 			continue
 		}
 		op := &Op{
-			Name: name, Left: def.Left, Right: def.Right,
+			Name:   name,
+			Left:   bindingPower(def.Left, MinSafeInteger),
+			Right:  bindingPower(def.Right, MaxSafeInteger),
 			Prefix: def.Prefix, Suffix: def.Suffix, Infix: def.Infix,
 			Ternary: def.Ternary, Paren: def.Paren, Use: def.Use,
 		}

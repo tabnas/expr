@@ -10,18 +10,25 @@ is specific to this crate.
 | Path | |
 |---|---|
 | `src/lib.rs` | the whole port: the operator model, the options, the expression arena, the Pratt core, every rule the plugin adds, the evaluator, `realize` / `simplify`, and `plugin` / `plugin_with` / `apply` / `make` / `make_with` / `parse` |
-| `tests/parity_test.rs` | every shared `../test/spec/*.tsv` fixture through `tabnas_support::Runner`, each with the operator table its file assumes |
+| `tests/parity_test.rs` | every shared `../test/spec/*.tsv` fixture through `tabnas_support::Runner`, each with the operator table its file assumes, plus `every_shared_fixture_is_run`, which reads the fixture directory and fails when a file has no runner here |
 | `tests/expr_test.rs` | in-language behaviour: the Pratt core, comma-operator suppression, the evaluator, the ternary after-close, the instance token binding, the parsed shape, threads, hostile input |
+| `tests/debug_model_test.rs` | the grammar composed with `tabnas-debug`, asserting the rule set, the entry rule and the push edges: the Rust half of `ts/test/debug-model.test.ts` |
 | `tests/perf_test.rs` | the machine-independent instance-reuse guards |
 | `tests/version_test.rs` | `Cargo.toml` equals `VERSION` equals `ts/package.json` |
 | `tests/common/mod.rs` | shared helpers: the spec directory, the per-row parser, failure conversion, number normalization |
 | `README.md` | the crate front page, prose-gated; its `rust` fences are doctests of this crate |
 
 Crate `tabnas-expr`, library `tabnas_expr`. The engine (`tabnas`), the
-jsonic base (`tabnas-jsonic`) and the fixture runner (`tabnas-support`,
-dev only) are **path dependencies on sibling checkouts**
-(`../../parser/rs`, `../../jsonic/rs`, `../../support/rs`). None is
-published, so there is no registry version to fall back on.
+jsonic base (`tabnas-jsonic`), the fixture runner (`tabnas-support`, dev
+only) and the introspection plugin (`tabnas-debug`, dev only) are **path
+dependencies on sibling checkouts** (`../../parser/rs`, `../../jsonic/rs`,
+`../../support/rs`, `../../debug/rs`). None is published, so there is no
+registry version to fall back on.
+
+The TypeScript `debug-model.test.ts` SKIPS when `@tabnas/debug` cannot be
+resolved. The Rust half does not: a missing checkout fails the build
+rather than reporting green having run nothing, which is how every other
+sibling is treated here.
 
 ```bash
 cargo build --all-targets
@@ -31,8 +38,12 @@ cargo fmt
 ```
 
 `make test-rs` from the repository root is the fast loop; `ci/rust/run.sh`
-is the full gate and adds `fmt --check`, the lockfile check and the MSRV
-pin.
+is the full gate and adds `fmt --check`, the lockfile check, the MSRV pin
+and `cargo doc --no-deps` under `RUSTDOCFLAGS=-D warnings`. rustdoc is the
+only one of the three compilers over this crate that resolves an intra-doc
+link, and a doctest fence is executed rather than linked, so a link naming
+a type the crate does not have passed every other check and rendered as
+plain text.
 
 ## The expression arena, and why there is one
 

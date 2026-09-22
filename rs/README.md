@@ -209,8 +209,9 @@ above that name `tabnas::Value`, `tabnas_jsonic::make` or
 `serde_json::json!` would not resolve. Only `ExprError` is re-exported.
 A program that declares its operators through `ExprOptions` can leave
 `serde_json` out. The test suite additionally needs
-`https://github.com/tabnas/support` beside the repository, for the
-shared fixture runner.
+`https://github.com/tabnas/support` beside the repository, for the shared
+fixture runner, and `https://github.com/tabnas/debug`, for the grammar
+composition test.
 
 ## Differences from the canonical TypeScript
 
@@ -261,12 +262,19 @@ points where the host language has no way to say what JavaScript says:
   `sync.Once`.
 - **A comment marker beats an operator token.** Where an operator source
   is a prefix of a comment opener, `/` and `//` for instance, the fixed
-  matcher stands aside so the comment matcher takes the run. TypeScript
-  reorders the two to the same end; the Go port does neither. The engine
+  matcher stands aside so the comment matcher takes the run. The engine
   allows one check on the fixed family, so a check a host had already
   configured is displaced by this one rather than chained to it. A host
   that needs both installs its own check after this plugin and skips the
   comment openers itself.
+
+  This port reads MORE comments than the canonical, not the same ones.
+  TypeScript reorders the two matchers instead, which reads a marker
+  separated from the operator by a space (`1/2 // note`) but not one
+  adjacent to a value (`1//note`); the Go port reads neither. Bare jsonic
+  reads the adjacent one in every runtime, so the canonical is the
+  defective side there and the repair belongs to its engine, not to this
+  port. [`../DIVERGENCE.md`](../DIVERGENCE.md) measures all three.
 - **Lone surrogates fold to U+FFFD**, and the regular expression dialect
   is the `regex` crate's. Both come from the engine, and both are
   recorded there.
@@ -287,11 +295,13 @@ including formatting, clippy and the lockfile check, run
 
 The suite runs every shared `../test/spec/*.tsv` fixture, each with the
 operator table its file assumes, the same way the TypeScript and Go
-suites do. Beside them are the in-language tests: the Pratt core through
-its exported entry point, comma-operator suppression, the evaluator over
-a small configuration language, the ternary after-close, the instance
-token binding, the serialized shape of a parsed expression, thread
-safety, hostile input, instance reuse and the version sites.
+suites do, and a test fails when a fixture on disk has no runner here.
+Beside them are the in-language tests: the Pratt core through its
+exported entry point, comma-operator suppression, the evaluator over a
+small configuration language, the ternary after-close, the instance token
+binding, the serialized shape of a parsed expression, the grammar
+composed with the `tabnas-debug` plugin, thread safety, hostile input,
+instance reuse and the version sites.
 
 ## License
 

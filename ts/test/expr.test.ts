@@ -85,6 +85,42 @@ describe('expr', () => {
   })
 
 
+  // Pins the canonical half of the comment-marker entry in DIVERGENCE.md.
+  // Registering `/` as a fixed token stops the comment matcher reading a
+  // marker that sits immediately after a value, and moving the comment
+  // matcher in front of the fixed one does not restore it: the residue is
+  // in the engine's fixed matcher. A leading space is enough to avoid it.
+  //
+  // The Rust port reads all six, which is what bare jsonic does here too,
+  // so this is the defective side and the repair belongs to the engine.
+  // The test fails when the engine is repaired, which is the signal to
+  // delete this pin and the matching DIVERGENCE.md paragraph.
+  test('comment-marker-adjacent-to-value', () => {
+    const je = new Tabnas().use(jsonic).use(Expr)
+    const j = mj(je)
+
+    // A space before the marker, and the comment is read.
+    expect(j('1 //c'))[_mo_](1)
+    expect(j('1/2 //c'))[_mo_](['/', 1, 2])
+
+    // No space, and the marker is cut into operator tokens.
+    for (const src of ['1//c', '1/2//c', 'a:1//c', '1/*c*/']) {
+      let code = null
+      try {
+        je.parse(src)
+      }
+      catch (error: any) {
+        code = error.code
+      }
+      expect(code)[_mo_]('unexpected')
+    }
+
+    // Bare jsonic reads the same document, which is what makes the
+    // canonical the defective side rather than the ports.
+    expect(new Tabnas().use(jsonic).parse('1//c'))[_mo_](1)
+  })
+
+
   test('prattify-basic', () => {
     let prattify = testing.prattify
 

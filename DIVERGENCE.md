@@ -96,57 +96,77 @@ which is what the inputs were, not what the difference is. Reading the
 label rather than the payload would suggest a signed-zero bug in this
 port. There is none.
 
-## Go keeps a binding power of zero, where TypeScript treats it as unset
+## A comment marker adjacent to an operator lexes differently in all three
 
-**Not repaired here** — the repair belongs to the Go port, and this entry
-records where the three stand until it lands.
+**Not repaired** — the residue is in the three engines' lexers, not in
+this plugin, and the two halves below need changes in repositories this
+plugin does not own.
 
-The canonical `makeOpMap` reads a custom operator's powers as
-`opdef.left || Number.MIN_SAFE_INTEGER` and
-`opdef.right || Number.MAX_SAFE_INTEGER`. JavaScript's `||` is
-falsy-based, so a power of `0` is not a power of zero: it falls through to
-the fallback exactly as an absent power does. Go copies `def.Left` and
-`def.Right` straight across with no fallback at all, so a zero stays a
-zero there — and an UNSET power is also zero, because that is the Go
-zero value. The Rust port kept the zero too, through
-`def.left.unwrap_or(MIN_SAFE_INTEGER)`; it now matches TypeScript.
+The default `/` operator is a prefix of the comment openers `//` and
+`/*`, so the fixed-token matcher and the comment matcher contend for the
+same run of characters. Each runtime resolves that differently:
+TypeScript sets `lex.match.comment.order` to `1e5` so the comment matcher
+runs before the fixed one; the Rust port puts a `check` on the fixed
+family, so the fixed matcher stands aside where a contested marker
+begins; the Go port does neither.
 
-It is invisible until a zero-power operator meets one with a NEGATIVE
-power, the only way to sit below zero. Measured with two custom infix
-operators, `@` at `left: -2, right: -2` and `~` at `left: 0, right: 0`:
+Measured on the default operator table, with the operator objects reduced
+to their `src`:
 
 | input | TypeScript | Go | Rust |
 | --- | --- | --- | --- |
-| `1@2~3` | `["~",["@",1,2],3]` | `["@",1,["~",2,3]]` | `["~",["@",1,2],3]` |
-| `1~2@3` | `["@",["~",1,2],3]` | `["@",["~",1,2],3]` | `["@",["~",1,2],3]` |
-| `1~2~3` | `["~",["~",1,2],3]` | `["~",["~",1,2],3]` | `["~",["~",1,2],3]` |
-| `1@2@3` | `["@",["@",1,2],3]` | `["@",["@",1,2],3]` | `["@",["@",1,2],3]` |
+| `1 //c` | `1` | `ERROR:unexpected` | `1` |
+| `1/2 //c` | `["/",1,2]` | `ERROR:unexpected` | `["/",1,2]` |
+| `1//c` | `ERROR:unexpected` | `ERROR:unexpected` | `1` |
+| `1/2//c` | `ERROR:unexpected` | `ERROR:unexpected` | `["/",1,2]` |
+| `a:1//c` | `ERROR:unexpected` | `ERROR:unexpected` | `{"a":1}` |
+| `1/*c*/` | `ERROR:unexpected` | `ERROR:unexpected` | `1` |
 
-Where each cell comes from:
+Two **independently repairable** halves, so each has its own paragraph
+and its own pin. Closing one does not close the other.
 
-- **TypeScript**: `node` over `ts/dist/expr.js`, the build of the
-  canonical `ts/src/expr.ts`, installed on `@tabnas/jsonic` with those two
-  operators and reduced by the suite's own `S` helper. It printed
-  `1@2~3 => ["~",["@",1,2],3]`.
-- **Go**: a probe test in `go/`, `makeExprJsonic` with the same two
-  operators through `simplifyAndNormalize`. It printed
-  `1@2~3 => ["@",1,["~",2,3]]`.
-- **Rust**: `cargo test` over `parse_simplified` with the same two
-  operators. Before the repair it printed `["@",1.0,["~",2.0,3.0]]`; it
-  now prints `["~",["@",1.0,2.0],3.0]`. The `.0` is the JSON renderer:
-  every engine number is an `f64`.
+### Go lexes no comment at all once `/` is an operator
 
-Only the first row separates the three, and the other three rows are here
-to show that the rest of the table agrees, so the difference is the
-fallback and not the comparison.
+Rows 1 and 2: TypeScript and Rust read the comment, Go reports the `/`
+as unexpected. This is the half `ADR-13` puts squarely on the port, and
+it is not repairable from this repository today. `go/expr.go` reaches the
+engine through `github.com/tabnas/jsonic/go`, whose `engine.go` re-exports
+the engine types but not the matcher factories, so there is no
+`MakeCommentMatcher` to register at an order below the fixed matcher's
+`2000000`. The repair needs `tabnas/jsonic` to re-export it, after which
+the Go plugin registers it the way TypeScript sets the order.
 
-Pinned by *"a zero binding power is unset"* (`rs/tests/expr_test.rs`),
-which fails if this port ever keeps the zero again.
+Pinned by `TestCommentAfterOperatorDiverges` (`go/expr_test.go`), which
+fails when Go starts reading the comment.
 
-It is deliberately NOT a shared fixture row: the row would be red in Go,
-and [`test/AGENTS.md`](test/AGENTS.md) keeps intentional divergences out
-of `test/spec`. When the Go port takes the fallback, the row can move
-there and this entry goes with it.
+### Rust reads a comment marker TypeScript does not
+
+Rows 3 to 6: the marker sits immediately after a value, with no space
+before it, and only Rust reads it. This half is NOT a port defect to
+repair. Bare `jsonic` reads `1//c` as `1` in every runtime; it is
+registering `/` as a fixed token that breaks it in TypeScript, and the
+break survives the reorder. Measured on the canonical engine with no
+plugin involved:
+
+| parser | `1//c` |
+| --- | --- |
+| bare jsonic | `1` |
+| bare jsonic, `/` added as a fixed token | `ERROR:unexpected` |
+| the same, plus `lex.match.comment.order: 1e5` | `ERROR:unexpected` |
+
+So the canonical is the defective side, and `ADR-13` puts the repair
+there rather than in a port: making Rust reject `1//c` would copy a
+TypeScript defect into a port, which is the one thing a port must not do.
+The repair belongs to the TypeScript engine's fixed matcher, in
+`tabnas/parser`.
+
+Pinned by `a_comment_marker_adjacent_to_a_value_is_read`
+(`rs/tests/expr_test.rs`) and *"comment-marker-adjacent-to-value"*
+(`ts/test/expr.test.ts`), which fail together when the two agree again.
+
+It is deliberately NOT a shared fixture: every row above is red in at
+least one runtime, and [`test/AGENTS.md`](test/AGENTS.md) keeps
+intentional divergences out of `test/spec`.
 
 ## The Rust port refuses a very large expression
 

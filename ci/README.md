@@ -15,7 +15,8 @@ Pending here:
 - **`workflows/rust.yml`**, the Rust gate: it clones the sibling crates the
   `rs/` crate takes by path (`parser`, `json`, `jsonic`, `support`), installs
   the MSRV toolchain from `rs/Cargo.toml`, and runs `ci/rust/run.sh`
-  (formatting, build, tests, doctests, clippy and the lockfile check). The
+  (formatting, build, tests, doctests, clippy, rustdoc with broken
+  intra-doc links fatal, and the lockfile check). The
   script is the whole gate, so a local run and a hosted one cannot say
   different things.
 
