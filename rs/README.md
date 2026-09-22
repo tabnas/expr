@@ -209,8 +209,9 @@ above that name `tabnas::Value`, `tabnas_jsonic::make` or
 `serde_json::json!` would not resolve. Only `ExprError` is re-exported.
 A program that declares its operators through `ExprOptions` can leave
 `serde_json` out. The test suite additionally needs
-`https://github.com/tabnas/support` beside the repository, for the
-shared fixture runner.
+`https://github.com/tabnas/support` beside the repository, for the shared
+fixture runner, and `https://github.com/tabnas/debug`, for the grammar
+composition test.
 
 ## Differences from the canonical TypeScript
 
@@ -294,11 +295,13 @@ including formatting, clippy and the lockfile check, run
 
 The suite runs every shared `../test/spec/*.tsv` fixture, each with the
 operator table its file assumes, the same way the TypeScript and Go
-suites do. Beside them are the in-language tests: the Pratt core through
-its exported entry point, comma-operator suppression, the evaluator over
-a small configuration language, the ternary after-close, the instance
-token binding, the serialized shape of a parsed expression, thread
-safety, hostile input, instance reuse and the version sites.
+suites do, and a test fails when a fixture on disk has no runner here.
+Beside them are the in-language tests: the Pratt core through its
+exported entry point, comma-operator suppression, the evaluator over a
+small configuration language, the ternary after-close, the instance token
+binding, the serialized shape of a parsed expression, the grammar
+composed with the `tabnas-debug` plugin, thread safety, hostile input,
+instance reuse and the version sites.
 
 ## License
 
