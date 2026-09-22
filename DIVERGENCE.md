@@ -160,10 +160,9 @@ TypeScript defect into a port, which is the one thing a port must not do.
 The repair belongs to the TypeScript engine's fixed matcher, in
 `tabnas/parser`.
 
-Pinned by *"a comment marker adjacent to a value is read"*
-(`rs/tests/expr_test.rs`) and *"a comment marker adjacent to a value is
-not read"* (`ts/test/expr.test.ts`), which fail together when the two
-agree again.
+Pinned by `a_comment_marker_adjacent_to_a_value_is_read`
+(`rs/tests/expr_test.rs`) and *"comment-marker-adjacent-to-value"*
+(`ts/test/expr.test.ts`), which fail together when the two agree again.
 
 It is deliberately NOT a shared fixture: every row above is red in at
 least one runtime, and [`test/AGENTS.md`](test/AGENTS.md) keeps
