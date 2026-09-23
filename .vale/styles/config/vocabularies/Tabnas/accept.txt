@@ -14,10 +14,12 @@
 [Dd]isambiguates
 [Ee]num
 [Ee]xpr
+[Ff]alsy
 [Ii]mplicits
 [Ii]nspectable
 [Jj]sonic
 [Ll]ockfile
+[Mm]atchers
 [Nn]pm
 [Pp]aren
 [Pp]arens
