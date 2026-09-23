@@ -3130,11 +3130,19 @@ fn open_paren(grammar: &Grammar, rule: &mut Rule) {
 fn close_paren(grammar: &Grammar, rule: &mut Rule) {
     let child = rule.child_node.clone();
     let mut node = node_of(rule);
-    // The child's expression, or the child's plain value when this paren
-    // holds nothing of its own yet. Both branches take the child; the
-    // canonical port writes them out separately and so does this one,
-    // because they are separate reasons.
-    if is_op(&child) || node.is_undefined() {
+    // The child's value, when this paren holds nothing of its own yet.
+    //
+    // The canonical port also takes the child whenever it is an operator,
+    // and can, because it collects an implicit list IN the child's node
+    // (`paren.child.node = [...]`): there the child IS the list. This
+    // engine copies a container on write, so the list is collected on the
+    // paren itself instead, while the child link stays on the rule the
+    // paren PUSHED rather than on whichever rule of a replacement chain
+    // popped last (tabnas/parser a801621, matching TS and Go). That rule
+    // can still hold the list's first member, an operator. A node already
+    // on the paren is the collected list, and the child must not overwrite
+    // it: `(1?2:3 b)` would come back as `(1?2:3)`.
+    if node.is_undefined() {
         node = child;
     }
 
