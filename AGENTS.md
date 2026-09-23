@@ -241,7 +241,8 @@ set `TABNAS_DEBUG_PATH` to point at a built sibling checkout otherwise.
 `rs/tests/debug_model_test.rs` is the Rust half, and it does NOT skip:
 `tabnas-debug` is a path dev-dependency on `../../debug/rs`, so a missing
 checkout fails the build rather than reporting green having run nothing.
-`ci/rust/run.sh` and `ci/workflows/rust.yml` clone it with the others.
+`.github/workflows/rust.yml` clones it with the others, and
+`ci/rust/run.sh` refuses to start without it.
 
 `ts/test/doc-examples.test.ts` extracts and runs fenced assertion blocks
 from the README/docs — keep doc examples correct.
@@ -317,11 +318,11 @@ and a focused run executed whatever was compiled last. That is the shape
 you hit most, because a focused run is what you reach for while iterating
 on one test.
 
-Note that CI runs only the TypeScript job (see "CI" below): the local
-`make test` (or `cd go && go test ./...`) is the only check that exercises
-the Go port at all, so never skip it. The Rust gate is staged in
-`ci/workflows/rust.yml` and runs `ci/rust/run.sh`; until a maintainer
-promotes it, that script is the only full check of the Rust port.
+CI runs the TypeScript and Go suites on every pull request, but the Rust
+gate (`.github/workflows/rust.yml`, which runs `ci/rust/run.sh`) only when
+a Rust-relevant path changes; see "CI" below. `make test` is still the one
+command that runs all three runtimes together, and `ci/rust/run.sh` the
+full Rust gate, so run them locally before pushing.
 
 What "correct" means here, in order of authority:
 
@@ -602,27 +603,36 @@ every operand and operator as untrusted text.
 
 ## CI
 
-`.github/workflows/ci.yml` has a **single `ci` job** (no separate
-build-go job — the Go port is exercised locally / via the Makefile, not
-in CI). It is a thin caller: it delegates to the org-standard reusable
-workflow `tabnas/.github/.github/workflows/polyglot-ci.yml@main`, passing
-`deps: "parser debug json abnf railroad jsonic"` (the tabnas closure the
-reusable workflow clones and builds in topo order before testing
-`expr/ts`). The matrix, the Node version, and the
+`.github/workflows/ci.yml` is a thin caller: it delegates to the
+org-standard reusable workflow
+`tabnas/.github/.github/workflows/polyglot-ci.yml@main`, passing
+`deps: "parser support debug json jsonic"` (the tabnas closure the
+reusable workflow clones and builds before testing this repo). Its
+`ci / ts` jobs run the TypeScript suite and its `ci / go` jobs the Go
+suite. The matrix, the Node and Go versions, and the
 `git config --global core.autocrlf false` step (CRLF corrupts the `.tsv`
 fixtures) all live in the reusable workflow, not here — change them
 there, not in this repo.
 
-`.github/workflows/release.yml` publishes the npm package on tag push.
+This repository's own two gates run beside it, each behind a path
+filter:
 
-Workflow files cannot be written by session credentials (admin
-`DECISIONS.md` ADR-8); a maintainer promotes them via the admin
-`rollout/apply-ci-folders.sh` script. `ci/` is the staging directory for
-that flow, and it is not empty: `ci/workflows/docs.yml` (the Vale prose
-gate) and `ci/workflows/rust.yml` (the Rust gate, which runs
-`ci/rust/run.sh`) are both waiting on a promotion. `ci/README.md` says
-what each one does. Until they are promoted, `ci/rust/run.sh` run locally
-is the only full check of the Rust port, as "Verify your work" says.
+- `.github/workflows/rust.yml` clones the sibling crates at `main`,
+  installs the MSRV toolchain with rustup and runs `ci/rust/run.sh`. It
+  runs only when `rs/`, `test/spec/`, `ts/src/expr.ts`,
+  `ts/package.json`, `ci/rust/` or the workflow itself changes, so a
+  change on a sibling's `main` that breaks the Rust port shows up on the
+  next push or pull request that touches one of those paths, not before.
+- `.github/workflows/docs.yml` is the Vale prose gate, `make prose` in
+  CI; `docs/STYLE-GUIDE.md` says what it checks.
+
+`.github/workflows/release.yml` publishes the npm package and writes the
+release tags; dispatch it as "Releasing" describes.
+
+Changes to workflow files follow admin `DECISIONS.md` ADR-8. `ci/` used
+to be the staging directory for them; everything staged there has been
+promoted, and it now holds only the Rust gate script (see
+`ci/README.md`).
 
 ## Agent tooling
 
