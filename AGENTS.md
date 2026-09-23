@@ -503,6 +503,17 @@ The steps, in order:
    runs no tests of its own. Confirm `$GH` is green on `main` before
    calling the release good.
 
+   **The dispatch also publishes the C artifacts (admin ADR-19).** Once
+   `go/v$V` is on the remote, `release.yml` calls
+   `.github/workflows/clib-release.yml`, which creates the GitHub Release on
+   that tag as a draft, builds and attaches the shared libraries and
+   `manifest.json`, and only then publishes it. The release is done when
+   that Release is published with `manifest.json` among its assets. A draft
+   left behind means the C build failed after npm and Go had shipped: fix
+   the cause, then dispatch `clib-release.yml` on `main` with that tag and
+   `darwin_only` false, which finishes the same draft. `darwin_only` true
+   only late-attaches darwin artifacts to a Release that has the rest.
+
 ### When a dispatch dies half-way
 
 The workflow fails closed on a dispatch from any ref but `main`, and when
