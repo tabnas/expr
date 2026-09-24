@@ -695,10 +695,17 @@ filter:
 `.github/workflows/release.yml` publishes the npm package and writes the
 release tags; dispatch it as "Releasing" describes.
 
-Changes to workflow files follow admin `DECISIONS.md` ADR-8. `ci/` used
-to be the staging directory for them; everything staged there has been
-promoted, and it now holds only the Rust gate script (see
-`ci/README.md`).
+Change a workflow file in `.github/workflows/` itself, in a reviewed pull
+request: session credentials can push workflow changes (admin
+`DECISIONS.md` ADR-8, as amended 2026-09-24). They still cannot push
+tags, which is why a release is dispatched rather than tagged by hand.
+A workflow with a template in admin `rollout/workflows/` changes in that
+template too (ADR-8 as amended), and the stamped `clib.yml` and
+`clib-release.yml` change only through admin `tasks/clib-template/` and
+a re-stamp; [`ci/README.md`](ci/README.md) names which is which.
+`ci/` used to be the staging directory for workflow files; everything
+staged there has been promoted, and it now holds only the Rust gate
+script (see `ci/README.md`).
 
 ## Agent tooling
 
