@@ -39,10 +39,10 @@ drift from the other:
 | `ts/test/docs.test.js` | `make test` | the banned list again, the no-em-dash rule, the first-person rules, the exclamation ration, and no emoji |
 | `ts/scripts/vale-counts.cjs` | `make prose` | that every count in `.vale.ini`, and the total below, are what Vale reports |
 
-The gated set is the reader-facing one: the language-neutral pages under
-`doc/`, the four Diátaxis kinds under `ts/doc/` and `go/doc/`, and the
-three package READMEs. The Rust-port series, the feasibility reports and
-the defect ledgers are working documents, and they are out.
+The gated set is the reader-facing one: the four Diátaxis kinds under
+`ts/doc/` and `go/doc/`, and the four READMEs, the repository's and one
+per runtime. The Rust-port series, the feasibility reports and the
+defect ledgers are working documents, and they are out.
 
 **Four checks live in the local gate rather than in Vale, and the reason
 is capability, not preference.**
@@ -65,7 +65,7 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 304 alerts across 12 files. Those
+a clean run over the gated set: 381 alerts across 12 files. Those
 numbers were written by hand once, and this sentence and the one in
 `.vale.ini` drifted apart from each other and from a run.
 `node ts/scripts/vale-counts.cjs` now reads both against a live Vale run
@@ -372,12 +372,16 @@ notations" is. A rule demoted without that note reads later as an
 oversight, and gets re-promoted by somebody repeating the work.
 
 To accept a word the spelling gate does not know, add it to `accept.txt`
-in the same directory, one stem at a time. Never add a suffix pattern:
-`\w+ise` accepts `madeupise` too, and punches a hole through the gate the
-file exists to make usable. Write a case pair as one regular expression
-(`[Tt]abnas`), because two plain lines make Vale enforce one spelling
-over the other, and it will then report the directory `ts/` as a
-misspelling of `TS`.
+in the same directory, one word at a time. An entry matches a whole word,
+so `[Ee]nder` does not accept `enders`: a plural or a possessive is an
+entry of its own. Never add a suffix pattern: `\w+ise` accepts
+`madeupise` too, and punches a hole through the gate the file exists to
+make usable. Write a case pair as one regular expression (`[Tt]abnas`),
+because two plain lines make Vale enforce one spelling over the other. A
+name also written in lower case, as a package name is, puts its capitals
+in the same entry (`(?:[Jj]son|JSON)`); a name with one correct case is
+one exact entry (`TS`, `DOMPurify`), so Vale reports any other case of
+it.
 
 ## The fleet
 

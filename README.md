@@ -8,7 +8,7 @@
 <!-- /tabnas-badges -->
 
 An expression-syntax plugin for the [Tabnas](https://github.com/tabnas/jsonic)
-JSON parser, available in TypeScript, Go and Rust.
+JSON parser, available in TypeScript, Go, and Rust.
 
 Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
 
