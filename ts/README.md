@@ -1,7 +1,7 @@
 # @tabnas/expr
 
 An expression-syntax plugin for the [Tabnas](https://github.com/tabnas/jsonic)
-parser, available in both TypeScript and Go.
+parser, available in TypeScript, Go, and Rust.
 
 Adds Pratt-parser expressions to Tabnas: infix, prefix, suffix, ternary,
 and paren operators with a configurable binding-power (precedence) scale, so
