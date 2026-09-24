@@ -4,7 +4,7 @@ The Pratt expression-operator plugin for the
 [`tabnas`](https://github.com/tabnas/parser) parsing engine, crate
 `tabnas_expr`.
 
-It adds infix, prefix, suffix, ternary and paren operators with
+It adds infix, prefix, suffix, ternary, and paren operators with
 configurable precedence, and parses an expression into a LISP-style
 S-expression: an array whose first element describes the operator and
 whose remaining elements are the operand terms, so `1+2*3` becomes
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 A parsed expression carries the whole operator description, so an
-evaluator can read the name, the binding powers and the token the
+evaluator can read the name, the binding powers, and the token the
 operator was matched from. `simplify` reduces that to the source text,
 which is the form the shared fixtures compare:
 
@@ -228,7 +228,7 @@ points where the host language has no way to say what JavaScript says:
   option bag, so it sits on `ExprOptions` outside serialization and
   reaches the grammar through `plugin_with` and `make_with`. It receives
   an `EvalSite` in place of the rule and context pair, through which the
-  rule's `paren_preval` flag, the live context and the token of the
+  rule's `paren_preval` flag, the live context, and the token of the
   operator OCCURRENCE being reduced are reachable. The `Op` itself is the
   shared description, one per entry in the operator table, so the token is
   what tells one `+` in a document from another; TypeScript attaches it to
@@ -281,7 +281,7 @@ points where the host language has no way to say what JavaScript says:
 
 ## Build and test
 
-The engine, the jsonic base, the JSON core it needs and the fixture
+The engine, the jsonic base, the JSON core it needs, and the fixture
 runner are path dependencies on sibling checkouts, so there is nothing
 to fetch for the build:
 
@@ -301,7 +301,7 @@ exported entry point, comma-operator suppression, the evaluator over a
 small configuration language, the ternary after-close, the instance token
 binding, the serialized shape of a parsed expression, the grammar
 composed with the `tabnas-debug` plugin, thread safety, hostile input,
-instance reuse and the version sites.
+instance reuse, and the version sites.
 
 ## License
 
