@@ -86,7 +86,61 @@ var _ = &sharedMu // referenced only by opt-in constructs
 // ignore it; a row that defines options must validate it here, since
 // nothing upstream does.
 func newParser(opts string) (parseFn, error) {
-	j := host.Make(); if err := j.Use(plug.Expr, nil); err != nil { return nil, err }; if _, err := j.Parse("1+1"); err != nil { return nil, err }; var cyclic func(any, map[any]bool) bool; cyclic = func(n any, on map[any]bool) bool { var key any; var kids []any; switch t := n.(type) { case *host.ListRef: if t == nil { return false }; key, kids = t, t.Val; case []any: if len(t) == 0 { return false }; key, kids = &t[0], t; case *host.OrderedMap: if t == nil { return false }; key = t; for _, k := range t.Keys { kids = append(kids, t.Vals[k]) }; default: return false }; if on[key] { return true }; on[key] = true; defer delete(on, key); for _, c := range kids { if cyclic(c, on) { return true } }; return false }; return func(src string) (any, error) { v, err := j.Parse(src); if err != nil { return nil, err }; if cyclic(v, map[any]bool{}) { return v, nil }; return plug.Simplify(v), nil }, nil
+	j := host.Make()
+	if err := j.Use(plug.Expr, nil); err != nil {
+		return nil, err
+	}
+	if _, err := j.Parse("1+1"); err != nil {
+		return nil, err
+	}
+	var cyclic func(any, map[any]bool) bool
+	cyclic = func(n any, on map[any]bool) bool {
+		var key any
+		var kids []any
+		switch t := n.(type) {
+		case *host.ListRef:
+			if t == nil {
+				return false
+			}
+			key, kids = t, t.Val
+		case []any:
+			if len(t) == 0 {
+				return false
+			}
+			key, kids = &t[0], t
+		case *host.OrderedMap:
+			if t == nil {
+				return false
+			}
+			key = t
+			for _, k := range t.Keys {
+				kids = append(kids, t.Vals[k])
+			}
+		default:
+			return false
+		}
+		if on[key] {
+			return true
+		}
+		on[key] = true
+		defer delete(on, key)
+		for _, c := range kids {
+			if cyclic(c, on) {
+				return true
+			}
+		}
+		return false
+	}
+	return func(src string) (any, error) {
+		v, err := j.Parse(src)
+		if err != nil {
+			return nil, err
+		}
+		if cyclic(v, map[any]bool{}) {
+			return v, nil
+		}
+		return plug.Simplify(v), nil
+	}, nil
 }
 
 // reply marshals a result document. Marshalling cannot fail for the
