@@ -198,7 +198,7 @@ next to this repository and point at them:
 [dependencies]
 tabnas-expr = { path = "../expr/rs" }
 tabnas-jsonic = { path = "../jsonic/rs" }
-tabnas = { path = "../parser/rs" }
+tabnas = { package = "tabnas-parser", path = "../parser/rs" }
 serde_json = "1"
 ```
 
