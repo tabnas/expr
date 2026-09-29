@@ -111,7 +111,7 @@ linking. Rust does, because none of the crates it needs is published:
   The Go jsonic package re-exports the engine types
   (`jsonic.Make`, `jsonic.Rule`, `jsonic.Context`, …), so `go/expr.go`
   imports `jsonic`, not `parser`, directly.
-- Rust: `rs/Cargo.toml` takes `tabnas = { path = "../../parser/rs" }`,
+- Rust: `rs/Cargo.toml` takes `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }`,
   `tabnas-jsonic = { path = "../../jsonic/rs" }` (which itself takes
   `tabnas-json = { path = "../../json/rs" }`) and, as a dev-dependency,
   `tabnas-support = { path = "../../support/rs" }`. None of those crates
