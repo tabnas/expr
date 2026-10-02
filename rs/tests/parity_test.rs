@@ -46,6 +46,11 @@ fn spec_binary() {
 }
 
 #[test]
+fn spec_dangling_operator() {
+    run_spec("dangling-operator.tsv", parser_default());
+}
+
+#[test]
 fn spec_arithmetic_mixed() {
     run_spec("arithmetic-mixed.tsv", parser_default());
 }

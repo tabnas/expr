@@ -66,7 +66,7 @@ const c = @cImport(@cInclude("tabnas.h"));
 
 ## Format notes
 
-The value is expr's `Simplify` S-expression: each operator node is an array headed by the operator's source text (`1+2*3` → `["+",1,["*",2,3]]`; a paren group is headed by `"("`), and nothing is evaluated — the Go-native AST (`*Op` structs inside `ListRef` wrappers, a shape recorded in expr's DIVERGENCE.md) never crosses the ABI. `Simplify` re-keys maps, so object keys come out sorted, not in source order. A dangling operator (`1+`, `-`) is accepted, as in TypeScript, but the Go port currently builds a self-referential tree for it that `Simplify` would recurse into until the Go stack overflows — a fatal error no `recover` contains, which would abort the host process — so such parses are detected first and answer `accept:true` with `valueError` instead of a value. Handle creation parses a canary (`1+1`) because `jsonic.Make` swallows its grammar-install error.
+The value is expr's `Simplify` S-expression: each operator node is an array headed by the operator's source text (`1+2*3` → `["+",1,["*",2,3]]`; a paren group is headed by `"("`), and nothing is evaluated — the Go-native AST (`*Op` structs inside `ListRef` wrappers, a shape recorded in expr's DIVERGENCE.md) never crosses the ABI. `Simplify` re-keys maps, so object keys come out sorted, not in source order. A dangling operator is accepted with its missing operand absent, matching TypeScript: `1+` produces `["+",1]` and `-` produces `["-"]`. Handle creation parses a canary (`1+1`) because `jsonic.Make` swallows its grammar-install error.
 
 ## Layout
 

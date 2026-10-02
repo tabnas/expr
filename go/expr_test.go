@@ -72,6 +72,11 @@ func TestSpecBinary(t *testing.T) {
 	runSpec(t, "binary.tsv", j)
 }
 
+func TestSpecDanglingOperator(t *testing.T) {
+	j := makeExprJsonic()
+	runSpec(t, "dangling-operator.tsv", j)
+}
+
 func TestSpecArithmeticMixed(t *testing.T) {
 	j := makeExprJsonic()
 	runSpec(t, "arithmetic-mixed.tsv", j)
