@@ -806,6 +806,12 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		if jsonic.IsUndefined(childNode) {
 			childNode = nil
 		}
+		// A val rule opened for a missing operand inherits the expression's
+		// node. At EOF that unchanged node comes back as the child result; do
+		// not install the expression into its own unfilled operand slot.
+		if sameNode(r.Node, childNode) {
+			return
+		}
 
 		if box, ok := r.Node.(*jsonic.ListRef); ok && len(box.Val) > 0 {
 			if _, isOpV := box.Val[0].(*Op); isOpV {

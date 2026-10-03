@@ -69,6 +69,12 @@ describe('spec', () => {
   })
 
 
+  describe('dangling-operator', () => {
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
+    runSpec('dangling-operator.tsv', j)
+  })
+
+
   describe('arithmetic-mixed', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('arithmetic-mixed.tsv', j)

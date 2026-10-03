@@ -13,6 +13,7 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -69,6 +70,26 @@ func TestAcceptsValidSample(t *testing.T) {
 	if valueOut {
 		if _, has := m["value"]; !has {
 			t.Fatalf("valueOut set but no value in: %v", m)
+		}
+	}
+}
+
+func TestDanglingOperatorsReturnFiniteValues(t *testing.T) {
+	h := loadHandle(t)
+	defer freeGrammar(h)
+	for source, expected := range map[string]any{
+		"1+": []any{"+", float64(1)},
+		"-":  []any{"-"},
+	} {
+		m := decode(t, parseWith(h, source))
+		if m["accept"] != true {
+			t.Fatalf("%q was not accepted: %v", source, m)
+		}
+		if _, has := m["valueError"]; has {
+			t.Fatalf("%q returned valueError after cycle repair: %v", source, m)
+		}
+		if !reflect.DeepEqual(m["value"], expected) {
+			t.Fatalf("%q value = %v, want %v", source, m["value"], expected)
 		}
 	}
 }
