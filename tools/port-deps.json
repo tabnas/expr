@@ -1,0 +1,13 @@
+{
+  "note": "Register of tabnas runtime dependencies that differ between this repository's ports (tabnas/admin ADR-24). tools/port-deps.cjs fails on a difference that is not listed here, and on an entry that no longer matches the manifests, so the list cannot outlive what it records. Every entry states the ports that have the dependency today, the reason, and the repair.",
+  "differ": {
+    "parser": {
+      "ports": [
+        "rs",
+        "ts"
+      ],
+      "reason": "TypeScript: ts/src/expr.ts imports `Tabnas`, `Plugin`, `Rule`, `RuleSpec`, `AltSpec`, `AltMatch`, `Tin`, `Context`, `Token` and `util` from '@tabnas/parser' in a plain import, not `import type`; `util` is the only one used as a value (`const { omap, entries, values } = util`), the other nine are used only as types, the file never constructs an engine, and ts/package.json declares the engine as a peer. Rust: rs/src/lib.rs uses the `tabnas` crate directly (`Tabnas`, `Plugin`, `Rule`, `RuleSpec`, `AltSpec`, `AltMatch`, `ListRef`, `Value`, the `TIN_*` constants) and re-exports `TabnasError` as `ExprError`, so rs/Cargo.toml lists `tabnas-parser` under [dependencies]. Go: the only other tabnas module that go/expr.go and go/clib/core.go import is github.com/tabnas/jsonic/go, and they take every engine name from the aliases in that package's engine.go (`jsonic.Jsonic` is `tabnas.Tabnas`; also `jsonic.Rule`, `jsonic.Context`, `jsonic.AltSpec`, `jsonic.RuleSpec`, `jsonic.ListRef`, `jsonic.TinCA`); no .go file under go/ imports github.com/tabnas/parser/go, go/go.mod lists the engine as `// indirect`, so it is still built in through jsonic, and AGENTS.md (\"The tabnas engine dependency\") documents the arrangement.",
+      "repair": "Either the Go port imports the engine: go/expr.go would import github.com/tabnas/parser/go for the names it now takes from the jsonic aliases, and go/go.mod would require it directly instead of `// indirect`; that would also put the engine's `MakeCommentMatcher` in reach, which DIVERGENCE.md (\"Go lexes no comment at all once `/` is an operator\") records as missing from jsonic's aliases. Or the TypeScript and Rust ports take the engine through jsonic as Go does: ts/src/expr.ts would import from '@tabnas/jsonic', which re-exports `util` and the engine types (the engine's `Plugin` as `TabnasPlugin`) but which the file does not import today, and ts/package.json would drop the @tabnas/parser peer; rs/Cargo.toml cannot drop `tabnas` until tabnas-jsonic re-exports the engine: today its rs/src/lib.rs re-exports only `TabnasError`, as `JsonicError`. Undecided: awaits the maintainer's ruling."
+    }
+  }
+}
