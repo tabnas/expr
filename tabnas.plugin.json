@@ -2,9 +2,11 @@
   "$schema": "https://tabnas.dev/schema/plugin.schema.json",
   "name": "@tabnas/expr",
   "go": "github.com/tabnas/expr/go",
+  "rust": "tabnas-expr",
   "description": "Expression syntax with operators and precedence for the tabnas engine.",
   "base": "@tabnas/jsonic",
   "engine": "@tabnas/parser",
+  "pluginKind": "grammar",
   "specDir": "test/spec",
   "clib": {
     "dir": "go/clib",
@@ -20,6 +22,5 @@
   "errorCodes": [],
   "docs": "https://tabnas.dev/docs/packages",
   "repository": "https://github.com/tabnas/expr",
-  "versionSource": "ts/package.json",
-  "pluginKind": "grammar"
+  "versionSource": "ts/package.json"
 }
