@@ -82,7 +82,7 @@ There are three implementations that must behave identically — TypeScript
 | Path | What it is |
 |---|---|
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/expr` package. Plugin in `src/expr.ts` (single file). Library only — `main: dist/expr.js`, **no CLI bin**. Imports the engine as `@tabnas/parser` and the base grammar as `@tabnas/jsonic`. |
-| [`go/`](go/) | Go port — `github.com/tabnas/expr/go`. Plugin in `go/expr.go`. Depends on `github.com/tabnas/jsonic/go` (jsonic re-exports the engine API in Go). Tests: `expr_test.go` (shared `.tsv` fixtures + units), `parity_test.go` (prattify/ternary/config cases mirroring the TS suite), `perf_test.go`. |
+| [`go/`](go/) | Go port — `github.com/tabnas/expr/go`. Plugin in `go/expr.go`. Imports the engine as `github.com/tabnas/parser/go` (`tabnas`) and the base grammar as `github.com/tabnas/jsonic/go` (for jsonic's own `Make`). Tests: `expr_test.go` (shared `.tsv` fixtures + units), `parity_test.go` (prattify/ternary/config cases mirroring the TS suite), `perf_test.go`. |
 | [`rs/`](rs/) | Rust port — the `tabnas-expr` crate (library `tabnas_expr`). Plugin in `rs/src/lib.rs`. Depends on sibling `tabnas/parser` and `tabnas/jsonic` checkouts (and `tabnas/support` for tests) through Cargo `path` dependencies. Tests: `rs/tests/parity_test.rs` (the shared `.tsv` fixtures), `expr_test.rs`, `debug_model_test.rs`, `perf_test.rs`, `version_test.rs`. `rs/AGENTS.md` has the crate-specific hazards. |
 | [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures (`input → expected` JSON), run by **all three** runtimes. The precedence/associativity regression oracle. |
 | [`ts/test/`](ts/test/) | TS suite: `spec.test.ts` (runs the shared `.tsv`s), `expr.test.ts`, `ternary.test.ts`, `debug-model.test.ts`, `doc-examples.test.ts`, `perf.test.ts` (instance-reuse ratio), plus spec generators (`gen-*.mjs`/`gen-spec.js`) and `spec-util.ts`. |
@@ -106,11 +106,12 @@ linking. Rust does, because none of the crates it needs is published:
   `npm i` resolves them all from the npm registry. `engines.node` is
   `">=24"`.
 - Go: `go/go.mod` requires `github.com/tabnas/jsonic/go` (currently
-  `v0.6.2`) and `github.com/tabnas/support/go` (`v0.3.0`), with `json/go`
-  + `parser/go` as indirect deps, all resolved from the Go module proxy.
-  The Go jsonic package re-exports the engine types
-  (`jsonic.Make`, `jsonic.Rule`, `jsonic.Context`, …), so `go/expr.go`
-  imports `jsonic`, not `parser`, directly.
+  `v0.7.4`), `github.com/tabnas/parser/go` (`v0.12.10`) and
+  `github.com/tabnas/support/go` (`v0.3.6`), with `json/go` as an
+  indirect dep, all resolved from the Go module proxy. `go/expr.go`
+  imports the engine as `tabnas` and names the engine's types and values
+  there (`tabnas.Tabnas`, `tabnas.Rule`, `tabnas.Context`, …); it imports
+  `jsonic` only for jsonic's own `jsonic.Make`.
 - Rust: `rs/Cargo.toml` takes `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }`,
   `tabnas-jsonic = { path = "../../jsonic/rs" }` (which itself takes
   `tabnas-json = { path = "../../json/rs" }`) and, as a dev-dependency,
@@ -214,7 +215,7 @@ way it does so the fixes are not "simplified" back into bugs.
    The TS plugin resolves an operator's token id with `tabnas.fixed(src)`
    — an **instance** lookup. `getOrCreateTin` therefore calls
    `j.FixedSrc(src)` (instance config), **not** the global
-   `jsonic.FixedTokens` map. A host grammar registers its punctuation as
+   `tabnas.FixedTokens` map. A host grammar registers its punctuation as
    instance-level fixed tokens; the global table does not contain those.
    Reading the global map instead misses them and mints a fresh
    `"#E"+src` tin that never matches the tin the host lexer emits, so an
