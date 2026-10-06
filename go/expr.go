@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	jsonic "github.com/tabnas/jsonic/go"
+	tabnas "github.com/tabnas/parser/go"
 )
 
 // VERSION is this module's version. It MUST equal ts/package.json
@@ -72,11 +73,11 @@ type PrevalDef struct {
 // ExprOptions configures the Expr plugin.
 type ExprOptions struct {
 	Op       map[string]*OpDef
-	Evaluate func(rule *jsonic.Rule, ctx *jsonic.Context, op *Op, terms []interface{}) interface{}
+	Evaluate func(rule *tabnas.Rule, ctx *tabnas.Context, op *Op, terms []interface{}) interface{}
 }
 
 // _unfilled is a sentinel value for pre-allocated but unfilled expression slots.
-// Expression nodes are wrapped in *jsonic.ListRef so the slice header lives
+// Expression nodes are wrapped in *tabnas.ListRef so the slice header lives
 // inside a struct that all references share by pointer. Re-pointing a
 // ListRef.Val in one rule's action is then visible to every other rule
 // that captured the same *ListRef — the property TS arrays get for free
@@ -90,7 +91,7 @@ func isUnfilled(v interface{}) bool { return v == _unfilled }
 // Returns (slice, ok) where ok is true if the value is an expression
 // slice (wrapped or unwrapped).
 func unwrapExpr(node interface{}) ([]interface{}, bool) {
-	if lr, ok := node.(*jsonic.ListRef); ok {
+	if lr, ok := node.(*tabnas.ListRef); ok {
 		return lr.Val, lr.Val != nil
 	}
 	if sl, ok := node.([]interface{}); ok {
@@ -124,7 +125,7 @@ func sameNode(a, b interface{}) bool {
 }
 
 // isOp checks if a node is an expression (slice starting with *Op).
-// Accepts *jsonic.ListRef wrappers and plain []interface{}.
+// Accepts *tabnas.ListRef wrappers and plain []interface{}.
 func isOp(node interface{}) bool {
 	sl, ok := unwrapExpr(node)
 	if !ok || len(sl) == 0 {
@@ -149,15 +150,15 @@ func isExprOp(node interface{}) bool {
 
 // fillNextSlot walks the expression tree depth-first and fills the deepest
 // unfilled (_unfilled sentinel) slot with val. The node parameter must be
-// a *jsonic.ListRef (or nil/non-expr — returns false). Mutates ListRef.Val
+// a *tabnas.ListRef (or nil/non-expr — returns false). Mutates ListRef.Val
 // in place via index assignment so every rule holding the same pointer
 // observes the fill. Returns true if a slot was filled.
 func fillNextSlot(node interface{}, val interface{}) bool {
 	return fillNextSlotSeen(node, val, nil)
 }
 
-func fillNextSlotSeen(node interface{}, val interface{}, seen map[*jsonic.ListRef]bool) bool {
-	box, _ := node.(*jsonic.ListRef)
+func fillNextSlotSeen(node interface{}, val interface{}, seen map[*tabnas.ListRef]bool) bool {
+	box, _ := node.(*tabnas.ListRef)
 	if box == nil || len(box.Val) == 0 {
 		return false
 	}
@@ -165,7 +166,7 @@ func fillNextSlotSeen(node interface{}, val interface{}, seen map[*jsonic.ListRe
 	// that re-points a shared *ListRef can leave a node reachable from
 	// itself. Without this the depth-first walk recurses forever.
 	if seen == nil {
-		seen = map[*jsonic.ListRef]bool{}
+		seen = map[*tabnas.ListRef]bool{}
 	}
 	if seen[box] {
 		return false
@@ -177,7 +178,7 @@ func fillNextSlotSeen(node interface{}, val interface{}, seen map[*jsonic.ListRe
 	}
 	// Check children first (depth-first) to fill innermost incomplete expr.
 	for i := 1; i <= op.Terms && i < len(box.Val); i++ {
-		if sub, ok := box.Val[i].(*jsonic.ListRef); ok {
+		if sub, ok := box.Val[i].(*tabnas.ListRef); ok {
 			if fillNextSlotSeen(sub, val, seen) {
 				return true
 			}
@@ -193,11 +194,11 @@ func fillNextSlotSeen(node interface{}, val interface{}, seen map[*jsonic.ListRe
 	return false
 }
 
-// makeExpr creates a pre-allocated expression wrapped in *jsonic.ListRef.
+// makeExpr creates a pre-allocated expression wrapped in *tabnas.ListRef.
 // The wrapper means later rule actions can re-point ListRef.Val (e.g. when
 // a ternary opens after a prefix/suffix expr) and every rule holding the
 // same pointer sees the update — Go slices don't share that property.
-func makeExpr(op *Op, terms ...interface{}) *jsonic.ListRef {
+func makeExpr(op *Op, terms ...interface{}) *tabnas.ListRef {
 	n := op.Terms + 1
 	val := make([]interface{}, n)
 	val[0] = op
@@ -208,24 +209,24 @@ func makeExpr(op *Op, terms ...interface{}) *jsonic.ListRef {
 			val[i] = _unfilled
 		}
 	}
-	return &jsonic.ListRef{Val: val, Meta: map[string]any{"expr": true}}
+	return &tabnas.ListRef{Val: val, Meta: map[string]any{"expr": true}}
 }
 
-// asListRef returns node as *jsonic.ListRef if it already is one, or wraps
+// asListRef returns node as *tabnas.ListRef if it already is one, or wraps
 // a plain []interface{} op-array in a fresh ListRef. Used to box values
 // that arrived from outside this plugin so subsequent rebinding works.
-func asListRef(node interface{}) *jsonic.ListRef {
-	if lr, ok := node.(*jsonic.ListRef); ok {
+func asListRef(node interface{}) *tabnas.ListRef {
+	if lr, ok := node.(*tabnas.ListRef); ok {
 		return lr
 	}
 	if sl, ok := node.([]interface{}); ok {
-		return &jsonic.ListRef{Val: sl, Meta: map[string]any{"expr": true}}
+		return &tabnas.ListRef{Val: sl, Meta: map[string]any{"expr": true}}
 	}
 	return nil
 }
 
 // Expr is the expression parser plugin for jsonic.
-func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
+func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	eopts := resolveOptions(opts)
 	allOps := makeAllOps(j, eopts)
 
@@ -295,7 +296,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// the TS plugin's tagExpr helper — which in turn mirrors the jsonic
 	// grammar(...) setting {rule:{alt:{g:'expr'}}}. Applied manually
 	// because the plugin uses j.Rule() (not j.Grammar()).
-	appendExprTag := func(a *jsonic.AltSpec) {
+	appendExprTag := func(a *tabnas.AltSpec) {
 		if a == nil {
 			return
 		}
@@ -309,13 +310,13 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// modifyRule wraps j.Rule(): snapshot the existing alt pointers on
 	// rs.Open/rs.Close, run the modifier, then tag only the alts the
 	// modifier added (by identity) with "expr".
-	modifyRule := func(name string, fn func(rs *jsonic.RuleSpec)) {
-		j.Rule(name, func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
-			preOpen := make(map[*jsonic.AltSpec]bool, len(rs.OpenAlts()))
+	modifyRule := func(name string, fn func(rs *tabnas.RuleSpec)) {
+		j.Rule(name, func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+			preOpen := make(map[*tabnas.AltSpec]bool, len(rs.OpenAlts()))
 			for _, a := range rs.OpenAlts() {
 				preOpen[a] = true
 			}
-			preClose := make(map[*jsonic.AltSpec]bool, len(rs.CloseAlts()))
+			preClose := make(map[*tabnas.AltSpec]bool, len(rs.CloseAlts()))
 			for _, a := range rs.CloseAlts() {
 				preClose[a] = true
 			}
@@ -336,7 +337,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// tagAllAlts tags every alt on the given rule spec with "expr".
 	// Used for plugin-created rules (expr, paren, ternary) where every
 	// alt is plugin-added.
-	tagAllAlts := func(rs *jsonic.RuleSpec) {
+	tagAllAlts := func(rs *tabnas.RuleSpec) {
 		for _, a := range rs.OpenAlts() {
 			appendExprTag(a)
 		}
@@ -346,10 +347,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	}
 
 	// === VAL rule modifications ===
-	modifyRule("val", func(rs *jsonic.RuleSpec) {
+	modifyRule("val", func(rs *tabnas.RuleSpec) {
 		// Prefix operator: backtrack and push to 'expr'.
 		if hasPrefix {
-			rs.PrependOpen(&jsonic.AltSpec{
+			rs.PrependOpen(&tabnas.AltSpec{
 				S: mkS(PREFIX),
 				B: 1,
 				P: "expr",
@@ -361,11 +362,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// Preval: value followed by paren open (e.g., foo(1,2)).
 		if hasPreval {
 			valTinsLocal := j.TokenSet("VAL")
-			rs.PrependOpen(&jsonic.AltSpec{
+			rs.PrependOpen(&tabnas.AltSpec{
 				S: [][]int{valTinsLocal, OP},
 				B: 1,
 				P: "expr",
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					pdef := parenOpenByTin[r.O1.Tin]
 					if pdef == nil || !pdef.Preval.Active {
 						return false
@@ -382,7 +383,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					return true
 				},
 				U: map[string]interface{}{"paren_preval": true},
-				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 					r.Node = r.O0.ResolveVal(r, ctx)
 				},
 				G: "expr,paren,preval",
@@ -393,10 +394,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// is a ternary close token (e.g., `1?2:3` — the `2:` should
 		// NOT be treated as a key-value pair).
 		if hasTernary {
-			rs.PrependOpen(&jsonic.AltSpec{
+			rs.PrependOpen(&tabnas.AltSpec{
 				S: [][]int{j.TokenSet("VAL"), TERN1},
 				B: 1,
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["expr_ternary"] > 0
 				},
 				// Clear the parent-seeded node (mirrors json's #VAL @reset$).
@@ -410,8 +411,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				// instead of the resolved scalar — and the ternary then-slot
 				// would fill with the ternary node itself (a self-cycle).
 				// Resetting forces @val-bc to resolve the matched token.
-				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
-					r.Node = jsonic.Undefined
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+					r.Node = tabnas.Undefined
 				},
 				G: "expr,ternary,block-pair",
 			})
@@ -419,11 +420,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 		// Paren open: backtrack and push to 'expr'.
 		if hasParen {
-			rs.PrependOpen(&jsonic.AltSpec{
+			rs.PrependOpen(&tabnas.AltSpec{
 				S: mkS(OP),
 				B: 1,
 				P: "expr",
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					pdef := parenOpenByTin[r.O0.Tin]
 					return !pdef.Preval.Required
 				},
@@ -433,11 +434,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 		// Infix after value: backtrack, replace with 'expr' (only when NOT inside an expr).
 		if hasInfix {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(INFIX),
 				B: 1,
 				N: map[string]int{"expr_prefix": 0, "expr_suffix": 0},
-				RF: func(r *jsonic.Rule, ctx *jsonic.Context) string {
+				RF: func(r *tabnas.Rule, ctx *tabnas.Context) string {
 					if r.N["expr"] < 1 {
 						return "expr"
 					}
@@ -449,11 +450,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 		// Suffix after value: backtrack, replace with 'expr' (only when NOT inside an expr).
 		if hasSuffix {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(SUFFIX),
 				B: 1,
 				N: map[string]int{"expr_prefix": 0, "expr_suffix": 1},
-				RF: func(r *jsonic.Rule, ctx *jsonic.Context) string {
+				RF: func(r *tabnas.Rule, ctx *tabnas.Context) string {
 					if r.N["expr"] < 1 {
 						return "expr"
 					}
@@ -465,10 +466,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 		// Ternary first separator.
 		if hasTernary {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(TERN0),
 				B: 1,
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["expr"] < 1
 				},
 				R: "ternary",
@@ -476,10 +477,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			})
 
 			// Ternary close: backtrack so ternary rule can consume it.
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(TERN1),
 				B: 1,
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["expr_ternary"] > 0
 				},
 				G: "expr,ternary,close",
@@ -488,10 +489,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 		// Paren close propagation.
 		if hasParen {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(CP),
 				B: 1,
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["expr_paren"] > 0
 				},
 				G: "expr,paren-close",
@@ -499,10 +500,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		}
 
 		// Prevent implicit list inside expression (comma).
-		rs.PrependClose(&jsonic.AltSpec{
-			S: mkS([]int{jsonic.TinCA}),
+		rs.PrependClose(&tabnas.AltSpec{
+			S: mkS([]int{tabnas.TinCA}),
 			B: 1,
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return (r.D == 1 && (r.N["expr"] >= 1 || r.N["expr_ternary"] >= 1)) ||
 					(r.N["expr_ternary"] >= 1 && r.N["expr_paren"] >= 1)
 			},
@@ -511,10 +512,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 		// Prevent implicit list inside expression (space).
 		valTins := j.TokenSet("VAL")
-		rs.PrependClose(&jsonic.AltSpec{
+		rs.PrependClose(&tabnas.AltSpec{
 			S: mkS(valTins),
 			B: 1,
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return (r.D == 1 && (r.N["expr"] >= 1 || r.N["expr_ternary"] >= 1)) ||
 					(r.N["expr_ternary"] >= 1 && r.N["expr_paren"] >= 1)
 			},
@@ -530,16 +531,16 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// produced node, not a token in the lex buffer.
 		// Examples: a[0][1], f(x)(y), f(x)[i], (1+2)(3).
 		if hasParen && hasPreval {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(OP),
 				B: 1,
 				P: "expr",
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					pdef := parenOpenByTin[r.C0.Tin]
 					if pdef == nil || !pdef.Preval.Active {
 						return false
 					}
-					if r.Node == nil || jsonic.IsUndefined(r.Node) {
+					if r.Node == nil || tabnas.IsUndefined(r.Node) {
 						return false
 					}
 					if len(pdef.Preval.Allow) > 0 {
@@ -563,10 +564,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// treating it as the comma operator — the parent then consumes
 		// the `,` itself as a separator.
 		if hasInfix {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(INFIX),
 				B: 1,
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["no_comma_op"] > 0 && r.C0 != nil && r.C0.Src == ","
 				},
 				G: "expr,no-comma-op-bail",
@@ -575,9 +576,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	})
 
 	// === LIST rule modifications ===
-	modifyRule("list", func(rs *jsonic.RuleSpec) {
-		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			if r.Prev == nil || r.Prev == jsonic.NoRule || r.Prev.U["implist"] == nil {
+	modifyRule("list", func(rs *tabnas.RuleSpec) {
+		rs.AddBO(func(r *tabnas.Rule, ctx *tabnas.Context) {
+			if r.Prev == nil || r.Prev == tabnas.NoRule || r.Prev.U["implist"] == nil {
 				rn := r.EnsureN()
 				rn["expr"] = 0
 				rn["expr_prefix"] = 0
@@ -587,10 +588,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			}
 		})
 		if hasParen {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(CP),
-				BF: func(r *jsonic.Rule, ctx *jsonic.Context) int {
-					if r.C0.Tin == jsonic.TinCS && r.N["expr_paren"] < 1 {
+				BF: func(r *tabnas.Rule, ctx *tabnas.Context) int {
+					if r.C0.Tin == tabnas.TinCS && r.N["expr_paren"] < 1 {
 						return 0
 					}
 					return 1
@@ -600,8 +601,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			// Propagate implicit list node to enclosing paren.
 			// Go slice append may reallocate, making paren.Child.Node
 			// (which points to the original val) stale.
-			rs.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
-				if r.N["expr_paren"] > 0 && r.Parent != nil && r.Parent != jsonic.NoRule && r.Parent.Name == "paren" {
+			rs.AddAC(func(r *tabnas.Rule, ctx *tabnas.Context) {
+				if r.N["expr_paren"] > 0 && r.Parent != nil && r.Parent != tabnas.NoRule && r.Parent.Name == "paren" {
 					r.Parent.Node = r.Node
 				}
 			})
@@ -609,8 +610,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	})
 
 	// === MAP rule modifications ===
-	modifyRule("map", func(rs *jsonic.RuleSpec) {
-		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
+	modifyRule("map", func(rs *tabnas.RuleSpec) {
+		rs.AddBO(func(r *tabnas.Rule, ctx *tabnas.Context) {
 			rn := r.EnsureN()
 			rn["expr"] = 0
 			rn["expr_prefix"] = 0
@@ -619,10 +620,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			rn["expr_ternary"] = 0
 		})
 		if hasParen {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(CP),
-				BF: func(r *jsonic.Rule, ctx *jsonic.Context) int {
-					if r.C0.Tin == jsonic.TinCB && r.N["expr_paren"] < 1 {
+				BF: func(r *tabnas.Rule, ctx *tabnas.Context) int {
+					if r.C0.Tin == tabnas.TinCB && r.N["expr_paren"] < 1 {
 						return 0
 					}
 					return 1
@@ -633,12 +634,12 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	})
 
 	// === PAIR rule modifications ===
-	modifyRule("pair", func(rs *jsonic.RuleSpec) {
+	modifyRule("pair", func(rs *tabnas.RuleSpec) {
 		if hasParen {
-			rs.PrependClose(&jsonic.AltSpec{
+			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(CP),
 				B: 1,
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["expr_paren"] > 0 || r.N["pk"] > 0
 				},
 				G: "expr,paren,pair",
@@ -647,14 +648,14 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	})
 
 	// === ELEM rule modifications ===
-	modifyRule("elem", func(rs *jsonic.RuleSpec) {
+	modifyRule("elem", func(rs *tabnas.RuleSpec) {
 		if hasParen {
 			// Close implicit list within parens when ')' is seen.
-			rs.PrependClose([]*jsonic.AltSpec{
+			rs.PrependClose([]*tabnas.AltSpec{
 				{
 					S: mkS(CP),
 					B: 1,
-					C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+					C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 						return r.N["expr_paren"] > 0
 					},
 					G: "expr,paren,elem,close",
@@ -670,10 +671,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			// Propagate elem node to enclosing paren after close.
 			// Go slice append may reallocate, making earlier
 			// references to the list stale.
-			rs.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+			rs.AddAC(func(r *tabnas.Rule, ctx *tabnas.Context) {
 				if r.N["expr_paren"] > 0 {
 					// Walk parent chain to find paren rule.
-					for p := r.Parent; p != nil && p != jsonic.NoRule; p = p.Parent {
+					for p := r.Parent; p != nil && p != tabnas.NoRule; p = p.Parent {
 						if p.Name == "paren" {
 							p.Node = r.Node
 							break
@@ -685,15 +686,15 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	})
 
 	// === EXPR rule ===
-	exprSpec := &jsonic.RuleSpec{Name: "expr"}
+	exprSpec := &tabnas.RuleSpec{Name: "expr"}
 
-	exprOpen := make([]*jsonic.AltSpec, 0)
+	exprOpen := make([]*tabnas.AltSpec, 0)
 
 	// Paren open inside expression: push to 'paren' rule (not 'val').
 	// The 'paren' rule consumes '(' and pushes to 'val', breaking the
 	// val→expr→val backtrack loop.
 	if hasParen {
-		exprOpen = append(exprOpen, &jsonic.AltSpec{
+		exprOpen = append(exprOpen, &tabnas.AltSpec{
 			S: mkS(OP),
 			P: "paren",
 			B: 1,
@@ -703,14 +704,14 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// Prefix operator.
 	if hasPrefix {
-		exprOpen = append(exprOpen, &jsonic.AltSpec{
+		exprOpen = append(exprOpen, &tabnas.AltSpec{
 			S: mkS(PREFIX),
 			P: "val",
 			N: map[string]int{"expr": 1, "dlist": 1, "dmap": 1},
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return r.N["expr_prefix"] > 0
 			},
-			A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 				op := prefixByTin[r.O0.Tin]
 				if isOp(r.Parent.Node) && isExprOp(r.Parent.Node) {
 					// prattify mutates the root box in place and returns the
@@ -730,11 +731,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// Infix operator.
 	if hasInfix {
-		exprOpen = append(exprOpen, &jsonic.AltSpec{
+		exprOpen = append(exprOpen, &tabnas.AltSpec{
 			S: mkS(INFIX),
 			P: "val",
 			N: map[string]int{"expr": 1, "expr_prefix": 0, "dlist": 1, "dmap": 1},
-			A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 				op := infixByTin[r.O0.Tin]
 				prev := r.Prev
 				parent := r.Parent
@@ -772,10 +773,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// Suffix operator.
 	if hasSuffix {
-		exprOpen = append(exprOpen, &jsonic.AltSpec{
+		exprOpen = append(exprOpen, &tabnas.AltSpec{
 			S: mkS(SUFFIX),
 			N: map[string]int{"expr": 1, "expr_prefix": 0, "dlist": 1, "dmap": 1},
-			A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 				op := suffixByTin[r.O0.Tin]
 				prev := r.Prev
 				if isOp(prev.Node) {
@@ -794,8 +795,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// Uses fillNextSlot to find the deepest unfilled slot and fill it.
 	// This avoids Go slice append issues and works with the Go parser's
 	// replacement-chain result extraction.
-	exprSpec.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
-		if r.Child == nil || r.Child == jsonic.NoRule {
+	exprSpec.AddBC(func(r *tabnas.Rule, ctx *tabnas.Context) {
+		if r.Child == nil || r.Child == tabnas.NoRule {
 			return
 		}
 		// Paren child: paren.AC already propagated the result.
@@ -803,7 +804,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			return
 		}
 		childNode := r.Child.Node
-		if jsonic.IsUndefined(childNode) {
+		if tabnas.IsUndefined(childNode) {
 			childNode = nil
 		}
 		// A val rule opened for a missing operand inherits the expression's
@@ -813,7 +814,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			return
 		}
 
-		if box, ok := r.Node.(*jsonic.ListRef); ok && len(box.Val) > 0 {
+		if box, ok := r.Node.(*tabnas.ListRef); ok && len(box.Val) > 0 {
 			if _, isOpV := box.Val[0].(*Op); isOpV {
 				fillNextSlot(box, childNode)
 			}
@@ -821,13 +822,13 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	})
 
 	// expr.Close alternates.
-	exprClose := make([]*jsonic.AltSpec, 0)
+	exprClose := make([]*tabnas.AltSpec, 0)
 
 	// After paren child (paren rule completed).
 	if hasParen {
-		exprClose = append(exprClose, &jsonic.AltSpec{
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
-				return r.Child != nil && r.Child != jsonic.NoRule && r.Child.Name == "paren"
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return r.Child != nil && r.Child != tabnas.NoRule && r.Child.Name == "paren"
 			},
 			N: map[string]int{"expr": 0},
 			G: "expr,paren,end",
@@ -838,9 +839,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// parent rule (e.g. an embedding grammar's wrapper) consumes the
 	// comma as a separator instead of as the comma operator.
 	if hasInfix {
-		exprClose = append(exprClose, &jsonic.AltSpec{
+		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(INFIX),
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return r.N["no_comma_op"] > 0 && r.C0 != nil && r.C0.Src == ","
 			},
 			B: 1,
@@ -851,9 +852,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// More infix (not during prefix).
 	if hasInfix {
-		exprClose = append(exprClose, &jsonic.AltSpec{
+		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(INFIX),
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return r.N["expr_prefix"] < 1
 			},
 			B: 1,
@@ -861,9 +862,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			G: "expr,infix,more",
 		})
 		// Infix seen during prefix: just end and backtrack.
-		exprClose = append(exprClose, &jsonic.AltSpec{
+		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(INFIX),
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return r.N["expr_prefix"] > 0
 			},
 			B: 1,
@@ -873,9 +874,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// More suffix (not during prefix).
 	if hasSuffix {
-		exprClose = append(exprClose, &jsonic.AltSpec{
+		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(SUFFIX),
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return r.N["expr_prefix"] < 1
 			},
 			B: 1,
@@ -886,9 +887,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// Paren close inside expression.
 	if hasParen {
-		exprClose = append(exprClose, &jsonic.AltSpec{
+		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(CP),
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return r.N["expr_paren"] > 0
 			},
 			B: 1,
@@ -898,9 +899,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// Ternary start.
 	if hasTernary {
-		exprClose = append(exprClose, &jsonic.AltSpec{
+		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(TERN0),
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return r.N["expr_prefix"] < 1
 			},
 			B: 1,
@@ -911,14 +912,14 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// Implicit list at top level (comma).
 	valTins := j.TokenSet("VAL")
-	exprClose = append(exprClose, &jsonic.AltSpec{
-		S: mkS([]int{jsonic.TinCA}),
-		C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+	exprClose = append(exprClose, &tabnas.AltSpec{
+		S: mkS([]int{tabnas.TinCA}),
+		C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 			return r.D <= 0
 		},
 		N: map[string]int{"expr": 0},
 		R: "elem",
-		A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+		A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 			node := r.Node
 			if isOp(node) {
 				node = cleanExpr(node)
@@ -931,15 +932,15 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	})
 
 	// Implicit list at top level (space).
-	exprClose = append(exprClose, &jsonic.AltSpec{
+	exprClose = append(exprClose, &tabnas.AltSpec{
 		S: mkS(valTins),
-		C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+		C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 			return r.D <= 0
 		},
 		N: map[string]int{"expr": 0},
 		B: 1,
 		R: "elem",
-		A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+		A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 			node := r.Node
 			if isOp(node) {
 				node = cleanExpr(node)
@@ -955,12 +956,12 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// When expr finishes inside a paren (expr_paren > 0) and sees a
 	// comma, wrap the expression in a list on the paren node and
 	// replace with elem to process subsequent items.
-	implicitListAction := func(r *jsonic.Rule, ctx *jsonic.Context) {
+	implicitListAction := func(r *tabnas.Rule, ctx *tabnas.Context) {
 		// Find enclosing paren rule in the stack.
 		// If a map or list rule sits between the expression and the paren,
 		// the expression is inside a contained value — not a direct paren
 		// child — so don't create an implicit list.
-		var paren *jsonic.Rule
+		var paren *tabnas.Rule
 		for rI := ctx.RSI - 1; rI >= 0; rI-- {
 			if ctx.RS[rI].Name == "paren" {
 				paren = ctx.RS[rI]
@@ -994,11 +995,11 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// Only fire when there's no existing list/elem handling
 		// the implicit list. Walk the parent chain to check if
 		// there's an elem/list between this expr and the paren.
-		isFirstImplicitInParen := func(r *jsonic.Rule) bool {
+		isFirstImplicitInParen := func(r *tabnas.Rule) bool {
 			if r.N["expr_paren"] < 1 || r.N["pk"] >= 1 {
 				return false
 			}
-			for p := r.Parent; p != nil && p != jsonic.NoRule; p = p.Parent {
+			for p := r.Parent; p != nil && p != tabnas.NoRule; p = p.Parent {
 				if p.Name == "elem" || p.Name == "list" {
 					return false // existing list machinery handles it
 				}
@@ -1008,9 +1009,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			}
 			return true
 		}
-		exprClose = append(exprClose, &jsonic.AltSpec{
-			S: mkS([]int{jsonic.TinCA}),
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS([]int{tabnas.TinCA}),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return isFirstImplicitInParen(r)
 			},
 			N: map[string]int{"expr": 0, "expr_prefix": 0, "expr_suffix": 0},
@@ -1018,9 +1019,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			A: implicitListAction,
 			G: "expr,paren,imp,comma",
 		})
-		exprClose = append(exprClose, &jsonic.AltSpec{
+		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(valTins),
-			C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 				return isFirstImplicitInParen(r) && r.N["expr_suffix"] < 1
 			},
 			N: map[string]int{"expr": 0, "expr_prefix": 0, "expr_suffix": 0},
@@ -1032,9 +1033,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	}
 
 	// Implicit list (comma, not top).
-	exprClose = append(exprClose, &jsonic.AltSpec{
-		S: mkS([]int{jsonic.TinCA}),
-		C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+	exprClose = append(exprClose, &tabnas.AltSpec{
+		S: mkS([]int{tabnas.TinCA}),
+		C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 			return r.N["pk"] < 1
 		},
 		N: map[string]int{"expr": 0},
@@ -1043,8 +1044,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	})
 
 	// Implicit list (space, not top).
-	exprClose = append(exprClose, &jsonic.AltSpec{
-		C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+	exprClose = append(exprClose, &tabnas.AltSpec{
+		C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 			return r.N["pk"] < 1 && r.N["expr_suffix"] < 1
 		},
 		N: map[string]int{"expr": 0},
@@ -1056,7 +1057,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// its tokens but the next token isn't one that extends the expression
 	// (e.g. ZZ after a suffix like "1!"). Without this, jsonic/go >= v0.1.13
 	// raises jsonic/unexpected.
-	exprClose = append(exprClose, &jsonic.AltSpec{
+	exprClose = append(exprClose, &tabnas.AltSpec{
 		N: map[string]int{"expr": 0},
 		G: "expr,expr-end",
 	})
@@ -1069,10 +1070,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	//     r.parent.node = out
 	//     r.node = out
 	//   }
-	exprSpec.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+	exprSpec.AddAC(func(r *tabnas.Rule, ctx *tabnas.Context) {
 		if eopts.Evaluate != nil && r.N["expr"] < 1 {
 			parent := r.Parent
-			if parent != nil && parent != jsonic.NoRule {
+			if parent != nil && parent != tabnas.NoRule {
 				// The parent holds an implicit list (`f(1+2, 3)`,
 				// `1+2, 3`) rather than this expression's own op-array.
 				// A list is a plain slice, not an op-array, so its
@@ -1109,7 +1110,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				// Identity, not shape, is what makes this safe to reach
 				// for: the list is only treated as this member's when it
 				// still ends with the exact node about to be reduced.
-				if grand := parent.Parent; grand != nil && grand != jsonic.NoRule {
+				if grand := parent.Parent; grand != nil && grand != tabnas.NoRule {
 					if sl, isSlice := unwrapExpr(grand.Node); isSlice &&
 						!isOp(grand.Node) && len(sl) > 0 &&
 						sameNode(sl[len(sl)-1], parent.Node) {
@@ -1149,9 +1150,9 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 	// Intermediary rule that consumes '(' and pushes to val.
 	// This breaks the val→expr→val backtrack loop.
 	if hasParen {
-		parenSpec := &jsonic.RuleSpec{Name: "paren"}
+		parenSpec := &tabnas.RuleSpec{Name: "paren"}
 
-		parenSpec.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
+		parenSpec.AddBO(func(r *tabnas.Rule, ctx *tabnas.Context) {
 			// Allow implicits inside parens.
 			rn := r.EnsureN()
 			rn["dmap"] = 0
@@ -1159,23 +1160,23 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			rn["pk"] = 0
 		})
 
-		parenSpec.AddOpen([]*jsonic.AltSpec{
+		parenSpec.AddOpen([]*tabnas.AltSpec{
 			// Empty parens: ()
 			{
 				S: func() [][]int { return [][]int{OP, CP} }(),
 				B: 1,
 				G: "expr,paren,empty",
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					oOp := parenOpenByTin[r.O0.Tin]
 					cOp := parenCloseByTin[r.O1.Tin]
 					return oOp != nil && cOp != nil && oOp.Name == cOp.Name
 				},
-				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 					pop := parenOpenByTin[r.O0.Tin]
 					pd := "expr_paren_depth_" + pop.Name
 					r.EnsureU()[pd] = 1
 					r.EnsureN()[pd] = 1
-					r.Node = jsonic.Undefined
+					r.Node = tabnas.Undefined
 				},
 			},
 			// Normal paren open: consumes '(' and pushes to val.
@@ -1189,20 +1190,20 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					"expr_suffix": 0,
 				},
 				G: "expr,paren,open",
-				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 					pop := parenOpenByTin[r.O0.Tin]
 					pd := "expr_paren_depth_" + pop.Name
 					r.EnsureU()[pd] = 1
 					r.EnsureN()[pd] = 1
-					r.Node = jsonic.Undefined
+					r.Node = tabnas.Undefined
 				},
 			},
 		}...)
 
-		parenSpec.AddClose([]*jsonic.AltSpec{
+		parenSpec.AddClose([]*tabnas.AltSpec{
 			{
 				S: mkS(CP),
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					cop := parenCloseByTin[r.C0.Tin]
 					if cop == nil {
 						return false
@@ -1211,7 +1212,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					_, ok := r.N[pd]
 					return ok && r.N[pd] > 0
 				},
-				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 					// Construct completed paren expression.
 					cop := parenCloseByTin[r.C0.Tin]
 					pop := parenOpenByTin[cop.OTin]
@@ -1237,32 +1238,32 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					resultVal := []interface{}{pop}
 
 					// Inject function name if preval is active.
-					if r.Parent != nil && r.Parent != jsonic.NoRule &&
-						r.Parent.Parent != nil && r.Parent.Parent != jsonic.NoRule &&
+					if r.Parent != nil && r.Parent != tabnas.NoRule &&
+						r.Parent.Parent != nil && r.Parent.Parent != tabnas.NoRule &&
 						r.Parent.Parent.U["paren_preval"] == true &&
 						r.Parent.Parent.Node != nil {
 						resultVal = append(resultVal, r.Parent.Parent.Node)
 					}
 
-					if !jsonic.IsUndefined(val) {
+					if !tabnas.IsUndefined(val) {
 						resultVal = append(resultVal, val)
 					}
 
-					r.Node = &jsonic.ListRef{Val: resultVal, Meta: map[string]any{"expr": true}}
+					r.Node = &tabnas.ListRef{Val: resultVal, Meta: map[string]any{"expr": true}}
 				},
 				G: "expr,paren,close",
 			},
 		}...)
 
-		parenSpec.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			if r.Child == nil || r.Child == jsonic.NoRule {
+		parenSpec.AddBC(func(r *tabnas.Rule, ctx *tabnas.Context) {
+			if r.Child == nil || r.Child == tabnas.NoRule {
 				return
 			}
 			childNode := r.Child.Node
-			if jsonic.IsUndefined(childNode) {
+			if tabnas.IsUndefined(childNode) {
 				return
 			}
-			if jsonic.IsUndefined(r.Node) {
+			if tabnas.IsUndefined(r.Node) {
 				r.Node = childNode
 			} else if isOp(childNode) {
 				// Don't overwrite if paren.Node is already a plain list
@@ -1276,10 +1277,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			}
 		})
 
-		parenSpec.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+		parenSpec.AddAC(func(r *tabnas.Rule, ctx *tabnas.Context) {
 			// Propagate paren result to parent.
 			r.Parent.Node = r.Node
-			if r.Parent.Parent != nil && r.Parent.Parent != jsonic.NoRule {
+			if r.Parent.Parent != nil && r.Parent.Parent != tabnas.NoRule {
 				r.Parent.Parent.Node = r.Node
 			}
 		})
@@ -1290,14 +1291,14 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 	// === TERNARY rule ===
 	if hasTernary {
-		ternarySpec := &jsonic.RuleSpec{Name: "ternary"}
+		ternarySpec := &tabnas.RuleSpec{Name: "ternary"}
 
-		ternarySpec.AddOpen([]*jsonic.AltSpec{
+		ternarySpec.AddOpen([]*tabnas.AltSpec{
 			{
 				S: mkS(TERN0),
 				P: "val",
 				N: map[string]int{"expr_ternary": 1, "dlist": 1, "dmap": 1, "expr": 0, "expr_prefix": 0, "expr_suffix": 0},
-				A: func(r *jsonic.Rule, ctx *jsonic.Context) {
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 					op := ternaryByTin[r.O0.Tin]
 					prev := r.Prev
 					prevNode := prev.Node
@@ -1308,7 +1309,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 					// prefix expr's slot) sees the new ternary on next read.
 					// Without this indirection, Go's slice reassignment leaves
 					// the outer rules pointing at stale pre-rewrap slices.
-					if box, ok := prevNode.(*jsonic.ListRef); ok && len(box.Val) > 0 {
+					if box, ok := prevNode.(*tabnas.ListRef); ok && len(box.Val) > 0 {
 						if _, isOpV := box.Val[0].(*Op); isOpV {
 							priorCopy := dupExpr(box)
 							n := op.Terms + 1
@@ -1331,15 +1332,15 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			},
 		}...)
 
-		ternarySpec.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			if r.Child == nil || r.Child == jsonic.NoRule {
+		ternarySpec.AddBC(func(r *tabnas.Rule, ctx *tabnas.Context) {
+			if r.Child == nil || r.Child == tabnas.NoRule {
 				return
 			}
 			childNode := r.Child.Node
-			if jsonic.IsUndefined(childNode) {
+			if tabnas.IsUndefined(childNode) {
 				childNode = nil
 			}
-			if box, ok := r.Node.(*jsonic.ListRef); ok {
+			if box, ok := r.Node.(*tabnas.ListRef); ok {
 				step, _ := r.U["ternary_step"].(int)
 				if step == 0 {
 					fillNextSlot(box, childNode)
@@ -1358,14 +1359,14 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// Condition for implicit list after ternary completes.
 		// Only fire when ternary is the FIRST expression — i.e., not already
 		// inside an elem/list that handles implicit list continuation.
-		implicitTernaryCond := func(r *jsonic.Rule) bool {
+		implicitTernaryCond := func(r *tabnas.Rule) bool {
 			step, _ := r.U["ternary_step"].(int)
 			if step != 2 || r.N["pk"] >= 1 {
 				return false
 			}
 			if r.D == 0 {
 				// Top-level: check no elem/list parent exists.
-				for p := r.Parent; p != nil && p != jsonic.NoRule; p = p.Parent {
+				for p := r.Parent; p != nil && p != tabnas.NoRule; p = p.Parent {
 					if p.Name == "elem" || p.Name == "list" {
 						return false
 					}
@@ -1374,7 +1375,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			}
 			if r.N["expr_paren"] >= 1 {
 				// Inside paren: check no elem/list between ternary and paren.
-				for p := r.Parent; p != nil && p != jsonic.NoRule; p = p.Parent {
+				for p := r.Parent; p != nil && p != tabnas.NoRule; p = p.Parent {
 					if p.Name == "elem" || p.Name == "list" {
 						return false
 					}
@@ -1388,14 +1389,14 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		}
 
 		// Action to wrap ternary result as first element of implicit list.
-		implicitTernaryAction := func(r *jsonic.Rule, ctx *jsonic.Context) {
+		implicitTernaryAction := func(r *tabnas.Rule, ctx *tabnas.Context) {
 			// Fill the last slot with child node.
-			if r.Child != nil && r.Child != jsonic.NoRule {
+			if r.Child != nil && r.Child != tabnas.NoRule {
 				childNode := r.Child.Node
-				if jsonic.IsUndefined(childNode) {
+				if tabnas.IsUndefined(childNode) {
 					childNode = nil
 				}
-				if box, ok := r.Node.(*jsonic.ListRef); ok {
+				if box, ok := r.Node.(*tabnas.ListRef); ok {
 					fillNextSlot(box, childNode)
 				}
 			}
@@ -1419,13 +1420,13 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			r.Node = listNode
 		}
 
-		ternarySpec.AddClose([]*jsonic.AltSpec{
+		ternarySpec.AddClose([]*tabnas.AltSpec{
 			// Second separator (e.g. ':').
 			{
 				S: mkS(TERN1),
 				P: "val",
 				N: map[string]int{"expr": 0, "expr_prefix": 0, "expr_suffix": 0},
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					step, _ := r.U["ternary_step"].(int)
 					return step == 1
 				},
@@ -1434,8 +1435,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 			// Implicit list after ternary (comma): 1?2:3,b → [[?,1,2,3],"b"]
 			{
-				S: mkS([]int{jsonic.TinCA}),
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				S: mkS([]int{tabnas.TinCA}),
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return implicitTernaryCond(r)
 				},
 				R: "elem",
@@ -1446,7 +1447,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 			// Paren close after ternary: backtrack so paren can consume it.
 			{
 				S: mkS(CP),
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					step, _ := r.U["ternary_step"].(int)
 					return step == 2 && r.N["expr_paren"] >= 1
 				},
@@ -1456,8 +1457,8 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 			// Implicit list after ternary (space): 1?2:3 b → [[?,1,2,3],"b"]
 			{
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
-					return implicitTernaryCond(r) && ctx.T0.Tin != jsonic.TinZZ
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+					return implicitTernaryCond(r) && ctx.T0.Tin != tabnas.TinZZ
 				},
 				R: "elem",
 				A: implicitTernaryAction,
@@ -1466,7 +1467,7 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 
 			// End of ternary (deeper depth, or no more tokens).
 			{
-				C: func(r *jsonic.Rule, ctx *jsonic.Context) bool {
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					step, _ := r.U["ternary_step"].(int)
 					return step == 2
 				},
@@ -1483,13 +1484,13 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 		// successive ternary instance and the original val that started
 		// the chain) and to the parent, so whichever node the engine
 		// returns reflects the evaluated form.
-		ternarySpec.AddAC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+		ternarySpec.AddAC(func(r *tabnas.Rule, ctx *tabnas.Context) {
 			if eopts.Evaluate == nil {
 				return
 			}
 			// Skip while the chain is still ongoing: evaluate only on the
 			// FINAL step (TS: if r.next.name === 'ternary' return).
-			if r.Next != nil && r.Next != jsonic.NoRule && r.Next.Name == "ternary" {
+			if r.Next != nil && r.Next != tabnas.NoRule && r.Next.Name == "ternary" {
 				return
 			}
 			if !isOp(r.Node) {
@@ -1508,10 +1509,10 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 				}
 			}
 			out := evaluation(r, ctx, r.Node, eopts.Evaluate)
-			for cur := r; cur != nil && cur != jsonic.NoRule; cur = cur.Prev {
+			for cur := r; cur != nil && cur != tabnas.NoRule; cur = cur.Prev {
 				cur.Node = out
 			}
-			if r.Parent != nil && r.Parent != jsonic.NoRule {
+			if r.Parent != nil && r.Parent != tabnas.NoRule {
 				r.Parent.Node = out
 			}
 		})
@@ -1535,23 +1536,23 @@ func Expr(j *jsonic.Jsonic, opts map[string]interface{}) error {
 // instance, came back as `["a", [["!", ["@", "x"]]]]`. The rule's own node
 // is the one the parser reads at the top level, so dropping the write
 // loses nothing.
-func setParentNode(r *jsonic.Rule, node interface{}) {
-	if r.Parent != nil && r.Parent != jsonic.NoRule {
+func setParentNode(r *tabnas.Rule, node interface{}) {
+	if r.Parent != nil && r.Parent != tabnas.NoRule {
 		r.Parent.Node = node
 	}
 }
 
 // prior converts a prior rule's node into the start of a new expression.
-// All expression nodes are returned as *jsonic.ListRef so subsequent rule
+// All expression nodes are returned as *tabnas.ListRef so subsequent rule
 // actions can re-point ListRef.Val and have every reference (including the
 // outer rule's r.Child.Node) observe the update.
-func prior(rule *jsonic.Rule, priorRule *jsonic.Rule, op *Op) *jsonic.ListRef {
+func prior(rule *tabnas.Rule, priorRule *tabnas.Rule, op *Op) *tabnas.ListRef {
 	priorNode := priorRule.Node
 	if isOp(priorNode) {
 		priorNode = dupExpr(priorNode)
 	}
 
-	var expr *jsonic.ListRef
+	var expr *tabnas.ListRef
 	if op.Prefix {
 		expr = makeExpr(op)
 	} else {
@@ -1566,7 +1567,7 @@ func prior(rule *jsonic.Rule, priorRule *jsonic.Rule, op *Op) *jsonic.ListRef {
 	// a value of its own: after one `@x!, 3`, an unrelated `a,b` on a
 	// brand-new instance returns `["a", [["!", ["@", "x"]]]]`. There is no
 	// prior rule to hand the expression to, so don't pretend otherwise.
-	if priorRule != nil && priorRule != jsonic.NoRule {
+	if priorRule != nil && priorRule != tabnas.NoRule {
 		priorRule.Node = expr
 	}
 
@@ -1576,7 +1577,7 @@ func prior(rule *jsonic.Rule, priorRule *jsonic.Rule, op *Op) *jsonic.ListRef {
 }
 
 // prattify integrates a new operator into the expression tree according to
-// operator precedence (Pratt algorithm). Operates on the *jsonic.ListRef
+// operator precedence (Pratt algorithm). Operates on the *tabnas.ListRef
 // wrapper so any rebinding of expr.Val is visible to all holders of the
 // pointer — the root box is always mutated in place.
 //
@@ -1587,7 +1588,7 @@ func prior(rule *jsonic.Rule, priorRule *jsonic.Rule, op *Op) *jsonic.ListRef {
 // a higher-precedence (drilling) infix or a prefix. The engine's rule
 // actions track the root box separately and slot-fill via fillNextSlot, so
 // they do not depend on the returned value.
-func prattify(exprNode interface{}, op *Op) *jsonic.ListRef {
+func prattify(exprNode interface{}, op *Op) *tabnas.ListRef {
 	box := asListRef(exprNode)
 	if box == nil || len(box.Val) == 0 {
 		return makeExpr(op, exprNode)
@@ -1668,7 +1669,7 @@ func prattify(exprNode interface{}, op *Op) *jsonic.ListRef {
 // the ListRef. The same *ListRef pointer continues to be used; only its
 // Val slice is replaced. Other rules holding the pointer see the new Val
 // on next read.
-func wrapExpr(box *jsonic.ListRef, op *Op) {
+func wrapExpr(box *tabnas.ListRef, op *Op) {
 	oldCopy := dupExpr(box)
 	needed := op.Terms + 1
 	newVal := make([]interface{}, needed)
@@ -1681,7 +1682,7 @@ func wrapExpr(box *jsonic.ListRef, op *Op) {
 }
 
 // prattifySuffix integrates a suffix operator into the expression tree.
-func prattifySuffix(node interface{}, op *Op) *jsonic.ListRef {
+func prattifySuffix(node interface{}, op *Op) *tabnas.ListRef {
 	box := asListRef(node)
 	if box == nil || len(box.Val) == 0 {
 		return makeExpr(op, node)
@@ -1752,18 +1753,18 @@ func cleanExpr(node interface{}) []interface{} {
 	return out
 }
 
-// dupExpr produces a shallow copy of an expression as a fresh *jsonic.ListRef.
+// dupExpr produces a shallow copy of an expression as a fresh *tabnas.ListRef.
 // Children that are themselves *ListRef remain shared (they each have their
 // own pointer-mutation contract); top-level slots are copied so the new
 // ListRef is independent of the original.
-func dupExpr(node interface{}) *jsonic.ListRef {
+func dupExpr(node interface{}) *tabnas.ListRef {
 	sl, ok := unwrapExpr(node)
 	if !ok {
 		return nil
 	}
 	out := make([]interface{}, len(sl))
 	copy(out, sl)
-	return &jsonic.ListRef{Val: out, Meta: map[string]any{"expr": true}}
+	return &tabnas.ListRef{Val: out, Meta: map[string]any{"expr": true}}
 }
 
 // defaultParser is a lazily-created instance reused by the no-options Parse
@@ -1774,7 +1775,7 @@ func dupExpr(node interface{}) *jsonic.ListRef {
 // shared instance is safe for concurrent use. Mirrors @tabnas/json's Parse.
 var (
 	defaultOnce   sync.Once
-	defaultParser *jsonic.Jsonic
+	defaultParser *tabnas.Tabnas
 )
 
 // Parse is a convenience function. With no options it reuses a single
@@ -1790,7 +1791,7 @@ func Parse(src string, opts ...map[string]interface{}) (interface{}, error) {
 }
 
 // MakeJsonic creates a jsonic instance configured with the Expr plugin.
-func MakeJsonic(opts ...map[string]interface{}) *jsonic.Jsonic {
+func MakeJsonic(opts ...map[string]interface{}) *tabnas.Tabnas {
 	j := jsonic.Make()
 	var pluginOpts map[string]interface{}
 	if len(opts) > 0 {
@@ -1865,7 +1866,7 @@ func resolveOptions(opts map[string]interface{}) *ExprOptions {
 		}
 	}
 	if evalRaw, ok := opts["evaluate"]; ok {
-		if evalFn, ok := evalRaw.(func(*jsonic.Rule, *jsonic.Context, *Op, []interface{}) interface{}); ok {
+		if evalFn, ok := evalRaw.(func(*tabnas.Rule, *tabnas.Context, *Op, []interface{}) interface{}); ok {
 			eopts.Evaluate = evalFn
 		}
 	}
@@ -1952,7 +1953,7 @@ func bindingPower(power, unset int64) int64 {
 	return power
 }
 
-func makeAllOps(j *jsonic.Jsonic, eopts *ExprOptions) []*Op {
+func makeAllOps(j *tabnas.Tabnas, eopts *ExprOptions) []*Op {
 	// Track registered tins by source string to share between operators
 	// (e.g., "+" is both prefix "positive" and infix "addition").
 	// FixedTokens is a map[string]Tin, so only one tin per source string.
@@ -2102,12 +2103,12 @@ func makeAllOps(j *jsonic.Jsonic, eopts *ExprOptions) []*Op {
 
 // Prattify exposes the core Pratt algorithm for unit testing, mirroring
 // the TS module's `testing.prattify` export. It embeds op into the
-// expression tree expr (a *jsonic.ListRef or a plain []interface{}
+// expression tree expr (a *tabnas.ListRef or a plain []interface{}
 // op-array, mutated in place) according to operator precedence, and
 // returns the sub-expression the new operator now heads — the attachment
 // point where the operator's next term belongs. See prattify for the
 // exact contract. Build operator values with Opify.
-func Prattify(expr interface{}, op *Op) *jsonic.ListRef {
+func Prattify(expr interface{}, op *Op) *tabnas.ListRef {
 	return prattify(expr, op)
 }
 
@@ -2162,7 +2163,7 @@ const evaluatedKeyU = "expr_evaluated"
 // is not a meaningful identity.
 func evaluatedIdentity(v interface{}) (evaluatedKey, bool) {
 	switch t := v.(type) {
-	case *jsonic.ListRef:
+	case *tabnas.ListRef:
 		if t == nil {
 			return evaluatedKey{}, false
 		}
@@ -2180,7 +2181,7 @@ func evaluatedIdentity(v interface{}) (evaluatedKey, bool) {
 // ctx — the exported Evaluation called outside a parse — gets no set, so
 // each such reduction stands alone, which is what the documented
 // parse-once/evaluate-many workflow wants.
-func evaluatedFor(ctx *jsonic.Context) evaluatedSet {
+func evaluatedFor(ctx *tabnas.Context) evaluatedSet {
 	if ctx == nil || ctx.U == nil {
 		return nil
 	}
@@ -2194,15 +2195,15 @@ func evaluatedFor(ctx *jsonic.Context) evaluatedSet {
 
 // Evaluation recursively evaluates an expression tree.
 func Evaluation(
-	rule *jsonic.Rule, ctx *jsonic.Context, node interface{},
-	resolve func(*jsonic.Rule, *jsonic.Context, *Op, []interface{}) interface{},
+	rule *tabnas.Rule, ctx *tabnas.Context, node interface{},
+	resolve func(*tabnas.Rule, *tabnas.Context, *Op, []interface{}) interface{},
 ) interface{} {
 	return evaluation(rule, ctx, node, resolve)
 }
 
 func evaluation(
-	rule *jsonic.Rule, ctx *jsonic.Context, node interface{},
-	resolve func(*jsonic.Rule, *jsonic.Context, *Op, []interface{}) interface{},
+	rule *tabnas.Rule, ctx *tabnas.Context, node interface{},
+	resolve func(*tabnas.Rule, *tabnas.Context, *Op, []interface{}) interface{},
 ) interface{} {
 	done := evaluatedFor(ctx)
 	if key, keyed := evaluatedIdentity(node); keyed && done != nil {
@@ -2221,8 +2222,8 @@ func evaluation(
 }
 
 func evaluationStep(
-	rule *jsonic.Rule, ctx *jsonic.Context, node interface{},
-	resolve func(*jsonic.Rule, *jsonic.Context, *Op, []interface{}) interface{},
+	rule *tabnas.Rule, ctx *tabnas.Context, node interface{},
+	resolve func(*tabnas.Rule, *tabnas.Context, *Op, []interface{}) interface{},
 ) interface{} {
 	expr, isSlice := unwrapExpr(node)
 	if !isSlice || len(expr) == 0 {
@@ -2254,10 +2255,10 @@ func evaluationStep(
 
 // Simplify converts an expression tree with *Op nodes into plain
 // arrays/maps with string operator names. Handles both bare slices and
-// *jsonic.ListRef wrappers (the internal representation).
+// *tabnas.ListRef wrappers (the internal representation).
 func Simplify(node interface{}) interface{} {
 	switch v := node.(type) {
-	case *jsonic.ListRef:
+	case *tabnas.ListRef:
 		if v == nil {
 			return nil
 		}
@@ -2289,7 +2290,7 @@ func Simplify(node interface{}) interface{} {
 			result[i] = Simplify(el)
 		}
 		return result
-	case *jsonic.OrderedMap:
+	case *tabnas.OrderedMap:
 		if v == nil {
 			return nil
 		}
