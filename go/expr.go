@@ -21,7 +21,7 @@ import (
 // VERSION is this module's version. It MUST equal ts/package.json
 // "version": the release orchestrator rewrites both, and
 // TestVersionMatchesPackageJSON fails the build if they drift.
-const VERSION = "0.5.12"
+const VERSION = "0.5.13"
 
 // OpDef defines an operator for the expression parser.
 type OpDef struct {
