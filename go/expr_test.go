@@ -16,8 +16,9 @@ import (
 
 // The fixtures live at the repo root in `test/spec/*.tsv` and are read by
 // github.com/tabnas/support/go, whose TypeScript half ts/test/spec.test.ts
-// uses to run the SAME files — so the two implementations cannot drift
-// without one going red, and neither can the two loaders.
+// and Rust half rs/tests/parity_test.rs use to run the SAME files — so the
+// three implementations cannot drift without one going red, and neither
+// can the loaders.
 //
 // What varies per case is the CONFIGURED PARSER, which cannot live in an
 // opts column: several fixtures need operators defined in the plugin's

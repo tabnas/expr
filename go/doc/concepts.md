@@ -170,7 +170,7 @@ handling: correctness details of the grammar wiring, not configuration.
 ## Differences from the TS version
 
 The Go port is behaviourally identical (the shared `test/spec/*.tsv`
-fixtures are the parity contract, run by both runtimes). The differences are
+fixtures are the parity contract, run by all three runtimes). The differences are
 mechanical, stemming from Go's lack of JavaScript's shared-array identity and
 from Go's static typing:
 

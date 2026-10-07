@@ -9,8 +9,9 @@
 # `tabnas-jsonic = { path = "../../jsonic/rs" }`, which itself takes
 # `tabnas-json = { path = "../../json/rs" }`, and as dev-dependencies
 # `tabnas-support = { path = "../../support/rs" }` and
-# `tabnas-debug = { path = "../../debug/rs" }`). None is published, so
-# there is no registry version to fall back on. Clone
+# `tabnas-debug = { path = "../../debug/rs" }`). All are on crates.io, but
+# the committed manifest names them by path alone, so there is no registry
+# version to fall back on. Clone
 # https://github.com/tabnas/parser, https://github.com/tabnas/json,
 # https://github.com/tabnas/jsonic, https://github.com/tabnas/support and
 # https://github.com/tabnas/debug next to this repo before running.

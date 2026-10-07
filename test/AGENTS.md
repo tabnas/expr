@@ -8,7 +8,7 @@ together — edit with that in mind.
 
 Tab-separated, one case per line, read by the shared
 [`@tabnas/support`](https://github.com/tabnas/support) loader — one
-loader, in two languages written to behave identically. **Line 1 is the
+loader, in three languages written to behave identically. **Line 1 is the
 header**, and a `#`-leading line with no tab is a comment:
 
     input	expected
@@ -55,7 +55,7 @@ per-file test, so a failure names the file and line it came from.
 ## Rules
 
 - Prefer adding a fixture here over a one-off in-language assertion when a
-  case is expressible as input → output. That is what keeps the two runtimes
+  case is expressible as input → output. That is what keeps the runtimes
   honest against each other.
 - TypeScript is canonical. If the runtimes disagree, the TS behaviour is
   the expected value — unless a port has exposed a genuine TS defect, or the
