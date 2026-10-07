@@ -33,9 +33,10 @@ const mj =
 
 
 // The fixtures live at the repo root in `test/spec/*.tsv` and are read by
-// @tabnas/support, whose Go half `go/expr_test.go` uses to run the SAME
-// files — so the two implementations cannot drift without one going red,
-// and neither can the two loaders.
+// @tabnas/support, whose Go half `go/expr_test.go` and Rust half
+// `rs/tests/parity_test.rs` use to run the SAME files — so the three
+// implementations cannot drift without one going red, and neither can the
+// loaders.
 //
 // What varies per case is the CONFIGURED PARSER, which cannot live in an
 // `opts` column: several fixtures need operators defined in the plugin's

@@ -188,18 +188,12 @@ raises one of the base codes the engine and the jsonic grammar define.
 
 ## Install
 
-Neither the engine nor the jsonic base is published to a registry, so
-both are consumed as **sibling checkouts**, the standard tabnas
-development model. Clone `https://github.com/tabnas/parser`,
-`https://github.com/tabnas/json` and `https://github.com/tabnas/jsonic`
-next to this repository and point at them:
+The engine and the jsonic base sit outside this crate. All three are
+published on crates.io, the engine as `tabnas-parser`, whose library is
+named `tabnas` in code, so add them, with `serde_json`:
 
-```toml
-[dependencies]
-tabnas-expr = { path = "../expr/rs" }
-tabnas-jsonic = { path = "../jsonic/rs" }
-tabnas = { package = "tabnas-parser", path = "../parser/rs" }
-serde_json = "1"
+```bash
+cargo add tabnas-expr tabnas-jsonic tabnas-parser serde_json
 ```
 
 All four entries are needed. A crate's dependencies are not passed on to
@@ -208,10 +202,18 @@ its dependents, so `tabnas-expr` alone does not put `tabnas`,
 above that name `tabnas::Value`, `tabnas_jsonic::make` or
 `serde_json::json!` would not resolve. Only `ExprError` is re-exported.
 A program that declares its operators through `ExprOptions` can leave
-`serde_json` out. The test suite additionally needs
+`serde_json` out.
+
+In this repository, `Cargo.toml` takes the engine and `tabnas-jsonic` by
+path from sibling checkouts instead, and `tabnas-jsonic` takes
+`tabnas-json` the same way, so clone `https://github.com/tabnas/parser`,
+`https://github.com/tabnas/json` and `https://github.com/tabnas/jsonic`
+next to it. The test suite additionally needs
 `https://github.com/tabnas/support` beside the repository, for the shared
 fixture runner, and `https://github.com/tabnas/debug`, for the grammar
-composition test.
+composition test. The release workflow swaps the runtime paths for
+crates.io versions, and drops the test-only ones, when it publishes this
+crate.
 
 ## Differences from the canonical TypeScript
 

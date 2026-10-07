@@ -22,8 +22,9 @@ Crate `tabnas-expr`, library `tabnas_expr`. The engine (`tabnas`), the
 jsonic base (`tabnas-jsonic`), the fixture runner (`tabnas-support`, dev
 only) and the introspection plugin (`tabnas-debug`, dev only) are **path
 dependencies on sibling checkouts** (`../../parser/rs`, `../../jsonic/rs`,
-`../../support/rs`, `../../debug/rs`). None is published, so there is no
-registry version to fall back on.
+`../../support/rs`, `../../debug/rs`). They are on crates.io, but the
+committed manifest names them by path alone, so there is no registry
+version to fall back on.
 
 The TypeScript `debug-model.test.ts` SKIPS when `@tabnas/debug` cannot be
 resolved. The Rust half does not: a missing checkout fails the build

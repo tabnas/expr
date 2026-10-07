@@ -18,9 +18,12 @@ path = "src/lib.rs"
 [dependencies]
 # The engine and the jsonic base grammar are consumed as SIBLING CHECKOUTS,
 # the standard tabnas development model: clone https://github.com/tabnas/parser
-# and https://github.com/tabnas/jsonic next to this repo. Neither crate is
-# published, so there is no registry version to fall back on. jsonic in turn
-# takes https://github.com/tabnas/json the same way.
+# and https://github.com/tabnas/jsonic next to this repo. Both are on
+# crates.io (tabnas-parser, tabnas-jsonic), but this committed manifest stays
+# path-only, so there is no registry version to fall back on here;
+# crates-release.yml rewrites the paths into crates.io requirements when it
+# publishes this crate. jsonic in turn takes https://github.com/tabnas/json
+# the same way.
 tabnas = { package = "tabnas-parser", path = "../../parser/rs" }
 tabnas-jsonic = { path = "../../jsonic/rs" }
 indexmap = "2"
@@ -34,7 +37,8 @@ tabnas-support = { path = "../../support/rs", features = ["serde_json"] }
 # The introspection plugin, for tests/debug_model_test.rs: the Rust half of
 # ts/test/debug-model.test.ts, which proves the grammar composes with an
 # external plugin and reports the rules and push edges this one adds.
-# Another unpublished sibling checkout: clone
+# Another sibling checkout (tabnas-debug is on crates.io, but this
+# dev-dependency is path-only, and the published manifest drops it): clone
 # https://github.com/tabnas/debug.
 tabnas-debug = { path = "../../debug/rs" }
 serde_json = { version = "1.0", features = ["preserve_order"] }
