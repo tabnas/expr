@@ -97,14 +97,15 @@ linking. Rust does, because none of the crates it needs is published:
 
 - TypeScript: `@tabnas/parser` and `@tabnas/jsonic` are declared as
   `peerDependencies` (`">=0"`) in `ts/package.json`, and `@tabnas/`
-  `{parser,jsonic,debug,railroad}` as `"*"` devDependencies (debug
-  for the `debug-model.test.ts` composition test, railroad to regenerate
-  `ts/doc/grammar.{svg,txt}`). The ranges are deliberately open so the
-  fleet-wide `file:` symlinks (`admin/scripts/link.sh`) and the published
-  registry versions both satisfy them — do not pin them back to a caret
-  range without checking the linked checkouts still resolve. A plain
-  `npm i` resolves them all from the npm registry. `engines.node` is
-  `">=24"`.
+  `{parser,jsonic,debug,railroad,support}` as `"*"` devDependencies
+  (debug for the `debug-model.test.ts` composition test, railroad to
+  regenerate `ts/doc/grammar.{svg,txt}`, support for the shared fixture
+  runner `spec.test.ts` uses). None is a `file:` path. The ranges are
+  deliberately open so the `ts/node_modules/@tabnas/*` symlinks admin's
+  `scripts/link.sh` makes and the published registry versions both
+  satisfy them — do not pin them back to a caret range without checking
+  the linked checkouts still resolve. A plain `npm i` resolves them all
+  from the npm registry. `engines.node` is `">=24"`.
 - Go: `go/go.mod` requires `github.com/tabnas/jsonic/go` (currently
   `v0.7.4`), `github.com/tabnas/parser/go` (`v0.12.10`) and
   `github.com/tabnas/support/go` (`v0.3.6`), with `json/go` as an
@@ -122,9 +123,12 @@ linking. Rust does, because none of the crates it needs is published:
   checks it against the manifest.
 
 To develop against unreleased sibling source instead of the published
-packages, point npm at local checkouts (`npm i ../../parser/ts` etc., or
-`npm link`) and add a `go.work` listing the sibling `go/` modules — keep
-both out of version control.
+packages, run admin's `scripts/link.sh`: it symlinks
+`ts/node_modules/@tabnas/*` to the sibling checkouts and writes a
+`go.work` over the sibling `go/` modules one level above the repos,
+without editing a tracked file. Keep both out of version control.
+`npm i ../../parser/ts` is not a substitute: it writes a `file:` path
+into `ts/package.json`.
 
 ## Authority and alignment rules
 
@@ -291,7 +295,7 @@ by `debug.model()`:
   `paren`/`val`, `paren` pushes `val`.
 
 It loads `@tabnas/debug` dynamically and **skips** unless the plugin is
-resolvable — it is a `file:` devDependency so plain `npm test` runs it;
+resolvable — it is a `"*"` devDependency so plain `npm test` runs it;
 set `TABNAS_DEBUG_PATH` to point at a built sibling checkout otherwise.
 
 `rs/tests/debug_model_test.rs` is the Rust half, and it does NOT skip:
@@ -308,7 +312,7 @@ from the README/docs — keep doc examples correct.
 TypeScript (from `ts/`):
 
 ```bash
-npm install            # auto-installs peers; resolves file: siblings
+npm install            # auto-installs peers; resolves the @tabnas devDependencies from the registry
 npm run build          # tsc --build src test
 npm test               # pretest builds, then node --test over dist-test/**/*.test.js
 ```
