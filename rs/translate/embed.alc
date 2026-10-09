@@ -1,0 +1,26 @@
+; Expressions' embedding: a plain tree as an expression document's tree,
+; and back again. This is a library of definitions, each named
+; `expr-...`, which a host links with its own program and with the render
+; (alchemy's `compile_sources`). It has two entry points: `expr-embed`
+; takes a plain tree's events to an expression tree's, and `expr-unembed`,
+; its reverse, takes them back. Nothing else here is the host's to call.
+;
+; Both are the identity. The reader builds its trees on jsonic's values,
+; so every plain tree is already an expression tree: a list whose first
+; element is the source of a default operator (`+`, `-`, `*`, `/`, `%`,
+; or `(` for a group) and whose count makes an operation is one, and the
+; render writes it in infix; every other value is a value of jsonic's,
+; which the render writes as jsonic. A list that only looks like an
+; operation reads back as the same list either way, since the reader
+; reduces an operator to its source text, so nothing needs refusing. What
+; the round trip changes is what the render's conventions change (the
+; manifest's loss list): a negative number reads back as the operator `-`
+; applied to its magnitude, and a number that is not finite as a string.
+
+; The embedding: a plain tree's events in, the same events out.
+def expr-embed [input]
+  input
+
+; The reverse: an expression tree's events in, the same events out.
+def expr-unembed [input]
+  input

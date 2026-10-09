@@ -3614,3 +3614,80 @@ pub fn parse_simplified(parser: &Tabnas, src: &str) -> Result<Value, TabnasError
     let value = parser.parse(src)?;
     Ok(simplify(&value))
 }
+
+// --- Translation parts (admin ADR-27) ---------------------------------
+
+/// One optional alchemy translation source and its explicit entry point.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TranslationPart {
+    /// The definition a host calls after linking the source.
+    pub entry: &'static str,
+    /// The source text, or `None` for an entry supplied by alchemy.
+    pub source: Option<&'static str>,
+}
+
+/// The package-local structural translation interface.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TranslationParts {
+    /// The complete `tabnas.plugin.json` text.
+    pub manifest: &'static str,
+    /// An optional lift from the grammar's events to its first read shape.
+    pub lift: Option<TranslationPart>,
+    /// An optional embedding of a plain tree in the format's schema, with its reverse.
+    pub embed: Option<TranslationPart>,
+    /// An optional render from the write shape to text.
+    pub render: Option<TranslationPart>,
+}
+
+const TRANSLATION: TranslationParts = TranslationParts {
+    manifest: include_str!("../translate/manifest.json"),
+    lift: None,
+    embed: Some(TranslationPart {
+        entry: "expr-embed",
+        source: Some(include_str!("../translate/embed.alc")),
+    }),
+    render: Some(TranslationPart {
+        entry: "expr-render",
+        source: Some(include_str!("../translate/render.alc")),
+    }),
+};
+
+/// Return the expression format's immutable translation parts.
+#[must_use]
+pub const fn translate() -> Option<TranslationParts> {
+    Some(TRANSLATION)
+}
+
+/// The plugin's manifest, `tabnas.plugin.json`, as the repository carries
+/// it. Its `translate` object is what a host that translates reads: the
+/// shape an expression document is read as and written from (`tree`), the root the render
+/// takes, the schema of the tree its events carry (`expr`), the files
+/// that hold the embedding of a plain tree in that schema and the render,
+/// and the sentences that say what a written document does not keep. The
+/// crate embeds its own copy, `translate/manifest.json`, since a packaged
+/// crate holds nothing outside `rs/`; `tests/translate_test.rs` holds the
+/// copy to the file.
+///
+/// ```
+/// assert!(tabnas_expr::manifest_text().contains("\"translate\""));
+/// ```
+pub fn manifest_text() -> &'static str {
+    TRANSLATION.manifest
+}
+
+/// The expression format's render, `alchemy/render.alc`, the file the manifest's
+/// `translate.render` names: a library of alchemy definitions, with no
+/// `export`, whose entry point `expr-render` writes a tree's events as one
+/// document. A host links it with its own program. The crate embeds its
+/// own copy, `translate/render.alc`, held to the file as the manifest's
+/// is; the embedding, `translate/embed.alc`, is `translate().embed`.
+///
+/// ```
+/// assert!(tabnas_expr::render_text().contains("def expr-render [input]"));
+/// ```
+pub fn render_text() -> &'static str {
+    match TRANSLATION.render {
+        Some(part) => part.source.unwrap_or_default(),
+        None => "",
+    }
+}

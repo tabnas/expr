@@ -1,0 +1,327 @@
+; Expressions' render: a tree's events written as an expression document,
+; jsonic text with the plugin's default operators. This is a library of
+; definitions, each named `expr-...`, which a host links with its own
+; program (alchemy's `compile_sources`); its entry point is `expr-render`,
+; and nothing else here is the host's to call.
+;
+; The tree is the one the reader builds with its default options, each
+; operator description reduced to its source text: jsonic's values, in
+; which an operation is a list whose first element is its operator's
+; source, `+`, `-`, `*`, `/` or `%` (`1+2*3` is `["+", 1, ["*", 2, 3]]`,
+; `-1` is `["-", 1]`) or `(` for a group (`(1)` is `["(", 1]`, `()` is
+; `["("]`), and whose other elements are its terms.
+;
+; Every value is written so that the reader builds the same tree from it:
+;
+; - An operation is written in infix: `a+b` for a list of an infix
+;   operator and two terms, `-a` or `+a` for a list of `-` or `+` and one
+;   term, `(a)` for a group and `()` for an empty one. The default
+;   operators' binding powers decide where a term needs grouping: `*`,
+;   `/` and `%` bind tighter than `+` and `-`, every infix operator binds
+;   to the left, and a prefix operator binds tighter than any infix one.
+;   Parentheses would read back as a group, a list `["(", ...]`, so a
+;   term that needs grouping (`["+", 1, 2]` under `*`, or on the right of
+;   `-`) is written as a list instead, `["+",1,2]*3`, which the reader
+;   builds as the same list.
+; - Any other list, one whose first element is no operator or which has
+;   another number of terms (`["*", 1]`, `["+", 1, 2, 3]`), is written as
+;   a list, `[a,b]`, each element in infix where it is an operation.
+; - An object is written `{"k":v}`, every key quoted.
+; - A string is quoted (JSON's escapes, which jsonic reads), so a word is
+;   written `"a"`; a number by its lexeme, or as JSON writes it; a
+;   boolean and null by their names. A negative number is written with
+;   its sign, which the reader reads as the operator `-` applied to the
+;   number's magnitude, and a number that is not finite, which jsonic
+;   has no spelling for, as the string `Infinity`, `-Infinity` or `NaN`.
+;
+; No white space is written, since jsonic reads a space between two
+; values as an implicit list, and the document ends with one line break.
+;
+; Whether a list is written as an operation is known from its first
+; element and its count, so a list whose first element is a default
+; operator is held until it ends, its elements' texts with it, and then
+; written. Every other list, and every object, is written as it is read,
+; one element at a time, so a document's own lists and objects stream and
+; only its operations are held. Events no tree has fail with
+; PROTOCOL_ORDER_ERROR.
+;
+; The state is a stack of markers, one for each container the render is
+; inside:
+;
+;   [:pending mode]              a list whose first element is due, which
+;                                decides how it is written; mode is
+;                                :stream where it is written as it is
+;                                read and :hold inside a held list
+;   [:list :stream first]        a list written as it is read; first
+;                                until an element is written
+;   [:list :hold items]          a held list, and the items read so far
+;   [:map :stream first :key]    an object written as it is read, its
+;                                next key or its end due
+;   [:map :stream :value]        the same, a member's value due
+;   [:map :hold parts :key]      an object inside a held list, and its
+;                                members' texts
+;   [:map :hold parts [:value k]]  the same, the value of the key k due
+;
+; An item is `[text class list head]`: the text a value is written as;
+; its class, `:infix2` for an operation of `+` or `-`, `:infix3` for one
+; of `*`, `/` or `%`, and `:atom` for any other value, which binds as
+; tightly as a term can; the text of the value as a list, for a term that
+; needs grouping; and the operator a string is, or `:none`. Once the root
+; value is written the state is `[:done]`, and nothing may follow it.
+
+; The operator a value is, when it is the source of a default one.
+def expr-op [value]
+  match (kind value)
+    case :string
+      match value
+        case "+" value
+        case "-" value
+        case "*" value
+        case "/" value
+        case "%" value
+        case "(" value
+        case _ :none
+    case _ :none
+
+; An infix operator's class.
+def expr-level [op]
+  match op
+    case "+" :infix2
+    case "-" :infix2
+    case _ :infix3
+
+; A number: its lexeme, or as JSON writes it; one that is not finite as
+; a string.
+def expr-number [value]
+  match (number-class value)
+    case :finite (scalar-text csv-options value)
+    case :infinity (quoted "Infinity")
+    case :negative-infinity (quoted "-Infinity")
+    case :nan (quoted "NaN")
+
+def expr-scalar-text [value]
+  match (kind value)
+    case :string (quoted value)
+    case :number (expr-number value)
+    case :boolean (scalar-text csv-options value)
+    case :null "null"
+
+def expr-scalar-item [value]
+  let [text (expr-scalar-text value)]
+    [text :atom text (expr-op value)]
+
+def expr-text [item]
+  match item
+    case [text _ _ _] text
+
+; A held list's elements written as a list.
+def expr-list [items]
+  string-join "" ["[" (string-join "," (map expr-text items)) "]"]
+
+; A left term of an infix operator of the class given: an operation that
+; binds as tightly or more, or the term as a list.
+def expr-left [item level]
+  match item
+    case [text :atom _ _] text
+    case [text :infix3 _ _] text
+    case [text :infix2 list _]
+      match level
+        case :infix2 text
+        case _ list
+
+; A right term: an operation that binds more tightly, or the term as a
+; list.
+def expr-right [item level]
+  match item
+    case [text :atom _ _] text
+    case [text :infix3 list _]
+      match level
+        case :infix2 text
+        case _ list
+    case [_ :infix2 list _] list
+
+; A prefix operator's term: one that binds as tightly, or the term as a
+; list.
+def expr-term [item]
+  match item
+    case [text :atom _ _] text
+    case [_ _ list _] list
+
+; An infix operation, when the first element is an infix operator.
+def expr-infix [op a b list]
+  match op
+    case :none [list :atom list :none]
+    case "(" [list :atom list :none]
+    case _
+      let [level (expr-level op)]
+        [(string-join "" [(expr-left a level) op (expr-right b level)]) level list :none]
+
+; A held list, ended: an operation where its first element and its count
+; make one, and a list otherwise.
+def expr-array [items]
+  let [list (expr-list items)]
+    match items
+      case [[_ _ _ "("]] ["()" :atom list :none]
+      case [[_ _ _ "("] x] [(string-join "" ["(" (expr-text x) ")"]) :atom list :none]
+      case [[_ _ _ "+"] x] [(string-join "" ["+" (expr-term x)]) :atom list :none]
+      case [[_ _ _ "-"] x] [(string-join "" ["-" (expr-term x)]) :atom list :none]
+      case [[_ _ _ op] a b] (expr-infix op a b list)
+      case _ [list :atom list :none]
+
+; The top marker, or :none before the root value.
+def expr-top [s]
+  match (count s)
+    case 0 :none
+    case _ (top s)
+
+def expr-mark [marker s]
+  push marker (pop s)
+
+; A value written where it is read: at the root, which then is done, in
+; a list written as it is read, after a comma unless it is the first,
+; or as an object's member, whose next key is then due. `text` is what
+; the value writes now, and `inner` the marker it opens, or :none.
+def expr-stream-value [s text inner]
+  match (expr-top s)
+    case :none (expr-push-or-done [] inner [text])
+    case [:list :stream first]
+      match first
+        case true (expr-push-or-done (expr-mark [:list :stream false] s) inner [text])
+        case false (expr-push-or-done (expr-mark [:list :stream false] s) inner ["," text])
+    case [:map :stream :value] (expr-push-or-done (expr-mark [:map :stream false :key] s) inner [text])
+
+def expr-push-or-done [s inner out]
+  match inner
+    case :none
+      match (count s)
+        case 0 (transition [[:done]] (push "\n" out))
+        case _ (transition s out)
+    case _ (transition (push inner s) out)
+
+; A value completed inside a held list or object: its item is added.
+def expr-hold-value [s item]
+  match (expr-top s)
+    case [:list :hold items] (transition (expr-mark [:list :hold (push item items)] s) [])
+    case [:map :hold parts [:value k]] (transition (expr-mark [:map :hold (push (string-join "" [k ":" (expr-text item)]) parts) :key] s) [])
+
+; A held value has ended: it is added to the held container around it,
+; or written where values are written as they are read, where what led
+; it (a comma, a key) was written when it began.
+def expr-held [s item]
+  match (expr-top s)
+    case [:list :hold _] (expr-hold-value s item)
+    case [:map :hold _ _] (expr-hold-value s item)
+    case _ (expr-closed s (expr-text item))
+
+; Whether the top of the stack holds what is read.
+def expr-holding [s]
+  match (expr-top s)
+    case [:list :hold _] true
+    case [:map :hold _ _] true
+    case _ false
+
+; A list whose first element is due decides on that element's first
+; event, and answers its marker and the text it writes: one whose first
+; element is a default operator may be an operation and is held; any
+; other is written as it is read, `[` first, unless it is inside a held
+; one.
+def expr-decide [s mode event]
+  match [mode event]
+    case [:stream (scalar value)]
+      match (expr-op value)
+        case :none [(expr-mark [:list :stream true] s) "["]
+        case _ [(expr-mark [:list :hold []] s) ""]
+    case [:stream _] [(expr-mark [:list :stream true] s) "["]
+    case _ [(expr-mark [:list :hold []] s) ""]
+
+; A value where one is due: a scalar, or a container's start.
+def expr-value [s event]
+  match (expr-holding s)
+    case true
+      match event
+        case (scalar value) (expr-hold-value s (expr-scalar-item value))
+        case object-start (transition (push [:map :hold [] :key] s) [])
+        case array-start (transition (push [:pending :hold] s) [])
+    case false
+      match event
+        case (scalar value) (expr-stream-value s (expr-scalar-text value) :none)
+        case object-start (expr-stream-value s "{" [:map :stream true :key])
+        case array-start (expr-stream-value s "" [:pending :stream])
+
+; The first element of a list, once the list has decided: what the
+; decision writes, then what the element does.
+def expr-first [s mode event]
+  match (expr-decide s mode event)
+    case [s2 lead]
+      match (expr-value s2 event)
+        case (transition s3 []) (transition s3 [lead])
+        case (transition s3 [text]) (transition s3 [(string-join "" [lead text])])
+
+; A container ends; a held one's item is added or written.
+def expr-close [s marker]
+  match marker
+    case [:pending :stream] (expr-closed (pop s) "[]")
+    case [:pending :hold] (expr-held (pop s) ["[]" :atom "[]" :none])
+    case [:list :stream _] (expr-closed (pop s) "]")
+    case [:list :hold items] (expr-held (pop s) (expr-array items))
+
+; A container written as it was read has ended: its closing text, and
+; the document's end at the root.
+def expr-closed [s text]
+  match (count s)
+    case 0 (transition [[:done]] [text "\n"])
+    case _ (transition s [text])
+
+def expr-key [s name]
+  match (expr-top s)
+    case [:map :stream first :key]
+      match first
+        case true (transition (expr-mark [:map :stream :value] s) [(quoted name) ":"])
+        case false (transition (expr-mark [:map :stream :value] s) ["," (quoted name) ":"])
+    case [:map :hold parts :key] (transition (expr-mark [:map :hold parts [:value (quoted name)]] s) [])
+    case _ (fail :protocol-order "the events hold a key where a value is due, which a tree's never do")
+
+def expr-object-end [s]
+  match (expr-top s)
+    case [:map :stream _ :key] (expr-closed (pop s) "}")
+    case [:map :hold parts :key]
+      let [text (string-join "" ["{" (string-join "," parts) "}"])]
+        expr-held (pop s) [text :atom text :none]
+    case _ (fail :protocol-order "the events end an object that is not open, or one whose member has no value, which a tree's never do")
+
+def expr-array-end [s]
+  match (expr-top s)
+    case [:pending mode] (expr-close s [:pending mode])
+    case [:list mode x] (expr-close s [:list mode x])
+    case _ (fail :protocol-order "the events end an array that is not open, which a tree's never do")
+
+; Where a value is due: at the root, in a list, or after a key.
+def expr-due [s event]
+  match (expr-top s)
+    case :none (expr-value s event)
+    case [:pending mode] (expr-first s mode event)
+    case [:list _ _] (expr-value s event)
+    case [:map :stream :value] (expr-value s event)
+    case [:map :hold _ [:value _]] (expr-value s event)
+    case _ (fail :protocol-order "the events hold a value where a key is due, which a tree's never do")
+
+def expr-step [s event]
+  match (expr-top s)
+    case [:done] (fail :protocol-order "the events hold more after the root value, which a tree's never do")
+    case _
+      match event
+        case (key name) (expr-key s name)
+        case object-end (expr-object-end s)
+        case array-end (expr-array-end s)
+        case _ (expr-due s event)
+
+def expr-finish [s]
+  match (expr-top s)
+    case [:done] []
+    case :none (fail :protocol-order "the events hold no value, where a tree's hold one")
+    case _ (fail :protocol-order "the events ended inside a container, which a tree's never do")
+
+; The render: a tree's events in, the expression document's text out.
+def expr-render [input]
+  join ""
+    scan-emit [] expr-step expr-finish (events input)
