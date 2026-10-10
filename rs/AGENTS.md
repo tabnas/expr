@@ -9,12 +9,14 @@ is specific to this crate.
 
 | Path | |
 |---|---|
-| `src/lib.rs` | the whole port: the operator model, the options, the expression arena, the Pratt core, every rule the plugin adds, the evaluator, `realize` / `simplify`, and `plugin` / `plugin_with` / `apply` / `make` / `make_with` / `parse` |
+| `src/lib.rs` | the whole port: the operator model, the options, the expression arena, the Pratt core, every rule the plugin adds, the evaluator, `realize` / `simplify`, and `plugin` / `plugin_with` / `apply` / `make` / `make_with` / `parse`; and the translation parts, `translate()` (its `embed` and `render`) with `manifest_text` and `render_text`, `include_str!` of the copies in `translate/` |
+| `translate/` | the crate's copies of `../tabnas.plugin.json` (as `manifest.json`), `../alchemy/render.alc` and `../alchemy/embed.alc`, which a packaged crate needs, written by `npm run embed` from `../ts`; `tests/translate_test.rs` holds them to the files |
 | `tests/parity_test.rs` | every shared `../test/spec/*.tsv` fixture through `tabnas_support::Runner`, each with the operator table its file assumes, plus `every_shared_fixture_is_run`, which reads the fixture directory and fails when a file has no runner here |
 | `tests/expr_test.rs` | in-language behaviour: the Pratt core, comma-operator suppression, the evaluator, the ternary after-close, the instance token binding, the parsed shape, threads, hostile input |
 | `tests/debug_model_test.rs` | the grammar composed with `tabnas-debug`, asserting the rule set, the entry rule and the push edges: the Rust half of `ts/test/debug-model.test.ts` |
 | `tests/perf_test.rs` | the machine-independent instance-reuse guards |
 | `tests/version_test.rs` | `Cargo.toml` equals `VERSION` equals `ts/package.json` |
+| `tests/translate_test.rs` | the translation parts: the render and the embedding the embedded manifest names are the ones the crate embeds, the manifest's shapes, root, schema and loss lines, every definition of both named `expr-...`, and the `src` the reader's realized value and `simplify` give each default operator, which the render reads |
 | `tests/common/mod.rs` | shared helpers: the spec directory, the per-row parser, failure conversion, number normalization |
 | `README.md` | the crate front page, prose-gated; its `rust` fences are doctests of this crate |
 
