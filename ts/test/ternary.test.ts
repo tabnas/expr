@@ -2,12 +2,13 @@
 
 import { describe, test, beforeEach } from 'node:test'
 
-import { Tabnas, util } from '@tabnas/parser'
+import { Tabnas } from '@tabnas/parser'
 import { jsonic } from '@tabnas/jsonic'
 import { Debug } from '@tabnas/debug'
 
 import {
   Expr,
+  simplify,
 } from '..'
 
 import type {
@@ -18,18 +19,11 @@ import type {
 import { expect } from './spec-util'
 
 
-const { omap } = util
-
 const C = (x: any) => JSON.parse(JSON.stringify(x))
 
-// Walk expr tree into simplified form where first element is the op src.
-const S = (x: any): any =>
-  (x && Array.isArray(x)) ?
-    (0 === x.length ? x : [
-      x[0].src || S(x[0]),
-      ...(1 < x.length ? (x.slice(1).map((t: any) => S(t))) : [])]
-      .filter(t => undefined !== t)) :
-    (null != x && 'object' === typeof (x) ? omap(x, ([n, v]: [any, any]) => [n, S(v)]) : x)
+// Walk expr tree into simplified form where first element is the op src:
+// the package's own `simplify`.
+const S = simplify
 
 const mj =
   (je: Tabnas) => (s: string, m?: any) => C(S(je.parse(s, m)))

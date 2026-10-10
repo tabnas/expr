@@ -52,6 +52,15 @@ runtime runs proves nothing.
 Each ROW is now its own test case rather than one assertion inside a
 per-file test, so a failure names the file and line it came from.
 
+The runner compares a row structurally, which ignores member order, but
+every `expected` cell is more than that: it is exactly what the TypeScript
+`JSON.stringify(simplify(...))` writes, byte for byte, and each runtime
+holds every row to it. `ts/test/spec.test.ts` checks its own output
+against each cell, `rs/tests/parity_test.rs` writes `parse_simplified`'s
+value the way `JSON.stringify` does and compares the text, and
+`go/expr_test.go` does the same with `SimplifyOrdered`. So write a new
+cell from the TypeScript output rather than by hand.
+
 ## Rules
 
 - Prefer adding a fixture here over a one-off in-language assertion when a

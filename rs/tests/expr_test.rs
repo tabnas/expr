@@ -1165,3 +1165,28 @@ fn hostile_input_is_refused_rather_than_fatal() {
         let _ = parse_simplified(&parser, src);
     }
 }
+
+/// The canonical simplify's reading where the Go port's `Simplify` differs
+/// (`DIVERGENCE.md`): the member order a parse found, a null term kept,
+/// and a list whose head carries a `src` text read as an operation. The
+/// Go port's `SimplifyOrdered` gives the same values, and the TypeScript
+/// `simplify` is pinned to them in `ts/test/expr.test.ts`.
+#[test]
+fn simplify_reads_the_canonical_value() {
+    let parser = parser_for(json!({}));
+    for (src, want) in [
+        ("{b:1,a:2+3}", r#"{"b":1.0,"a":["+",2.0,3.0]}"#),
+        ("1+null", r#"["+",1.0,null]"#),
+        ("[{src:x},1]", r#"["x",1.0]"#),
+    ] {
+        let value =
+            parse_simplified(&parser, src).unwrap_or_else(|error| panic!("{src:?}: {error}"));
+        // `preserve_order` keeps the members in the order simplify gave
+        // them, and `norm` spells every number as a float.
+        assert_eq!(
+            serde_json::to_string(&norm(value)).expect("a value is JSON"),
+            want,
+            "{src}"
+        );
+    }
+}

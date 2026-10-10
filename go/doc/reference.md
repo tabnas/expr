@@ -53,6 +53,26 @@ the operator **source string** (`Op.Src`, or `Op.OSrc` for parens). It also
 strips the internal `*jsonic.ListRef` wrappers. Use it to inspect or print a
 parsed S-expression.
 
+A plain map has no order, so `Simplify` loses the member order the parse
+found, and it drops a `null` term. `SimplifyOrdered` keeps both.
+
+### `SimplifyOrdered`
+
+```go
+func SimplifyOrdered(node interface{}) interface{}
+```
+
+Reduce a parse result the way the TypeScript `simplify` and the Rust
+`simplify` do, to the S-expression form the translation parts read. Each
+map the parse found comes back as a `*tabnas.OrderedMap`, its keys in the
+order the parse found them. A `null` term stays, so `1+null` reads as `["+" 1 nil]`,
+and it drops only a slot never filled. A list whose head is an object
+with a non-empty string `src` member reads as an operation, with that text
+as its head. A node that contains itself reads as `"[CIRCLE]"`. Every
+shared fixture holds its JSON to the TypeScript output, byte for byte, so
+a host walking the value reads the tree the other two ports give.
+`DIVERGENCE.md` records where `Simplify` differs.
+
 ### `Evaluation`
 
 ```go

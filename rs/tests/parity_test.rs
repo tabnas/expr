@@ -17,14 +17,23 @@ mod common;
 use serde_json::json;
 use tabnas::{Tabnas, Value as EngineValue};
 use tabnas_expr::{ExprOptions, OpDef, PrevalDef};
-use tabnas_support::{Runner, Value};
+use tabnas_support::{load_spec, Runner, SpecOptions, Value};
 
 use common::{parse_simplified, parser_default, parser_for, parser_with, spec_dir, to_failure};
 
 /// Run one fixture file with the parser the test built for it.
+///
+/// The runner compares a row's value with its cell structurally, which
+/// ignores member order. Each cell is also exactly what the canonical
+/// `JSON.stringify` writes for the TypeScript value (`ts/test/spec.test.ts`
+/// holds every cell to it), so the file is held to its cells byte for
+/// byte here too: `parse_simplified`'s value, written the way
+/// `JSON.stringify` writes one, must BE the cell, member order and number
+/// spelling included.
 fn run_spec(name: &str, parser: Tabnas) {
     let path = spec_dir().join(name);
     assert!(path.is_file(), "missing shared fixture {}", path.display());
+    hold_to_canonical_json(&path, &parser);
     Runner::new(move |input| {
         parse_simplified(&parser, input)
             .map(Value::from)
@@ -473,6 +482,175 @@ fn spec_evaluate_math() {
             }
         });
     run_spec("evaluate-math.tsv", parser_with(options));
+}
+
+// --- the canonical JSON ----------------------------------------------------
+
+/// Every row of one fixture file, held to its cell byte for byte.
+fn hold_to_canonical_json(path: &std::path::Path, parser: &Tabnas) {
+    let spec = load_spec(path, &SpecOptions::default())
+        .unwrap_or_else(|error| panic!("{}: {}", path.display(), error.0));
+    let mut failures = Vec::new();
+    for row in &spec.rows {
+        let value = tabnas_expr::parse_simplified(parser, &row.unesc(0))
+            .unwrap_or_else(|error| panic!("{}: {error}", row.location()));
+        let got = canonical(&value);
+        if got != row.col(1) {
+            failures.push(format!(
+                "{}\n  got      {got}\n  expected {}",
+                row.location(),
+                row.col(1)
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} rows differ from the canonical JSON:\n{}",
+        failures.len(),
+        spec.rows.len(),
+        failures.join("\n")
+    );
+}
+
+/// A value written as `JSON.stringify` writes it: members in order, a
+/// number spelt as JavaScript spells it, a number no JSON can hold as
+/// `null`, and an undefined member left out.
+fn canonical(value: &EngineValue) -> String {
+    let mut out = String::new();
+    write_canonical(&mut out, value);
+    out
+}
+
+fn write_canonical(out: &mut String, value: &EngineValue) {
+    let string = |text: &str| serde_json::to_string(text).expect("a string is JSON");
+    match value {
+        EngineValue::Undefined | EngineValue::Null => out.push_str("null"),
+        EngineValue::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+        EngineValue::Number(number) => out.push_str(&js_number(*number)),
+        EngineValue::String(text) => out.push_str(&string(text)),
+        EngineValue::Text(text) => out.push_str(&string(&text.string)),
+        EngineValue::Array(items) => write_items(out, items),
+        EngineValue::ListRef(list) => write_items(out, &list.value),
+        EngineValue::Object(members) => write_members(out, members.iter()),
+        EngineValue::MapRef(map) => write_members(out, map.value.iter()),
+    }
+}
+
+fn write_items(out: &mut String, items: &[EngineValue]) {
+    out.push('[');
+    for (at, item) in items.iter().enumerate() {
+        if 0 < at {
+            out.push(',');
+        }
+        write_canonical(out, item);
+    }
+    out.push(']');
+}
+
+fn write_members<'a>(
+    out: &mut String,
+    members: impl Iterator<Item = (&'a String, &'a EngineValue)>,
+) {
+    out.push('{');
+    let mut first = true;
+    for (name, member) in members {
+        if member.is_undefined() {
+            continue;
+        }
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        out.push_str(&serde_json::to_string(name).expect("a key is JSON"));
+        out.push(':');
+        write_canonical(out, member);
+    }
+    out.push('}');
+}
+
+/// ECMA-262 Number::toString: the shortest digits that read back as the
+/// number, which Rust's `{:e}` gives, laid out as JavaScript lays them
+/// out: fixed from 1e-6 up to 1e21, exponent form outside it with a signed,
+/// unpadded exponent. A negative zero is `0`, and `JSON.stringify` writes
+/// NaN and the infinities as `null`.
+fn js_number(number: f64) -> String {
+    if !number.is_finite() {
+        return "null".to_string();
+    }
+    if 0.0 == number {
+        return "0".to_string();
+    }
+    let scientific = format!("{:e}", number.abs());
+    let (mantissa, exponent) = scientific.split_once('e').expect("an exponent");
+    let digits: String = mantissa.chars().filter(|ch| '.' != *ch).collect();
+    let k = digits.len() as i32;
+    // The number is 0.<digits> times ten to the n.
+    let n = exponent.parse::<i32>().expect("a decimal exponent") + 1;
+    let body = if k <= n && n <= 21 {
+        format!("{digits}{}", "0".repeat((n - k) as usize))
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{digits}", "0".repeat(n.unsigned_abs() as usize))
+    } else {
+        let sign = if n < 1 { '-' } else { '+' };
+        let power = (n - 1).abs();
+        if 1 == k {
+            format!("{digits}e{sign}{power}")
+        } else {
+            format!("{}.{}e{sign}{power}", &digits[..1], &digits[1..])
+        }
+    };
+    if number < 0.0 {
+        format!("-{body}")
+    } else {
+        body
+    }
+}
+
+#[test]
+fn js_number_spells_as_javascript_does() {
+    for (number, want) in [
+        (1.0, "1"),
+        (-0.0, "0"),
+        (1.5, "1.5"),
+        (-2.25, "-2.25"),
+        (100.0, "100"),
+        (1e20, "100000000000000000000"),
+        (1e21, "1e+21"),
+        (1.5e300, "1.5e+300"),
+        (0.000001, "0.000001"),
+        (1e-7, "1e-7"),
+        (-1.25e-7, "-1.25e-7"),
+        (0.1 + 0.2, "0.30000000000000004"),
+        (f64::NAN, "null"),
+        (f64::INFINITY, "null"),
+    ] {
+        assert_eq!(js_number(number), want, "for {number:?}");
+    }
+}
+
+/// Every row of every fixture is held to its canonical JSON: each file by
+/// its `run_spec` test, and every file by the coverage gate below. The
+/// total is ratcheted at what is on disk, so a corpus that shrinks cannot
+/// pass by measuring less.
+#[test]
+fn every_fixture_row_is_held_to_its_canonical_json() {
+    let rows: usize = std::fs::read_dir(spec_dir())
+        .expect("the shared fixture directory is readable")
+        .map(|entry| entry.expect("a readable directory entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "tsv"))
+        .map(|path| {
+            load_spec(&path, &SpecOptions::default())
+                .unwrap_or_else(|error| panic!("{}: {}", path.display(), error.0))
+                .rows
+                .len()
+        })
+        .sum();
+    assert_eq!(
+        rows, 1130,
+        "the shared fixtures hold {rows} rows, not the 1130 measured"
+    );
 }
 
 // --- the coverage itself ---------------------------------------------------

@@ -2256,6 +2256,11 @@ func evaluationStep(
 // Simplify converts an expression tree with *Op nodes into plain
 // arrays/maps with string operator names. Handles both bare slices and
 // *tabnas.ListRef wrappers (the internal representation).
+//
+// A plain map has no order, so the result loses the member order the
+// parse found, and a null term is dropped. SimplifyOrdered gives the
+// reading the TypeScript and Rust ports give, member order included; see
+// DIVERGENCE.md.
 func Simplify(node interface{}) interface{} {
 	switch v := node.(type) {
 	case *tabnas.ListRef:
@@ -2312,4 +2317,121 @@ func Simplify(node interface{}) interface{} {
 	default:
 		return node
 	}
+}
+
+// SimplifyOrdered reduces a parse to the plain S-expression form expr's
+// translation parts are written against, as the TypeScript `simplify` and
+// the Rust `simplify` do: `1+2*3` reads as ["+", 1, ["*", 2, 3]], every
+// member in the parse's order. The shared fixtures hold its JSON to the
+// canonical text, byte for byte, so a host that walks the value gets the
+// tree the other two ports give.
+//
+// Simplify predates it and keeps its own reading, which differs in three
+// ways that SimplifyOrdered does not, each recorded in DIVERGENCE.md:
+//
+//   - A parse's *tabnas.OrderedMap comes back as an *tabnas.OrderedMap,
+//     its keys in the order the parse found them, where Simplify gives a
+//     plain map, which has no order.
+//   - A null term is kept, so `1+null` reads as ["+", 1, nil]. Only a slot
+//     never filled is dropped, as the canonical drops `undefined`.
+//   - A list whose head is an object with a non-empty string `src` member
+//     reads as an operation, its head replaced by that text, as the
+//     canonical reads `x[0].src`.
+//
+// A node that contains itself, which a rewrite can leave behind, reads as
+// "[CIRCLE]" rather than recursing forever, as in the other two ports. A
+// plain map[string]interface{} has no order to keep and comes back as one.
+func SimplifyOrdered(node interface{}) interface{} {
+	return simplifyOrdered(node, map[uintptr]bool{})
+}
+
+// simplifyOrdered is SimplifyOrdered with the containers open on the path
+// down to node, by identity, so that only a node inside itself reads as a
+// circle and a node reached twice by two paths is reduced both times.
+func simplifyOrdered(node interface{}, open map[uintptr]bool) interface{} {
+	switch v := node.(type) {
+	case *tabnas.ListRef:
+		if v == nil {
+			return nil
+		}
+		return simplifyOrdered(v.Val, open)
+	case []interface{}:
+		if len(v) == 0 {
+			return v
+		}
+		id := reflect.ValueOf(v).Pointer()
+		if open[id] {
+			return "[CIRCLE]"
+		}
+		open[id] = true
+		defer delete(open, id)
+		result := make([]interface{}, 0, len(v))
+		if src, isOp := operatorSource(v[0]); isOp {
+			result = append(result, src)
+		} else if !isUnfilled(v[0]) {
+			result = append(result, simplifyOrdered(v[0], open))
+		}
+		for _, el := range v[1:] {
+			if isUnfilled(el) {
+				continue
+			}
+			result = append(result, simplifyOrdered(el, open))
+		}
+		return result
+	case *tabnas.OrderedMap:
+		if v == nil {
+			return nil
+		}
+		id := reflect.ValueOf(v).Pointer()
+		if open[id] {
+			return "[CIRCLE]"
+		}
+		open[id] = true
+		defer delete(open, id)
+		result := tabnas.NewOrderedMap()
+		for _, k := range v.Keys {
+			result.Set(k, simplifyOrdered(v.Vals[k], open))
+		}
+		return result
+	case map[string]interface{}:
+		id := reflect.ValueOf(v).Pointer()
+		if open[id] {
+			return "[CIRCLE]"
+		}
+		open[id] = true
+		defer delete(open, id)
+		result := make(map[string]interface{}, len(v))
+		for k, val := range v {
+			result[k] = simplifyOrdered(val, open)
+		}
+		return result
+	default:
+		return node
+	}
+}
+
+// operatorSource is the source text a list's head stands for when the
+// head describes an operator: an *Op (a paren operator by its opening
+// source, as Simplify reads it), or an object whose `src` member is a
+// non-empty string, as the canonical reads `x[0].src` and the Rust port a
+// realized operator.
+func operatorSource(head interface{}) (string, bool) {
+	switch h := head.(type) {
+	case *Op:
+		if h.Paren {
+			return h.OSrc, true
+		}
+		return h.Src, true
+	case *tabnas.OrderedMap:
+		if h != nil {
+			if src, ok := h.Vals["src"].(string); ok && src != "" {
+				return src, true
+			}
+		}
+	case map[string]interface{}:
+		if src, ok := h["src"].(string); ok && src != "" {
+			return src, true
+		}
+	}
+	return "", false
 }
