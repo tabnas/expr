@@ -1652,8 +1652,9 @@ function p(node: any, seen?: WeakSet<any>): any {
 // head is the operator description. The head becomes the operator's
 // source text (`src`, which for a paren operator is its opening source),
 // and a term never filled, `undefined`, is dropped. Every other array and
-// object is reduced member by member into a new value, and anything else
-// is returned as it is.
+// object, an empty one included, is reduced member by member into a new
+// value, so the result shares no container with the parse, and anything
+// else is returned as it is.
 //
 // A node that contains itself, which a rewrite can leave behind, reads as
 // '[CIRCLE]' rather than recursing forever. Only a node inside itself
@@ -1672,7 +1673,7 @@ function simplify(value: any): any {
     if (open.has(node)) return '[CIRCLE]'
     open.add(node)
     const out = Array.isArray(node)
-      ? (0 === node.length ? node : [
+      ? (0 === node.length ? [] : [
         null != node[0] && node[0].src ? node[0].src : reduce(node[0]),
         ...node.slice(1).map(reduce),
       ].filter((term: any) => undefined !== term))

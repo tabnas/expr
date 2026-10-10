@@ -252,6 +252,24 @@ func TestSimplifyOrderedReportsANodeInsideItself(t *testing.T) {
 	if got, _ := canonicalJSON(SimplifyOrdered(twice)); got != `["+",["+",1,2],["+",1,2]]` {
 		t.Errorf("a list reached twice: %s", got)
 	}
+	// A shorter view of a list's own array is another list, not a circle.
+	view := []interface{}{"a", nil}
+	view[1] = view[:1]
+	if got, _ := canonicalJSON(SimplifyOrdered(view)); got != `["a",["a"]]` {
+		t.Errorf("a prefix view inside its list: %s", got)
+	}
+}
+
+// Every list comes back new, an empty one included: appending to the
+// result never writes into the parse's array, even where that array has
+// room to spare.
+func TestSimplifyOrderedSharesNoListWithTheParse(t *testing.T) {
+	inner := make([]interface{}, 0, 4)
+	reduced := SimplifyOrdered([]interface{}{inner}).([]interface{})
+	_ = append(reduced[0].([]interface{}), "x")
+	if got := inner[:1][0]; got != nil {
+		t.Errorf("appending to the result wrote %v into the parse", got)
+	}
 }
 
 // The pin for DIVERGENCE.md's Simplify entry: Simplify loses the member

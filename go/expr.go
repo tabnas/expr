@@ -2342,13 +2342,15 @@ func Simplify(node interface{}) interface{} {
 // "[CIRCLE]" rather than recursing forever, as in the other two ports. A
 // plain map[string]interface{} has no order to keep and comes back as one.
 func SimplifyOrdered(node interface{}) interface{} {
-	return simplifyOrdered(node, map[uintptr]bool{})
+	return simplifyOrdered(node, map[[2]uintptr]bool{})
 }
 
 // simplifyOrdered is SimplifyOrdered with the containers open on the path
 // down to node, by identity, so that only a node inside itself reads as a
-// circle and a node reached twice by two paths is reduced both times.
-func simplifyOrdered(node interface{}, open map[uintptr]bool) interface{} {
+// circle and a node reached twice by two paths is reduced both times. A
+// list's identity is its first element's address and its length, so a
+// shorter view of the same array, s[:k], is a different list.
+func simplifyOrdered(node interface{}, open map[[2]uintptr]bool) interface{} {
 	switch v := node.(type) {
 	case *tabnas.ListRef:
 		if v == nil {
@@ -2357,9 +2359,11 @@ func simplifyOrdered(node interface{}, open map[uintptr]bool) interface{} {
 		return simplifyOrdered(v.Val, open)
 	case []interface{}:
 		if len(v) == 0 {
-			return v
+			// A new list, as every other list is, so that appending to
+			// the result never writes into the parse's array.
+			return []interface{}{}
 		}
-		id := reflect.ValueOf(v).Pointer()
+		id := [2]uintptr{reflect.ValueOf(v).Pointer(), uintptr(len(v))}
 		if open[id] {
 			return "[CIRCLE]"
 		}
@@ -2382,7 +2386,7 @@ func simplifyOrdered(node interface{}, open map[uintptr]bool) interface{} {
 		if v == nil {
 			return nil
 		}
-		id := reflect.ValueOf(v).Pointer()
+		id := [2]uintptr{reflect.ValueOf(v).Pointer()}
 		if open[id] {
 			return "[CIRCLE]"
 		}
@@ -2394,7 +2398,7 @@ func simplifyOrdered(node interface{}, open map[uintptr]bool) interface{} {
 		}
 		return result
 	case map[string]interface{}:
-		id := reflect.ValueOf(v).Pointer()
+		id := [2]uintptr{reflect.ValueOf(v).Pointer()}
 		if open[id] {
 			return "[CIRCLE]"
 		}

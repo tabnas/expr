@@ -2,6 +2,7 @@
 
 import { describe, test, beforeEach } from 'node:test'
 import assert from 'node:assert'
+import Fs from 'node:fs'
 import Path from 'node:path'
 
 import { Tabnas } from '@tabnas/parser'
@@ -44,8 +45,10 @@ const SPEC = findSpecDir(__dirname)
 // with them, member order included. So each file is held to its cells
 // byte for byte too, which keeps every cell the canonical text.
 let canonicalRows = 0
+const registered = new Set<string>()
 
 function runSpec(specName: string, j: (s: string) => any) {
+  registered.add(specName)
   makeRunner({ parse: (input) => j(input) })
     .file(Path.join(SPEC, specName))
 
@@ -492,10 +495,19 @@ describe('spec', () => {
 })
 
 
-// Every row of every fixture went through a byte-for-byte check above.
-// Ratcheted at what is on disk, so a file that stops being run cannot
-// pass by measuring less.
+// Every row of every fixture went through a byte-for-byte check above:
+// every file in the fixture directory is run by a runSpec call, and the
+// rows checked are every row on disk. The total is ratcheted at what is
+// on disk, so a corpus that shrinks cannot pass by measuring less, as the
+// Go and Rust gates do.
 test('every fixture row is held to its canonical JSON', () => {
-  assert.equal(canonicalRows, 1130,
-    `${canonicalRows} rows were held to their canonical JSON, not the 1130 measured`)
+  const files = Fs.readdirSync(SPEC).filter((name) => name.endsWith('.tsv'))
+  const unrun = files.filter((name) => !registered.has(name))
+  assert.deepEqual(unrun, [], `no runSpec call runs ${unrun.join(', ')}`)
+  const onDisk = files.reduce(
+    (total, name) => total + loadSpec(Path.join(SPEC, name)).rows.length, 0)
+  assert.equal(canonicalRows, onDisk,
+    `${canonicalRows} rows were held to their canonical JSON, of ${onDisk} on disk`)
+  assert.equal(onDisk, 1130,
+    `the shared fixtures hold ${onDisk} rows, not the 1130 measured`)
 })

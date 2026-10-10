@@ -96,6 +96,21 @@ describe('expr', () => {
   })
 
 
+  test('simplify-shares-nothing-with-the-parse', () => {
+    // Every array and object comes back new, an empty one included, so
+    // changing the result leaves the parse as it was.
+    const je = new Tabnas().use(jsonic).use(Expr)
+    for (const src of ['[[]]', '[{}]', '1+[]']) {
+      const parsed = je.parse(src)
+      const before = JSON.stringify(parsed)
+      const reduced = simplify(parsed)
+      const inner = reduced[reduced.length - 1]
+      Array.isArray(inner) ? inner.push('x') : (inner.x = 1)
+      expect(JSON.stringify(parsed)).equal(before)
+    }
+  })
+
+
   test('happy', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
 
