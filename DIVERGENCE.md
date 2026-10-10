@@ -96,6 +96,59 @@ which is what the inputs were, not what the difference is. Reading the
 label rather than the payload would suggest a signed-zero bug in this
 port. There is none.
 
+## Go's `Simplify` reads three things differently from the canonical
+
+**Not repaired**: `Simplify` is a public Go function, and changing what it
+returns changes every Go consumer's results. `SimplifyOrdered`, beside it,
+gives the canonical reading.
+
+Measured with the default operators:
+
+| input | TypeScript `simplify` | Go `Simplify` | Go `SimplifyOrdered` | Rust `simplify` |
+| --- | --- | --- | --- | --- |
+| `{b:1,a:2+3}` | `{"b":1,"a":["+",2,3]}` | `{"a":["+",2,3],"b":1}` | `{"b":1,"a":["+",2,3]}` | `{"b":1,"a":["+",2,3]}` |
+| `1+null` | `["+",1,null]` | `["+",1]` | `["+",1,null]` | `["+",1,null]` |
+| `[{src:x},1]` | `["x",1]` | `[{"src":"x"},1]` | `["x",1]` | `["x",1]` |
+
+Three **independently repairable** differences:
+
+### Member order
+
+`Simplify` hands back a parse's `*tabnas.OrderedMap` as a plain
+`map[string]interface{}`, which has no order, so `encoding/json` writes its
+keys sorted and a host walking the value meets them sorted. Over the shared
+fixtures that changes the text of 36 of the 1,130 rows. Repairing it
+changes the type `Simplify` returns for a map, which breaks a consumer that
+asserts `map[string]interface{}`.
+
+### A null term
+
+`Simplify` drops a term that reduces to `nil`, so `1+null` loses its right
+operand. The canonical drops only a term never filled, `undefined`.
+
+### A list headed by a `src` text
+
+The canonical reads `x[0].src`, so any list whose head is an object with a
+`src` text is an operation to it: the jsonic list `[{src:x},1]` comes back
+as `["x",1]`. `Simplify` recognises only its own `*Op` head. Whether the
+canonical should read a data list that way is a separate question; the
+Rust port and `SimplifyOrdered` read it as the canonical does.
+
+### Pins
+
+`TestSimplifyDivergesFromTheCanonical` (`go/canonical_test.go`) fails when
+any of the three is repaired. The canonical values are pinned by
+*"simplify-canonical-reading"* (`ts/test/expr.test.ts`),
+`simplify_reads_the_canonical_value` (`rs/tests/expr_test.rs`) and
+`TestSimplifyOrderedIsTheCanonicalReading` (`go/canonical_test.go`). Every
+shared fixture row holds `SimplifyOrdered`'s JSON to the TypeScript text,
+byte for byte, as it does Rust's `parse_simplified`.
+
+The three inputs are deliberately NOT shared fixtures: Go's runner compares
+rows through `Simplify`, so each row would be red there. The rule in
+[`test/AGENTS.md`](test/AGENTS.md) keeps intentional divergences out of
+`test/spec`.
+
 ## A comment marker adjacent to an operator lexes differently in all three
 
 **Not repaired** — the residue is in the three engines' lexers, not in

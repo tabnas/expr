@@ -37,6 +37,37 @@ func runSpec(t *testing.T, specName string, j *jsonic.Jsonic) {
 		Parse:     j.Parse,
 		Normalize: simplifyAndNormalize,
 	}.File(t, filepath.Join(dir, specName))
+
+	holdToCanonicalJSON(t, filepath.Join(dir, specName), j)
+}
+
+// holdToCanonicalJSON holds every row of one fixture file to its cell byte
+// for byte. The runner above compares structurally, through Simplify, which
+// ignores member order. Each cell is also exactly what the canonical
+// JSON.stringify writes for the TypeScript value (ts/test/spec.test.ts holds
+// every cell to it), so SimplifyOrdered's value, written the way
+// JSON.stringify writes one, must BE the cell, member order included.
+func holdToCanonicalJSON(t *testing.T, path string, j *jsonic.Jsonic) {
+	t.Helper()
+	spec, err := support.LoadSpec(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range spec.Rows {
+		value, err := j.Parse(row.Unesc(0))
+		if err != nil {
+			t.Errorf("%s: %v", row.Where(), err)
+			continue
+		}
+		got, err := canonicalJSON(SimplifyOrdered(value))
+		if err != nil {
+			t.Errorf("%s: %v", row.Where(), err)
+			continue
+		}
+		if got != row.Col(1) {
+			t.Errorf("%s: not the canonical JSON\n  got      %s\n  expected %s", row.Where(), got, row.Col(1))
+		}
+	}
 }
 
 func simplifyAndNormalize(node interface{}) interface{} {

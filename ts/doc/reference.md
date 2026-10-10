@@ -6,13 +6,13 @@ in `ts/src/expr.ts` and the test suite.
 ## Package
 
 ```js
-const { Expr, evaluation, testing } = require('@tabnas/expr')
+const { Expr, evaluation, simplify, parseSimplified, testing } = require('@tabnas/expr')
 ```
 
 ESM / TypeScript:
 
 ```ts
-import { Expr, evaluation, testing } from '@tabnas/expr'
+import { Expr, evaluation, simplify, parseSimplified, testing } from '@tabnas/expr'
 import type { ExprOptions, OpDef, Op, Evaluate } from '@tabnas/expr'
 ```
 
@@ -25,6 +25,8 @@ types are `dist/expr.d.ts`.
 |---|---|---|
 | `Expr` | Plugin | The expression plugin. Apply with `new Tabnas().use(jsonic).use(Expr, options?)`. |
 | `evaluation` | function | Standalone reducer for a parsed S-expression tree (see below). |
+| `simplify` | function | Reduce a parse to the plain S-expression form, each operator as its source text. |
+| `parseSimplified` | function | Parse with an instance, then `simplify` the result. |
 | `testing` | object | Internal test hooks: `{ prattify, opify }`. Not part of the stable API. |
 | `Expr.defaults` | object | The default options (`{ op: { … } }`), see [Default operators](#default-operators). |
 
@@ -46,6 +48,37 @@ const result = j.parse(source)
 
 `result` is either the raw S-expression tree (no `evaluate` option) or the
 evaluated value (with `evaluate`).
+
+## `simplify` and `parseSimplified`
+
+```ts
+function simplify(value: any): any
+function parseSimplified(tn: Tabnas, src: string, meta?: any): any
+```
+
+`simplify` reduces a parse to the plain S-expression form the shared
+fixtures and the translation parts read. An operation is an array whose
+head is the operator object, and `simplify` replaces the head with the
+operator's source text, which for a paren operator is its opening source,
+and drops a term that was never filled. It reduces every other array and
+object member by member into a new value, keeps their member order, and
+returns anything else unchanged. A node that contains itself reads as the
+string `'[CIRCLE]'`. `parseSimplified(tn, src, meta?)` is
+`simplify(tn.parse(src, meta))`.
+
+The Rust port's `simplify` and `parse_simplified` return the same value,
+and so does the Go port's `SimplifyOrdered`. Every shared fixture holds
+their JSON to this function's, byte for byte.
+
+```js
+const { Tabnas } = require('@tabnas/parser')
+const { jsonic } = require('@tabnas/jsonic')
+const { Expr, simplify, parseSimplified } = require('@tabnas/expr')
+
+const j = new Tabnas().use(jsonic).use(Expr)
+simplify(j.parse('1+2*3'))                    // => ['+', 1, ['*', 2, 3]]
+JSON.stringify(parseSimplified(j, '{b:1,a:2+3}')) // => '{"b":1,"a":["+",2,3]}'
+```
 
 ## `ExprOptions`
 

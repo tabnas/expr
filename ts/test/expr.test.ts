@@ -3,13 +3,15 @@
 
 import { describe, test, beforeEach } from 'node:test'
 
-import { Tabnas, Rule, RuleSpec, Context, util } from '@tabnas/parser'
+import { Tabnas, Rule, RuleSpec, Context } from '@tabnas/parser'
 import { jsonic } from '@tabnas/jsonic'
 import { Debug } from '@tabnas/debug'
 
 import {
   Expr,
   evaluation,
+  simplify,
+  parseSimplified,
   testing,
 } from '..'
 
@@ -21,21 +23,11 @@ import type {
 import { expect } from './spec-util'
 
 
-const { omap } = util
-
 const C = (x: any) => JSON.parse(JSON.stringify(x))
 
-// Walk expr tree into simplified form where first element is the op src.
-const S = (x: any, seen?: WeakSet<any>): any => (
-  seen = seen ?? new WeakSet(),
-  seen?.has(x) ? '[CIRCLE]' : (
-    (x && 'object' === typeof x ? seen?.add(x) : null),
-    (x && Array.isArray(x)) ?
-      (0 === x.length ? x : [
-        x[0].src || S(x[0], seen),
-        ...(1 < x.length ? (x.slice(1).map((t: any) => S(t, seen))) : [])]
-        .filter(t => undefined !== t)) :
-      (null != x && 'object' === typeof (x) ? omap(x, ([n, v]: [any, any]) => [n, S(v, seen)]) : x)))
+// Walk expr tree into simplified form where first element is the op src:
+// the package's own `simplify`.
+const S = simplify
 
 const mj =
   (je: Tabnas) => (s: string, m?: any) => C(S(je.parse(s, m)))
@@ -74,6 +66,48 @@ describe('expr', () => {
 
   beforeEach(() => {
     global.console = require('console')
+  })
+
+
+  test('simplify-canonical-reading', () => {
+    const je = new Tabnas().use(jsonic).use(Expr)
+    // The member order the parse found, a null term kept, and a list
+    // whose head carries a `src` text read as an operation: the Go port's
+    // `Simplify` differs on each (DIVERGENCE.md), and its
+    // `SimplifyOrdered` and the Rust `simplify` give these values.
+    expect(JSON.stringify(simplify(je.parse('{b:1,a:2+3}'))))
+      .equal('{"b":1,"a":["+",2,3]}')
+    expect(JSON.stringify(simplify(je.parse('1+null')))).equal('["+",1,null]')
+    expect(JSON.stringify(simplify(je.parse('[{src:x},1]')))).equal('["x",1]')
+    expect(parseSimplified(je, '1+2*3')).equal(['+', 1, ['*', 2, 3]])
+  })
+
+
+  test('simplify-circle', () => {
+    // A node inside itself reads as a circle; a node reached twice by two
+    // paths is reduced both times.
+    const plus = { src: '+' }
+    const loop: any[] = [plus, 1]
+    loop.push(loop)
+    expect(simplify(loop)).equal(['+', 1, '[CIRCLE]'])
+    const shared = [plus, 1, 2]
+    expect(simplify([plus, shared, shared]))
+      .equal(['+', ['+', 1, 2], ['+', 1, 2]])
+  })
+
+
+  test('simplify-shares-nothing-with-the-parse', () => {
+    // Every array and object comes back new, an empty one included, so
+    // changing the result leaves the parse as it was.
+    const je = new Tabnas().use(jsonic).use(Expr)
+    for (const src of ['[[]]', '[{}]', '1+[]']) {
+      const parsed = je.parse(src)
+      const before = JSON.stringify(parsed)
+      const reduced = simplify(parsed)
+      const inner = reduced[reduced.length - 1]
+      Array.isArray(inner) ? inner.push('x') : (inner.x = 1)
+      expect(JSON.stringify(parsed)).equal(before)
+    }
   })
 
 

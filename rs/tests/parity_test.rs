@@ -17,14 +17,23 @@ mod common;
 use serde_json::json;
 use tabnas::{Tabnas, Value as EngineValue};
 use tabnas_expr::{ExprOptions, OpDef, PrevalDef};
-use tabnas_support::{Runner, Value};
+use tabnas_support::{load_spec, Runner, SpecOptions, Value};
 
 use common::{parse_simplified, parser_default, parser_for, parser_with, spec_dir, to_failure};
 
 /// Run one fixture file with the parser the test built for it.
+///
+/// The runner compares a row's value with its cell structurally, which
+/// ignores member order. Each cell is also exactly what the canonical
+/// `JSON.stringify` writes for the TypeScript value (`ts/test/spec.test.ts`
+/// holds every cell to it), so the file is held to its cells byte for
+/// byte here too: `parse_simplified`'s value, written the way
+/// `JSON.stringify` writes one, must BE the cell, member order and number
+/// spelling included.
 fn run_spec(name: &str, parser: Tabnas) {
     let path = spec_dir().join(name);
     assert!(path.is_file(), "missing shared fixture {}", path.display());
+    hold_to_canonical_json(&path, &parser);
     Runner::new(move |input| {
         parse_simplified(&parser, input)
             .map(Value::from)
@@ -473,6 +482,314 @@ fn spec_evaluate_math() {
             }
         });
     run_spec("evaluate-math.tsv", parser_with(options));
+}
+
+// --- the canonical JSON ----------------------------------------------------
+
+/// Every row of one fixture file, held to its cell byte for byte.
+fn hold_to_canonical_json(path: &std::path::Path, parser: &Tabnas) {
+    let spec = load_spec(path, &SpecOptions::default())
+        .unwrap_or_else(|error| panic!("{}: {}", path.display(), error.0));
+    let mut failures = Vec::new();
+    for row in &spec.rows {
+        let value = tabnas_expr::parse_simplified(parser, &row.unesc(0))
+            .unwrap_or_else(|error| panic!("{}: {error}", row.location()));
+        let got = canonical(&value);
+        if got != row.col(1) {
+            failures.push(format!(
+                "{}\n  got      {got}\n  expected {}",
+                row.location(),
+                row.col(1)
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} rows differ from the canonical JSON:\n{}",
+        failures.len(),
+        spec.rows.len(),
+        failures.join("\n")
+    );
+}
+
+/// A value written as `JSON.stringify` writes it: members in order, a
+/// number spelt as JavaScript spells it, a number no JSON can hold as
+/// `null`, and an undefined member left out.
+fn canonical(value: &EngineValue) -> String {
+    let mut out = String::new();
+    write_canonical(&mut out, value);
+    out
+}
+
+fn write_canonical(out: &mut String, value: &EngineValue) {
+    let string = |text: &str| serde_json::to_string(text).expect("a string is JSON");
+    match value {
+        EngineValue::Undefined | EngineValue::Null => out.push_str("null"),
+        EngineValue::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+        EngineValue::Number(number) => out.push_str(&js_number(*number)),
+        EngineValue::String(text) => out.push_str(&string(text)),
+        EngineValue::Text(text) => out.push_str(&string(&text.string)),
+        EngineValue::Array(items) => write_items(out, items),
+        EngineValue::ListRef(list) => write_items(out, &list.value),
+        EngineValue::Object(members) => write_members(out, members.iter()),
+        EngineValue::MapRef(map) => write_members(out, map.value.iter()),
+    }
+}
+
+fn write_items(out: &mut String, items: &[EngineValue]) {
+    out.push('[');
+    for (at, item) in items.iter().enumerate() {
+        if 0 < at {
+            out.push(',');
+        }
+        write_canonical(out, item);
+    }
+    out.push(']');
+}
+
+fn write_members<'a>(
+    out: &mut String,
+    members: impl Iterator<Item = (&'a String, &'a EngineValue)>,
+) {
+    out.push('{');
+    let mut first = true;
+    for (name, member) in members {
+        if member.is_undefined() {
+            continue;
+        }
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        out.push_str(&serde_json::to_string(name).expect("a key is JSON"));
+        out.push(':');
+        write_canonical(out, member);
+    }
+    out.push('}');
+}
+
+/// ECMA-262 Number::toString, which `JSON.stringify` spells a number with:
+/// the fewest digits that read back as the number, laid out fixed from
+/// 1e-6 up to 1e21 and in exponent form, with a signed, unpadded exponent,
+/// outside it. Where two digit strings of that length read back, the one
+/// nearer the number wins, and on a tie the one ending in an even digit,
+/// as the specification's Note 2 recommends and V8 does. A negative zero
+/// is `0`, and NaN and the infinities are `null`.
+///
+/// Rust's `{:e}` gives the fewest digits but settles a tie upward, so
+/// 771558860699787.25 comes out as `771558860699787.3` where JavaScript
+/// writes `771558860699787.2`; and rounding the exact value to that many
+/// digits gives the nearer string, which at a power of two need not read
+/// back (2^-1017 is `7.120236347223045e-307`, and the nearer
+/// `7.120236347223044e-307` is another number). So this works from the
+/// exact decimal value instead, and holds each candidate to `parse`,
+/// which rounds correctly. Graded against node over 846,150 doubles
+/// (every power of two and its neighbours, 300,000 random bit patterns
+/// and 500,000 values from the binades where ties fall) with no
+/// difference.
+fn js_number(number: f64) -> String {
+    if !number.is_finite() {
+        return "null".to_string();
+    }
+    if 0.0 == number {
+        return "0".to_string();
+    }
+    let magnitude = number.abs();
+    let (exact, n) = exact_decimal(magnitude);
+    let reads_back = |digits: &[u8], n: i32| {
+        let text: String = digits
+            .iter()
+            .map(|digit| char::from(b'0' + digit))
+            .collect();
+        format!("0.{text}e{n}").parse::<f64>() == Ok(magnitude)
+    };
+    let mut body = None;
+    for k in 1..=exact.len() {
+        let low = &exact[..k];
+        let rest = &exact[k..];
+        if rest.iter().all(|digit| 0 == *digit) {
+            body = Some(js_layout(low, n));
+            break;
+        }
+        // One more in the last place than `low`, which a carry lengthens.
+        let mut high = low.to_vec();
+        let mut high_n = n;
+        match high.iter().rposition(|digit| 9 != *digit) {
+            Some(at) => {
+                high[at] += 1;
+                high[at + 1..].fill(0);
+            }
+            None => {
+                high.fill(0);
+                high[0] = 1;
+                high_n += 1;
+            }
+        }
+        let take_high = match (reads_back(low, n), reads_back(&high, high_n)) {
+            (false, false) => continue,
+            (true, false) => false,
+            (false, true) => true,
+            (true, true) => match rest[0].cmp(&5) {
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => {
+                    rest[1..].iter().any(|digit| 0 != *digit) || 1 == low[k - 1] % 2
+                }
+            },
+        };
+        body = Some(if take_high {
+            js_layout(&high, high_n)
+        } else {
+            js_layout(low, n)
+        });
+        break;
+    }
+    let body = body.expect("the exact digits read back");
+    if number < 0.0 {
+        format!("-{body}")
+    } else {
+        body
+    }
+}
+
+/// The exact decimal value of a positive finite double: its digits, with
+/// no leading zero, and `n`, where the number is 0.<digits> times ten to
+/// the `n`. A double is a mantissa times a power of two, so its decimal
+/// expansion ends: the mantissa times 2^e for e >= 0, and the mantissa
+/// times 5^-e, shifted -e places, for e < 0.
+fn exact_decimal(magnitude: f64) -> (Vec<u8>, i32) {
+    const BASE: u64 = 1_000_000_000;
+    let bits = magnitude.to_bits();
+    let fraction = bits & ((1 << 52) - 1);
+    let biased = ((bits >> 52) & 0x7ff) as i32;
+    let (mantissa, exponent) = if 0 == biased {
+        (fraction, -1074)
+    } else {
+        (fraction | (1 << 52), biased - 1075)
+    };
+    // A big integer in base 10^9, least significant limb first.
+    let mut limbs = vec![
+        mantissa % BASE,
+        mantissa / BASE % BASE,
+        mantissa / BASE / BASE,
+    ];
+    let mut multiply = |factor: u64| {
+        let mut carry = 0;
+        for limb in limbs.iter_mut() {
+            let product = *limb * factor + carry;
+            *limb = product % BASE;
+            carry = product / BASE;
+        }
+        while 0 < carry {
+            limbs.push(carry % BASE);
+            carry /= BASE;
+        }
+    };
+    // Each step's factor stays below 2^31, so a limb times it fits a u64.
+    let (base, step) = if 0 <= exponent {
+        (2u64, 30)
+    } else {
+        (5u64, 13)
+    };
+    let mut count = exponent.unsigned_abs();
+    while 0 < count {
+        let now = count.min(step);
+        multiply(base.pow(now));
+        count -= now;
+    }
+    let mut text = String::new();
+    for limb in limbs.iter().rev() {
+        text.push_str(&format!("{limb:09}"));
+    }
+    let digits: Vec<u8> = text
+        .trim_start_matches('0')
+        .bytes()
+        .map(|byte| byte - b'0')
+        .collect();
+    let n = digits.len() as i32 + exponent.min(0);
+    (digits, n)
+}
+
+/// Digits and the decimal point's place, `0.<digits>` times ten to the
+/// `n`, laid out as Number::toString lays them out.
+fn js_layout(digits: &[u8], n: i32) -> String {
+    let text: String = digits
+        .iter()
+        .map(|digit| char::from(b'0' + digit))
+        .collect();
+    let digits = text.trim_end_matches('0');
+    let k = digits.len() as i32;
+    if k <= n && n <= 21 {
+        format!("{digits}{}", "0".repeat((n - k) as usize))
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{digits}", "0".repeat(n.unsigned_abs() as usize))
+    } else {
+        let sign = if n < 1 { '-' } else { '+' };
+        let power = (n - 1).abs();
+        if 1 == k {
+            format!("{digits}e{sign}{power}")
+        } else {
+            format!("{}.{}e{sign}{power}", &digits[..1], &digits[1..])
+        }
+    }
+}
+
+#[test]
+fn js_number_spells_as_javascript_does() {
+    for (number, want) in [
+        (1.0, "1"),
+        (-0.0, "0"),
+        (1.5, "1.5"),
+        (-2.25, "-2.25"),
+        (100.0, "100"),
+        (1e20, "100000000000000000000"),
+        (1e21, "1e+21"),
+        (1.5e300, "1.5e+300"),
+        (0.000001, "0.000001"),
+        (1e-7, "1e-7"),
+        (-1.25e-7, "-1.25e-7"),
+        (0.1 + 0.2, "0.30000000000000004"),
+        (f64::NAN, "null"),
+        (f64::INFINITY, "null"),
+        // Ties, which Rust's own shortest form settles upward.
+        (f64::from_bits(0x4305edd45e85c45a), "771558860699787.2"),
+        (f64::from_bits(0x4305edd45e85c45e), "771558860699787.8"),
+        (f64::from_bits(0x4310000000000001), "1125899906842624.2"),
+        (f64::from_bits(0x3e60000000000000), "2.9802322387695312e-8"),
+        // A power of two, where the nearer string of the fewest digits is
+        // another number.
+        (f64::from_bits(0x0060000000000000), "7.120236347223045e-307"),
+        (f64::from_bits(0x0000000000000001), "5e-324"),
+        (f64::MAX, "1.7976931348623157e+308"),
+        (-f64::MAX, "-1.7976931348623157e+308"),
+    ] {
+        assert_eq!(js_number(number), want, "for {number:?}");
+    }
+}
+
+/// Every row of every fixture is held to its canonical JSON: each file by
+/// its `run_spec` test, and every file by the coverage gate below. The
+/// total is ratcheted at what is on disk, so a corpus that shrinks cannot
+/// pass by measuring less.
+#[test]
+fn every_fixture_row_is_held_to_its_canonical_json() {
+    let rows: usize = std::fs::read_dir(spec_dir())
+        .expect("the shared fixture directory is readable")
+        .map(|entry| entry.expect("a readable directory entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "tsv"))
+        .map(|path| {
+            load_spec(&path, &SpecOptions::default())
+                .unwrap_or_else(|error| panic!("{}: {}", path.display(), error.0))
+                .rows
+                .len()
+        })
+        .sum();
+    assert_eq!(
+        rows, 1130,
+        "the shared fixtures hold {rows} rows, not the 1130 measured"
+    );
 }
 
 // --- the coverage itself ---------------------------------------------------

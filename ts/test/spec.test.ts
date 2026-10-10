@@ -1,35 +1,28 @@
 /* Copyright (c) 2021-2025 Richard Rodger and other contributors, MIT License */
 
 import { describe, test, beforeEach } from 'node:test'
+import assert from 'node:assert'
+import Fs from 'node:fs'
 import Path from 'node:path'
 
-import { Tabnas, util } from '@tabnas/parser'
+import { Tabnas } from '@tabnas/parser'
 import { jsonic } from '@tabnas/jsonic'
 
-import { findSpecDir, makeRunner } from '@tabnas/support'
+import { findSpecDir, loadSpec, makeRunner } from '@tabnas/support'
 
 import {
   Expr,
+  simplify,
 } from '..'
 
 
-const { omap } = util
-
 const C = (x: any) => JSON.parse(JSON.stringify(x))
 
-const S = (x: any, seen?: WeakSet<any>): any => (
-  seen = seen ?? new WeakSet(),
-  seen?.has(x) ? '[CIRCLE]' : (
-    (x && 'object' === typeof x ? seen?.add(x) : null),
-    (x && Array.isArray(x)) ?
-      (0 === x.length ? x : [
-        x[0].src || S(x[0], seen),
-        ...(1 < x.length ? (x.slice(1).map((t: any) => S(t, seen))) : [])]
-        .filter(t => undefined !== t)) :
-      (null != x && 'object' === typeof (x) ? omap(x, ([n, v]: [any, any]) => [n, S(v, seen)]) : x)))
-
+// The exported `simplify` reduces a parse to the S-expression form the
+// fixtures hold, as the Rust port's `simplify` and the Go port's
+// `Simplify` do for their halves of this suite.
 const mj =
-  (je: Tabnas) => (s: string, m?: any) => C(S(je.parse(s, m)))
+  (je: Tabnas) => (s: string, m?: any) => C(simplify(je.parse(s, m)))
 
 
 // The fixtures live at the repo root in `test/spec/*.tsv` and are read by
@@ -45,9 +38,26 @@ const mj =
 // test.
 const SPEC = findSpecDir(__dirname)
 
+// The runner compares a row's value with its cell structurally, which
+// ignores member order. The cells are more than that: each is exactly
+// what JSON.stringify writes for this runtime's value, and the Rust
+// suite (`rs/tests/parity_test.rs`) compares its own value's JSON TEXT
+// with them, member order included. So each file is held to its cells
+// byte for byte too, which keeps every cell the canonical text.
+let canonicalRows = 0
+const registered = new Set<string>()
+
 function runSpec(specName: string, j: (s: string) => any) {
+  registered.add(specName)
   makeRunner({ parse: (input) => j(input) })
     .file(Path.join(SPEC, specName))
+
+  test(`${specName}: every cell is the canonical JSON, byte for byte`, () => {
+    for (const row of loadSpec(Path.join(SPEC, specName)).rows) {
+      assert.equal(JSON.stringify(j(row.unesc(0))), row.col(1), row.where())
+      canonicalRows++
+    }
+  })
 }
 
 
@@ -482,4 +492,22 @@ describe('spec', () => {
     runSpec('evaluate-math.tsv', j)
   })
 
+})
+
+
+// Every row of every fixture went through a byte-for-byte check above:
+// every file in the fixture directory is run by a runSpec call, and the
+// rows checked are every row on disk. The total is ratcheted at what is
+// on disk, so a corpus that shrinks cannot pass by measuring less, as the
+// Go and Rust gates do.
+test('every fixture row is held to its canonical JSON', () => {
+  const files = Fs.readdirSync(SPEC).filter((name) => name.endsWith('.tsv'))
+  const unrun = files.filter((name) => !registered.has(name))
+  assert.deepEqual(unrun, [], `no runSpec call runs ${unrun.join(', ')}`)
+  const onDisk = files.reduce(
+    (total, name) => total + loadSpec(Path.join(SPEC, name)).rows.length, 0)
+  assert.equal(canonicalRows, onDisk,
+    `${canonicalRows} rows were held to their canonical JSON, of ${onDisk} on disk`)
+  assert.equal(onDisk, 1130,
+    `the shared fixtures hold ${onDisk} rows, not the 1130 measured`)
 })
