@@ -7,15 +7,19 @@
 ;
 ; Both are the identity. The reader builds its trees on jsonic's values,
 ; so every plain tree is already an expression tree: a list whose first
-; element is the source of a default operator (`+`, `-`, `*`, `/`, `%`,
-; or `(` for a group) and whose count makes an operation is one, and the
-; render writes it in infix; every other value is a value of jsonic's,
-; which the render writes as jsonic. A list that only looks like an
-; operation reads back as the same list either way, since the reader
-; reduces an operator to its source text, so nothing needs refusing. What
-; the round trip changes is what the render's conventions change (the
-; manifest's loss list): a negative number reads back as the operator `-`
-; applied to its magnitude, and a number that is not finite as a string.
+; element is a default operator and whose count makes an operation is
+; one, and the render writes it in infix, the operator being its source
+; text (`+`, `-`, `*`, `/`, `%`, or `(` for a group) or an object that
+; describes it, whose `src` member is that text, as the reader's own
+; value carries it; every other value is a value of jsonic's, which the
+; render writes as jsonic. A list that only looks like an operation
+; reads back as the same tree either way, once each operator is reduced
+; to its source text as the shared fixtures' simplifier, Go's `Simplify`
+; and Rust's `simplify` reduce it, so nothing needs refusing. What the
+; round trip changes is what the render's conventions change (the
+; manifest's loss list): an operator's description is written as its
+; source text, a negative number reads back as the operator `-` applied
+; to its magnitude, and a number that is not finite as a string.
 
 ; The embedding: a plain tree's events in, the same events out.
 def expr-embed [input]

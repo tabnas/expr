@@ -16,7 +16,7 @@ is specific to this crate.
 | `tests/debug_model_test.rs` | the grammar composed with `tabnas-debug`, asserting the rule set, the entry rule and the push edges: the Rust half of `ts/test/debug-model.test.ts` |
 | `tests/perf_test.rs` | the machine-independent instance-reuse guards |
 | `tests/version_test.rs` | `Cargo.toml` equals `VERSION` equals `ts/package.json` |
-| `tests/translate_test.rs` | the translation parts: the render and the embedding the embedded manifest names are the ones the crate embeds, the manifest's shapes, root, schema and loss lines, and every definition of both named `expr-...` |
+| `tests/translate_test.rs` | the translation parts: the render and the embedding the embedded manifest names are the ones the crate embeds, the manifest's shapes, root, schema and loss lines, every definition of both named `expr-...`, and the `src` the reader's realized value and `simplify` give each default operator, which the render reads |
 | `tests/common/mod.rs` | shared helpers: the spec directory, the per-row parser, failure conversion, number normalization |
 | `README.md` | the crate front page, prose-gated; its `rust` fences are doctests of this crate |
 

@@ -106,6 +106,14 @@ describe('spec', () => {
   })
 
 
+  // The documents the translation render (alchemy/render.alc) writes,
+  // read back with the default operators: see the file's own comments.
+  describe('render', () => {
+    const j = mj(new Tabnas().use(jsonic).use(Expr))
+    runSpec('render.tsv', j)
+  })
+
+
   describe('binding-power-zero', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {

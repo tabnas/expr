@@ -52,6 +52,7 @@ const TRANSLATION: TranslationParts = Object.freeze({
     "loss": [
       "Comments, spacing, implicit lists and maps, and the document's own spelling of strings and numbers are not kept: every list is written in brackets, every object in braces with its keys quoted, every string double-quoted and every number as JSON writes it.",
       "An operation of the default operators is written in infix, and a term that would need parentheses, which read back as a group, is written as a list instead, which reads back as the same tree.",
+      "A list whose first element is an object whose src member is a default operator's source text, as the reader's own value describes an operator, is written with that text in the object's place, as an operation where its count makes one: only the src member is read, and the object's other members, the token the operator was read from among them, are not kept.",
       "A negative number is written with its sign, which reads back as the operator - applied to the number's magnitude.",
       "A number that is not finite is written as the string Infinity, -Infinity or NaN."
     ]
@@ -67,15 +68,19 @@ const TRANSLATION: TranslationParts = Object.freeze({
 ;
 ; Both are the identity. The reader builds its trees on jsonic's values,
 ; so every plain tree is already an expression tree: a list whose first
-; element is the source of a default operator (\`+\`, \`-\`, \`*\`, \`/\`, \`%\`,
-; or \`(\` for a group) and whose count makes an operation is one, and the
-; render writes it in infix; every other value is a value of jsonic's,
-; which the render writes as jsonic. A list that only looks like an
-; operation reads back as the same list either way, since the reader
-; reduces an operator to its source text, so nothing needs refusing. What
-; the round trip changes is what the render's conventions change (the
-; manifest's loss list): a negative number reads back as the operator \`-\`
-; applied to its magnitude, and a number that is not finite as a string.
+; element is a default operator and whose count makes an operation is
+; one, and the render writes it in infix, the operator being its source
+; text (\`+\`, \`-\`, \`*\`, \`/\`, \`%\`, or \`(\` for a group) or an object that
+; describes it, whose \`src\` member is that text, as the reader's own
+; value carries it; every other value is a value of jsonic's, which the
+; render writes as jsonic. A list that only looks like an operation
+; reads back as the same tree either way, once each operator is reduced
+; to its source text as the shared fixtures' simplifier, Go's \`Simplify\`
+; and Rust's \`simplify\` reduce it, so nothing needs refusing. What the
+; round trip changes is what the render's conventions change (the
+; manifest's loss list): an operator's description is written as its
+; source text, a negative number reads back as the operator \`-\` applied
+; to its magnitude, and a number that is not finite as a string.
 
 ; The embedding: a plain tree's events in, the same events out.
 def expr-embed [input]
@@ -91,12 +96,18 @@ def expr-unembed [input]
 ; program (alchemy's \`compile_sources\`); its entry point is \`expr-render\`,
 ; and nothing else here is the host's to call.
 ;
-; The tree is the one the reader builds with its default options, each
-; operator description reduced to its source text: jsonic's values, in
-; which an operation is a list whose first element is its operator's
-; source, \`+\`, \`-\`, \`*\`, \`/\` or \`%\` (\`1+2*3\` is \`["+", 1, ["*", 2, 3]]\`,
-; \`-1\` is \`["-", 1]\`) or \`(\` for a group (\`(1)\` is \`["(", 1]\`, \`()\` is
-; \`["("]\`), and whose other elements are its terms.
+; The tree is the one the reader builds with its default options:
+; jsonic's values, in which an operation is a list whose first element is
+; its operator and whose other elements are its terms. The reader's own
+; value puts the operator's description there, an object whose \`src\`
+; member is the operator's source text (TypeScript's parse, and Rust's
+; once realized, give it so); the shared fixtures' simplifier, Go's
+; \`Simplify\` and Rust's \`simplify\` reduce each description to that text,
+; \`+\`, \`-\`, \`*\`, \`/\` or \`%\` (\`1+2*3\` is \`["+", 1, ["*", 2, 3]]\`, \`-1\` is
+; \`["-", 1]\`) or \`(\` for a group (\`(1)\` is \`["(", 1]\`, \`()\` is \`["("]\`).
+; The render reads both: the first element of a list is the operator its
+; text is, or the operator an object describes, read by its \`src\` member
+; as those simplifiers read it, when that is a default operator's source.
 ;
 ; Every value is written so that the reader builds the same tree from it:
 ;
@@ -127,10 +138,13 @@ def expr-unembed [input]
 ; Whether a list is written as an operation is known from its first
 ; element and its count, so a list whose first element is a default
 ; operator is held until it ends, its elements' texts with it, and then
-; written. Every other list, and every object, is written as it is read,
-; one element at a time, so a document's own lists and objects stream and
-; only its operations are held. Events no tree has fail with
-; PROTOCOL_ORDER_ERROR.
+; written. A list whose first element is an object is held until that
+; object ends, since the object may describe an operator: if it does, the
+; list is held to its end as an operation is, and if not, the list is
+; written as it is read from then on. Every other list, and every object,
+; is written as it is read, one element at a time, so a document's own
+; lists and objects stream and only its operations, and the first object
+; of a list, are held. Events no tree has fail with PROTOCOL_ORDER_ERROR.
 ;
 ; The state is a stack of markers, one for each container the render is
 ; inside:
@@ -139,13 +153,17 @@ def expr-unembed [input]
 ;                                decides how it is written; mode is
 ;                                :stream where it is written as it is
 ;                                read and :hold inside a held list
+;   [:list :first]               a list whose first element, an object,
+;                                is being held, which decides how the
+;                                list is written
 ;   [:list :stream first]        a list written as it is read; first
 ;                                until an element is written
 ;   [:list :hold items]          a held list, and the items read so far
 ;   [:map :stream first :key]    an object written as it is read, its
 ;                                next key or its end due
 ;   [:map :stream :value]        the same, a member's value due
-;   [:map :hold parts :key]      an object inside a held list, and its
+;   [:map :hold parts :key]      an object inside a held list, or the
+;                                first element of a list, and its
 ;                                members' texts
 ;   [:map :hold parts [:value k]]  the same, the value of the key k due
 ;
@@ -153,7 +171,10 @@ def expr-unembed [input]
 ; its class, \`:infix2\` for an operation of \`+\` or \`-\`, \`:infix3\` for one
 ; of \`*\`, \`/\` or \`%\`, and \`:atom\` for any other value, which binds as
 ; tightly as a term can; the text of the value as a list, for a term that
-; needs grouping; and the operator a string is, or \`:none\`. Once the root
+; needs grouping; and the operator a string is or an object describes, or
+; \`:none\`. A list's first item that is an operator is held as the
+; operator's text, so a description is written as its source, as the
+; simplifiers reduce it, wherever its list is written. Once the root
 ; value is written the state is \`[:done]\`, and nothing may follow it.
 
 ; The operator a value is, when it is the source of a default one.
@@ -169,6 +190,43 @@ def expr-op [value]
         case "(" value
         case _ :none
     case _ :none
+
+; The operator a held object's member describes: the default operator a
+; \`src\` member's text names, or :none for any other member.
+def expr-src-op [part]
+  match part
+    case "\\"src\\":\\"+\\"" "+"
+    case "\\"src\\":\\"-\\"" "-"
+    case "\\"src\\":\\"*\\"" "*"
+    case "\\"src\\":\\"/\\"" "/"
+    case "\\"src\\":\\"%\\"" "%"
+    case "\\"src\\":\\"(\\"" "("
+    case _ :none
+
+def expr-is-op [op]
+  match op
+    case :none false
+    case _ true
+
+; The operator an object describes, from its members' texts: the one its
+; \`src\` member names, as the reader's description of an operator does, or
+; :none.
+def expr-described [parts]
+  let [ops (filter expr-is-op (map expr-src-op parts))]
+    match (count ops)
+      case 0 :none
+      case _ (top ops)
+
+; An item as its list holds it: the first one, where it is an operator,
+; as that operator's text, so that a description is written as the
+; source it describes; any other as it is.
+def expr-lead [items item]
+  match (count items)
+    case 0
+      match item
+        case [_ _ _ :none] item
+        case [_ _ _ op] (expr-scalar-item op)
+    case _ item
 
 ; An infix operator's class.
 def expr-level [op]
@@ -288,36 +346,50 @@ def expr-push-or-done [s inner out]
 ; A value completed inside a held list or object: its item is added.
 def expr-hold-value [s item]
   match (expr-top s)
-    case [:list :hold items] (transition (expr-mark [:list :hold (push item items)] s) [])
+    case [:list :hold items] (transition (expr-mark [:list :hold (push (expr-lead items item) items)] s) [])
     case [:map :hold parts [:value k]] (transition (expr-mark [:map :hold (push (string-join "" [k ":" (expr-text item)]) parts) :key] s) [])
 
 ; A held value has ended: it is added to the held container around it,
-; or written where values are written as they are read, where what led
-; it (a comma, a key) was written when it began.
+; decides the list it is the first element of, or is written where
+; values are written as they are read, where what led it (a comma, a
+; key) was written when it began.
 def expr-held [s item]
   match (expr-top s)
     case [:list :hold _] (expr-hold-value s item)
     case [:map :hold _ _] (expr-hold-value s item)
+    case [:list :first] (expr-first-held s item)
     case _ (expr-closed s (expr-text item))
+
+; A list whose first element, an object, has ended: one that describes
+; an operator makes the list an operation, held as one whose first
+; element is that operator's text is; any other is written, the list's
+; \`[\` first, and the rest of the list as it is read.
+def expr-first-held [s item]
+  match item
+    case [text _ _ :none] (transition (expr-mark [:list :stream false] s) ["[" text])
+    case _ (transition (expr-mark [:list :hold [(expr-lead [] item)]] s) [])
 
 ; Whether the top of the stack holds what is read.
 def expr-holding [s]
   match (expr-top s)
     case [:list :hold _] true
     case [:map :hold _ _] true
+    case [:list :first] true
     case _ false
 
 ; A list whose first element is due decides on that element's first
 ; event, and answers its marker and the text it writes: one whose first
-; element is a default operator may be an operation and is held; any
-; other is written as it is read, \`[\` first, unless it is inside a held
-; one.
+; element is a default operator may be an operation and is held; one
+; whose first element is an object waits for the object, which may
+; describe an operator; any other is written as it is read, \`[\` first,
+; unless it is inside a held one.
 def expr-decide [s mode event]
   match [mode event]
     case [:stream (scalar value)]
       match (expr-op value)
         case :none [(expr-mark [:list :stream true] s) "["]
         case _ [(expr-mark [:list :hold []] s) ""]
+    case [:stream object-start] [(expr-mark [:list :first] s) ""]
     case [:stream _] [(expr-mark [:list :stream true] s) "["]
     case _ [(expr-mark [:list :hold []] s) ""]
 
@@ -373,7 +445,7 @@ def expr-object-end [s]
     case [:map :stream _ :key] (expr-closed (pop s) "}")
     case [:map :hold parts :key]
       let [text (string-join "" ["{" (string-join "," parts) "}"])]
-        expr-held (pop s) [text :atom text :none]
+        expr-held (pop s) [text :atom text (expr-described parts)]
     case _ (fail :protocol-order "the events end an object that is not open, or one whose member has no value, which a tree's never do")
 
 def expr-array-end [s]

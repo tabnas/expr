@@ -170,3 +170,47 @@ fn the_parts_are_libraries_named_for_expr() {
         );
     }
 }
+
+/// The render reads an operation's operator from the tree a host hands it:
+/// the operator's source text, as `simplify` reduces it, or the object
+/// that describes it, by its `src` member, as the reader's realized value
+/// carries it. So the reader must describe every default operator by its
+/// source text there, and a group by `(`, and `simplify` must reduce each
+/// to that text; were either to stop, the render would write the
+/// description as an object, which `test/spec/render.tsv`, reading
+/// documents back, cannot see.
+#[test]
+fn the_reader_describes_every_default_operator_by_the_src_the_render_reads() {
+    // Each operation as its operator's `src` and its terms.
+    fn read(value: &Value) -> Value {
+        let Value::Array(items) = value else {
+            return value.clone();
+        };
+        let op = items
+            .first()
+            .and_then(|first| first.get("src"))
+            .unwrap_or_else(|| panic!("{value} has no description first"));
+        std::iter::once(op.clone())
+            .chain(items.iter().skip(1).map(read))
+            .collect()
+    }
+    let cases = [
+        ("1+2*3", serde_json::json!(["+", 1.0, ["*", 2.0, 3.0]])),
+        (
+            "8/2%3-1",
+            serde_json::json!(["-", ["%", ["/", 8.0, 2.0], 3.0], 1.0]),
+        ),
+        ("-+1", serde_json::json!(["-", ["+", 1.0]])),
+        ("(1)", serde_json::json!(["(", 1.0])),
+        ("()", serde_json::json!(["("])),
+    ];
+    for (src, want) in cases {
+        let value = tabnas_expr::parse(src).expect("parses");
+        assert_eq!(read(&value.to_json()), want, "the reader's value of {src}");
+        assert_eq!(
+            tabnas_expr::simplify(&value).to_json(),
+            want,
+            "simplify of {src}"
+        );
+    }
+}

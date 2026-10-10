@@ -10,7 +10,10 @@ import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { test } from 'node:test'
 
-import { translate } from '..'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
+
+import { Expr, translate } from '..'
 
 const root = path.resolve(__dirname, '..', '..')
 const read = (rel: string) => readFileSync(path.join(root, rel), 'utf8')
@@ -68,4 +71,26 @@ test('the parts are libraries named for the format', () => {
   for (const name of embed) {
     assert.ok(!render.includes(name), `${name} is defined by the render too`)
   }
+})
+
+// The render reads an operation's operator from the tree a host hands it:
+// the operator's source text, or the object that describes it, by its src
+// member, which is what the reader's own value puts first in an
+// operation's list. So the reader must describe every default operator by
+// its source text there, and a group by `(`; were it to stop, the render
+// would write the description as an object, which test/spec/render.tsv,
+// reading documents back, cannot see.
+test('the reader describes every default operator by the src the render reads', () => {
+  const tn = new Tabnas().use(jsonic).use(Expr)
+  // Each operation as its operator's src and its terms.
+  const read = (value: any): any => {
+    if (!Array.isArray(value)) return value
+    assert.equal(typeof value[0], 'object', `${JSON.stringify(value)} has no description first`)
+    return [value[0].src, ...value.slice(1).map(read)]
+  }
+  assert.deepEqual(read(tn.parse('1+2*3')), ['+', 1, ['*', 2, 3]])
+  assert.deepEqual(read(tn.parse('8/2%3-1')), ['-', ['%', ['/', 8, 2], 3], 1])
+  assert.deepEqual(read(tn.parse('-+1')), ['-', ['+', 1]])
+  assert.deepEqual(read(tn.parse('(1)')), ['(', 1])
+  assert.deepEqual(read(tn.parse('()')), ['('])
 })

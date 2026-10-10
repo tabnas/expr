@@ -34,6 +34,7 @@
     "loss": [
       "Comments, spacing, implicit lists and maps, and the document's own spelling of strings and numbers are not kept: every list is written in brackets, every object in braces with its keys quoted, every string double-quoted and every number as JSON writes it.",
       "An operation of the default operators is written in infix, and a term that would need parentheses, which read back as a group, is written as a list instead, which reads back as the same tree.",
+      "A list whose first element is an object whose src member is a default operator's source text, as the reader's own value describes an operator, is written with that text in the object's place, as an operation where its count makes one: only the src member is read, and the object's other members, the token the operator was read from among them, are not kept.",
       "A negative number is written with its sign, which reads back as the operator - applied to the number's magnitude.",
       "A number that is not finite is written as the string Infinity, -Infinity or NaN."
     ]

@@ -103,6 +103,13 @@ func TestSpecStructure(t *testing.T) {
 	runSpec(t, "structure.tsv", j)
 }
 
+// The documents the translation render (alchemy/render.alc) writes, read
+// back with the default operators: see the file's own comments.
+func TestSpecRender(t *testing.T) {
+	j := makeExprJsonic()
+	runSpec(t, "render.tsv", j)
+}
+
 func TestSpecBindingPowerZero(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{

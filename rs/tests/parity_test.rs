@@ -75,6 +75,13 @@ fn spec_structure() {
     run_spec("structure.tsv", parser_default());
 }
 
+/// The documents the translation render (`alchemy/render.alc`) writes,
+/// read back with the default operators: see the file's own comments.
+#[test]
+fn spec_render() {
+    run_spec("render.tsv", parser_default());
+}
+
 #[test]
 fn spec_unary_prefix_basic() {
     run_spec("unary-prefix-basic.tsv", parser_default());

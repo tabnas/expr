@@ -107,6 +107,35 @@ func TestTranslateReturnsACopy(t *testing.T) {
 	}
 }
 
+// The render reads an operation's operator from the tree a host hands it:
+// the operator's source text, or the object that describes it, by its src
+// member. A Go value's operator is an *Op, which an event walker cannot
+// read as either, so a Go host hands the render the tree Simplify makes,
+// which must reduce every default operator to its source text, and a
+// group to "(".
+func TestSimplifyGivesTheOperatorsTheRenderReads(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{"1+2*3", `["+",1,["*",2,3]]`},
+		{"8/2%3-1", `["-",["%",["/",8,2],3],1]`},
+		{"-+1", `["-",["+",1]]`},
+		{"(1)", `["(",1]`},
+		{"()", `["("]`},
+	}
+	for _, c := range cases {
+		value, err := Parse(c.src)
+		if err != nil {
+			t.Fatalf("%s: %v", c.src, err)
+		}
+		got, err := json.Marshal(Simplify(value))
+		if err != nil {
+			t.Fatalf("%s: %v", c.src, err)
+		}
+		if string(got) != c.want {
+			t.Errorf("Simplify of %s is %s, want %s", c.src, got, c.want)
+		}
+	}
+}
+
 // inCheckout skips a test that holds the embedded copies to the
 // repository's own files when it runs where those files are not, as from
 // the module cache, whose zip holds the go/ module alone. In a checkout,
