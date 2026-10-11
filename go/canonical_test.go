@@ -197,8 +197,8 @@ func TestEveryFixtureRowIsHeldToItsCanonicalJSON(t *testing.T) {
 			t.Errorf("no TestSpec runs %s", filepath.Join(dir, file.Name))
 		}
 	}
-	if rows != 1130 {
-		t.Errorf("the shared fixtures hold %d rows, not the 1130 measured", rows)
+	if rows != 1136 {
+		t.Errorf("the shared fixtures hold %d rows, not the 1136 measured", rows)
 	}
 }
 
