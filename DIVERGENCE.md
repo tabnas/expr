@@ -117,7 +117,7 @@ Three **independently repairable** differences:
 `Simplify` hands back a parse's `*tabnas.OrderedMap` as a plain
 `map[string]interface{}`, which has no order, so `encoding/json` writes its
 keys sorted and a host walking the value meets them sorted. Over the shared
-fixtures that changes the text of 36 of the 1,130 rows. Repairing it
+fixtures that changes the text of 36 of the 1,136 rows. Repairing it
 changes the type `Simplify` returns for a map, which breaks a consumer that
 asserts `map[string]interface{}`.
 

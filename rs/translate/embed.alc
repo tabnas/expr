@@ -6,7 +6,7 @@
 ; its reverse, takes them back. Nothing else here is the host's to call.
 ;
 ; Both are the identity. The reader builds its trees on jsonic's values,
-; so every plain tree is already an expression tree: a list whose first
+; so a plain tree is already an expression tree: a list whose first
 ; element is a default operator and whose count makes an operation is
 ; one, and the render writes it in infix, the operator being its source
 ; text (`+`, `-`, `*`, `/`, `%`, or `(` for a group) or an object that
@@ -15,11 +15,22 @@
 ; render writes as jsonic. A list that only looks like an operation
 ; reads back as the same tree either way, once each operator is reduced
 ; to its source text as the shared fixtures' simplifier, Go's `Simplify`
-; and Rust's `simplify` reduce it, so nothing needs refusing. What the
-; round trip changes is what the render's conventions change (the
-; manifest's loss list): an operator's description is written as its
-; source text, a negative number reads back as the operator `-` applied
-; to its magnitude, and a number that is not finite as a string.
+; and Rust's `simplify` reduce it.
+;
+; The plain trees that are not expression trees are the lists led by an
+; object whose `src` member the simplifiers read as an operator that is
+; not a default one, as they read a C syntax tree's tokens: they keep
+; that `src` alone, so no document reads back as such a list. The render
+; refuses it, with TARGET_VALUE_UNREPRESENTABLE and the object's path,
+; rather than this embedding, since the render meets such a list from
+; any source, one of the schema `expr` too, which reaches the render
+; without an embedding, and it already holds the first object of a list
+; to read the operator that object describes.
+;
+; What the round trip changes is what the render's conventions change
+; (the manifest's loss list): an operator's description is written as
+; its source text, a negative number reads back as the operator `-`
+; applied to its magnitude, and a number that is not finite as a string.
 
 ; The embedding: a plain tree's events in, the same events out.
 def expr-embed [input]
