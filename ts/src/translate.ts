@@ -55,7 +55,8 @@ const TRANSLATION: TranslationParts = Object.freeze({
       "A list whose first element is an object whose src member is a default operator's source text, as the reader's own value describes an operator, is written with that text in the object's place, as an operation where its count makes one: only the src member is read, and the object's other members, the token the operator was read from among them, are not kept. A list whose first element is an object with any other src that is not empty, zero, false or null, as a C syntax tree's token has, is refused with TARGET_VALUE_UNREPRESENTABLE, since the reader would read that src alone as the list's operator.",
       "A negative number is written with its sign, which reads back as the operator - applied to the number's magnitude.",
       "A number that is not finite is written as the string Infinity, -Infinity or NaN."
-    ]
+    ],
+    "whole": "A binary operator follows its left term, and a later operator can take a finished operation as its own term, as the - in 1*2-3 takes 1*2, so an expression's tree is complete only at its end: a document is read whole before anything is written."
   }
 }
 `,
