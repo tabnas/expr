@@ -1,0 +1,11 @@
+input	expected
+{a:{$ref:x}}	{"a":["$ref","x",{}]}
+{$ref:x}	["$ref","x",{}]
+{a:[{$ref:x},{$ref:y}]}	{"a":[["$ref","x",{}],["$ref","y",{}]]}
+{a:{b:{$ref:x}}}	{"a":{"b":["$ref","x",{}]}}
+{a:{$ref:1}}	{"a":["$ref",1,{}]}
+{a:{$ref:x,d:1,e:[1,2]}}	{"a":["$ref","x",{"d":1,"e":[1,2]}]}
+{a:{$ref:x,b:{$ref:y}}}	{"a":["$ref","x",{"b":["$ref","y",{}]}]}
+{a:{$ref:x,$other:1}}	{"a":["$ref","x",{"$other":1}]}
+{a:{$other:1,$ref:x}}	{"a":["$ref","x",{"$other":1}]}
+{a:{ref:x}}	{"a":{"ref":"x"}}

@@ -6,14 +6,14 @@ in `ts/src/expr.ts` and the test suite.
 ## Package
 
 ```js
-const { Expr, evaluation, simplify, parseSimplified, testing } = require('@tabnas/expr')
+const { Expr, evaluation, simplify, parseSimplified, fold, opify, isOp, testing } = require('@tabnas/expr')
 ```
 
 ESM / TypeScript:
 
 ```ts
-import { Expr, evaluation, simplify, parseSimplified, testing } from '@tabnas/expr'
-import type { ExprOptions, OpDef, Op, Evaluate } from '@tabnas/expr'
+import { Expr, evaluation, simplify, parseSimplified, fold, opify, isOp } from '@tabnas/expr'
+import type { ExprOptions, OpDef, Op, Evaluate, FoldOptions, Site, FoldReport } from '@tabnas/expr'
 ```
 
 The package is library-only: there is no CLI. `main` is `dist/expr.js`,
@@ -27,10 +27,15 @@ types are `dist/expr.d.ts`.
 | `evaluation` | function | Standalone reducer for a parsed S-expression tree (see below). |
 | `simplify` | function | Reduce a parse to the plain S-expression form, each operator as its source text. |
 | `parseSimplified` | function | Parse with an instance, then `simplify` the result. |
+| `fold` | function | Fold a finished tree: resolve its key operators against the whole document (see [`fold`](#fold)). |
+| `opify` | function | Mark a hand-built operator description as this plugin's, so `isOp` and `evaluation` recognise a node headed by it. |
+| `isOp` | function | Whether a value is an operator node: an array headed by a marked operator. |
+| `keyOpOf`, `makeKeyMap` | function | The key operator a map is an occurrence of, by shape, and the table `fold` reads it from. |
 | `testing` | object | Internal test hooks: `{ prattify, opify }`. Not part of the stable API. |
 | `Expr.defaults` | object | The default options (`{ op: { … } }`), see [Default operators](#default-operators). |
 
-Type-only exports: `ExprOptions`, `OpDef`, `Op`, `Evaluate`.
+Type-only exports: `ExprOptions`, `OpDef`, `Op`, `Evaluate`, `FoldOptions`,
+`FoldEvaluate`, `Inherit`, `Site`, `FoldReport`, `Path`, `KeyMap`.
 
 ## Using the plugin
 
@@ -86,6 +91,7 @@ JSON.stringify(parseSimplified(j, '{b:1,a:2+3}')) // => '{"b":1,"a":["+",2,3]}'
 type ExprOptions = {
   op?: { [name: string]: OpDef }
   evaluate?: Evaluate
+  fold?: FoldOptions
 }
 ```
 
@@ -93,6 +99,7 @@ type ExprOptions = {
 |---|---|---|
 | `op` | `{ [name]: OpDef }` | Operator definitions, keyed by a name you choose. Merged over `Expr.defaults.op`. Set an entry to `null` to remove a default operator. |
 | `evaluate` | `Evaluate` | If set, each expression is reduced to a value during parsing, and `parse` returns values instead of S-expression trees. |
+| `fold` | `FoldOptions` | If set, the finished document is folded before `parse` returns: its key operators are resolved against the whole tree. See [`fold`](#fold). |
 
 Options are merged with the defaults; you only specify what differs. The
 operator name you pick is decorated by kind (see [Operator names](#operator-names)).
@@ -120,12 +127,14 @@ type OpDef = {
     required?: boolean
     allow?: string[]
   }
+  key?: boolean
+  dynamic?: boolean
 }
 ```
 
 | Field | Applies to | Description |
 |---|---|---|
-| `src` | infix, prefix, suffix | The operator token text, for example `'+'`. For `ternary`, a two-element array `[open, close]`, for example `['?', ':']`. |
+| `src` | infix, prefix, suffix, key | The operator token text, for example `'+'`. For `ternary`, a two-element array `[open, close]`, for example `['?', ':']`. For `key`, the member name that marks a site, for example `'$ref'`. |
 | `osrc` | paren | The opening token text, for example `'('`, `'['`, `'<'`. |
 | `csrc` | paren | The closing token text, for example `')'`, `']'`, `'>'`. |
 | `left` | infix, suffix | Left binding power. Higher binds tighter. Defaults to `Number.MIN_SAFE_INTEGER` (loosest); a declared `0` takes that default too. |
@@ -136,6 +145,8 @@ type OpDef = {
 | `ternary` | (none) | Mark as a ternary operator (3 terms). Requires `src: [open, close]`. |
 | `paren` | (none) | Mark as a paren/grouping operator. Requires `osrc`/`csrc`. |
 | `preval` | paren | Allow a preceding value (function-call / index syntax). See [Preval](#preval). |
+| `key` | (none) | Mark as a key operator: a map that owns the member `src` is an occurrence, recognised by shape when a tree is folded, never by a token. No binding power applies. See [Key operators](#key-operators). |
+| `dynamic` | key | A key operator that a fold recognises and reports but never evaluates. |
 | `use` | any | Arbitrary data carried through onto the resolved `Op.use`. |
 
 `left`/`right` are compared **only by order**, never by magnitude. See
@@ -158,6 +169,39 @@ left as its first operand: the shape of `f(args)` and `a[i]`.
 | `allow` | unset | If set, the preceding value must be one of these strings for preval to apply. |
 
 `preval: true` is shorthand for `preval: { active: true }`.
+
+### Key operators
+
+A key operator is recognised after the base grammar has built a map, by
+the map's shape: it owns the member named by `src`. Nothing changes in
+the parsed tree, which stays the document as written; the operator exists
+for [`fold`](#fold), which hands the resolver two terms, the member's
+value and a new map of the other members. A map that owns two declared
+keys is an occurrence of the one declared first. `dynamic: true` marks a
+key the fold reports and leaves alone, such as `$dynamicRef`, whose
+meaning depends on a scope a parser does not have; the map still folds as
+a plain map, so operators inside it reduce.
+
+```js
+const { Tabnas } = require('@tabnas/parser')
+const { jsonic } = require('@tabnas/jsonic')
+const { Expr, fold } = require('@tabnas/expr')
+
+const op = { ref: { key: true, src: '$ref' } }
+const j = new Tabnas().use(jsonic).use(Expr, { op })
+const raw = j.parse('{ a: { $ref: "#/b", note: 1 }, b: { c: 2 } }')
+JSON.stringify(raw)   // => '{"a":{"$ref":"#/b","note":1},"b":{"c":2}}'
+
+const pointer = (ref) => ref.slice(2).split('/')
+const out = fold(raw, {
+  op,
+  evaluate: (site, op, [value, siblings]) => {
+    const hit = site.at(pointer(value))
+    return hit.found && !hit.cycle ? { ...hit.value, ...siblings } : site.node
+  },
+})
+JSON.stringify(out)   // => '{"a":{"c":2,"note":1},"b":{"c":2}}'
+```
 
 ## `Op`
 
@@ -184,6 +228,8 @@ type Op = {
   otkn: string; otin: number   // paren open token
   ctkn: string; ctin: number   // paren close token
   preval: { active: boolean; required: boolean; allow?: string[] }
+  key: boolean       // a key operator, recognised by a map's shape
+  dynamic: boolean   // reported by a fold, never evaluated
   token: Token       // the matched source Token (location info)
   OP_MARK: object    // internal marker identifying plugin-owned ops
 }
@@ -204,6 +250,7 @@ that way:
 | suffix | `-suffix` | `factorial` → `factorial-suffix` |
 | ternary | `-ternary` | `cond` → `cond-ternary` |
 | paren | `-paren` | `plain` → `plain-paren` |
+| key | `-key` | `ref` → `ref-key` |
 
 Dispatch on `op.name` (kind-precise) or `op.src` + kind booleans.
 
@@ -224,17 +271,20 @@ this sub-expression reduces to.
   (ternary). For a preval paren call like `f(1,2)`, terms are
   `[funcName, argsValue]`.
 
-## `evaluation(rule, ctx, node, evaluate)`
+## `evaluation(rule, ctx, node, evaluate, options?)`
 
 ```ts
-function evaluation(rule: Rule, ctx: Context, node: any, evaluate: Evaluate): any
+function evaluation(rule: Rule, ctx: Context, node: any, evaluate: Evaluate, options?: { objects?: boolean }): any
 ```
 
 Reduce a parsed S-expression tree to a value, outside of parsing. Use it
 when you parsed with no `evaluate` option (to defer or repeat evaluation).
 `rule`/`ctx` may be `null` if your callback ignores them. Plain values and
 maps pass through unchanged; a plain array (an implicit list, such as the
-parse of `1+2, 3+4`) is reduced element-wise into a new array.
+parse of `1+2, 3+4`) is reduced element-wise into a new array. With
+`options.objects` set, a plain map is reduced member by member into a new
+map of the same prototype, which is what the `evaluate` option already
+does for an expression inside a map.
 
 The tree passed in is never modified, so the same tree can be reduced
 again with different semantics, and `evaluate` is called exactly once per
@@ -255,6 +305,72 @@ const mathFn = (rule, ctx, op, terms) =>
 
 evaluation(null, null, tree, mathFn)    // => 7
 ```
+
+## `fold`
+
+```ts
+function fold(root: any, options: FoldOptions): any
+
+type FoldOptions = {
+  op?: { [name: string]: OpDef }     // the operator table; only `key` entries matter
+  evaluate: (site: Site, op: Op, terms: any[]) => any
+  inherit?: (site: Site, node: any, k: Record<string, any>) => Record<string, any>
+  k?: Record<string, any>            // the root's starting bag
+  cycle?: 'verbatim' | 'error'       // default 'verbatim'
+  tokens?: boolean                   // default true: token operator arrays met in the walk reduce too
+  positions?: boolean                // deferred mode: record each container's opening token
+  report?: (report: FoldReport) => void
+}
+
+type Site = {
+  root: any                          // the verbatim root
+  path: (string | number)[]          // from the root to this site
+  node: any                          // the site's verbatim node
+  k: Record<string, any>             // the bag inherited from the site's ancestors
+  token?: Token                      // the site's opening token, with `positions`
+  rule: null; ctx: null              // a fold runs after the parse
+  at(path): { found: boolean; cycle: boolean; value?: any }
+  locate(path): { found: boolean; value?: any }
+  fold(root: any, k?): any           // the same fold over another document
+}
+
+type FoldReport = {
+  cycles: { at: string; target: string }[]       // RFC 6901 pointers
+  unresolved: { at: string; target: string }[]
+  dynamic: { at: string; src: string }[]
+}
+```
+
+`fold` walks a finished tree and returns a new one; the input is never
+changed. Every key-operator site is reduced bottom-up through `evaluate`,
+with `[value, siblings]` as its terms, both already folded. Values flow up
+through `evaluate`; context flows down through `inherit`, which is called
+for every map on the way from the root and returns the bag the map's
+subtree sees, computed per path from the map's own ancestors and
+memoised, so a site reached early through a reference gets its ancestors'
+bag and never the referrer's.
+
+`site.at(path)` is how a resolver reaches another part of the tree: the
+folded value at that path, through any key-operator sites met on the way
+(a reference to a reference resolves), with one result per path, so every
+site naming one target shares one value. A target that is still being
+folded (the target itself, an ancestor of the site, or the root), or a
+target whose own resolution met such a cycle, comes back with `cycle:
+true`; the site is then the resolver's to keep verbatim, which is the
+default, or the fold throws under `cycle: 'error'`. A target that names
+nothing comes back `found: false`. Both are listed in the report.
+`site.locate(path)` reads the raw tree and follows nothing.
+
+Token operator arrays met in the walk are reduced through the same
+`evaluate` when `tokens` is on, so one fold handles `+` and `$ref`;
+`op.key` tells the two apart.
+
+With `ExprOptions.fold` set, the plugin runs the same fold on the finished
+root before `parse` returns, through the engine's post-process rule event,
+in any grammar and whatever the install order; `positions: true` then
+records every container's opening token while parsing, so `site.token`
+carries a row and column. A resolver that throws surfaces its error from
+`parse`, and the instance keeps working.
 
 ## Default operators
 

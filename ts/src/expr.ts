@@ -67,6 +67,20 @@ type OpDef = {
     required?: boolean
     allow?: string[]
   }
+
+  // STRUCTURAL (key) operator: an occurrence is a map that owns the member
+  // named by `src` (for example `$ref`), recognised by shape when a tree is
+  // folded, never by a token. No fixed token is registered, so the base
+  // grammar's pair rule keeps the key position, and no binding power
+  // applies, since a key operator never competes for an operand: its two
+  // terms are fixed by the shape, the member's value and the sibling map.
+  key?: boolean
+
+  // A key operator that a fold recognises and reports but never
+  // evaluates: `$dynamicRef`, whose meaning depends on a scope the parser
+  // does not have. Its map folds as a plain map, so operators inside it
+  // still reduce.
+  dynamic?: boolean
 }
 
 // Options for the plugin.
@@ -75,6 +89,13 @@ type ExprOptions = {
 
   // TODO: define Evalute type
   evaluate?: typeof evaluation
+
+  // Fold the finished document before `parse` returns (deferred mode):
+  // the plugin subscribes to the engine's post-process rule event and
+  // replaces the root node with `fold(root, options.fold)` on the last
+  // pass of the parse. Key operators resolve against the finished root,
+  // where `evaluate` above reduces a token expression at its own close.
+  fold?: FoldOptions
 }
 
 // Full operator description (provided for evaluation).
@@ -103,6 +124,8 @@ type Op = {
     required: boolean
     allow?: string[]
   }
+  key: boolean
+  dynamic: boolean
   token: Token
   OP_MARK: typeof OP_MARK
 }
@@ -110,8 +133,75 @@ type Op = {
 // Lookup operators by token.
 type OpMap = { [tin: number]: Op }
 
+// Lookup key operators by the member name that marks a site, in the
+// order the `op` table declared them (the first declared wins when a map
+// owns two).
+type KeyMap = { [src: string]: Op }
+
 // Resolve the value of an operartion
 type Evaluate = (rule: Rule, ctx: Context, op: Op, ...terms: any) => any
+
+// A location in a folded tree, as segments from the root: member names
+// and array indices.
+type Path = (string | number)[]
+
+// What `fold` hands the resolver for one site: the verbatim root, the
+// path to the site, the site's verbatim node, the bag inherited from the
+// site's ancestors (`inherit`), the site's opening token when the parse
+// recorded one, and the two ways to reach the rest of the tree: `at`
+// folds another location (through any key-operator sites on the way,
+// memoised, cycle-aware) and `locate` reads it raw. `fold` runs the same
+// fold over another root, for a document the resolver loaded itself.
+// `rule` and `ctx` are null: a fold runs after the parse.
+type Site = {
+  root: any
+  path: Path
+  node: any
+  k: Record<string, any>
+  token?: Token
+  rule: null
+  ctx: null
+  at: (path: Path) => { found: boolean; cycle: boolean; value?: any }
+  locate: (path: Path) => { found: boolean; value?: any }
+  fold: (root: any, k?: Record<string, any>) => any
+}
+
+// Reduce one site: a key operator with `[value, siblings]`, both already
+// folded, or, when `tokens` is on, a token operator met in the walk with
+// its folded terms.
+type FoldEvaluate = (site: Site, op: Op, terms: any[]) => any
+
+// Extend the bag a node's subtree inherits. Called on the way down for
+// every object on a path, from the ancestors' bags, so a site reached
+// early through a reference gets ITS ancestors' context, never the
+// referrer's: the engine's `k` discipline, for a finished tree.
+type Inherit = (site: Site, node: any, k: Record<string, any>) => Record<string, any>
+
+type FoldReport = {
+  cycles: { at: string; target: string }[]
+  unresolved: { at: string; target: string }[]
+  dynamic: { at: string; src: string }[]
+}
+
+type FoldOptions = {
+  // The operator table; only the `key` entries matter to a fold. The
+  // plugin supplies its own table in deferred mode.
+  op?: { [name: string]: OpDef }
+  evaluate: FoldEvaluate
+  inherit?: Inherit
+  k?: Record<string, any>
+  // A site whose target is still being folded (the target itself, an
+  // ancestor of the site, or the root): keep the site verbatim and record
+  // the cycle (default), or throw.
+  cycle?: 'verbatim' | 'error'
+  // Reduce token-operator arrays met in the walk through `evaluate` too,
+  // so one fold handles `+` and `$ref`. Default true.
+  tokens?: boolean
+  // Deferred mode only: record every container's opening token while
+  // parsing, grammar-neutrally, so `site.token` carries a position.
+  positions?: boolean
+  report?: (report: FoldReport) => void
+}
 
 // Mark Operator objects as owned by this plugin.
 const OP_MARK = {}
@@ -150,6 +240,8 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
   const infixTM: OpMap = makeOpMap(token, fixed, optop, 'infix')
   const ternaryTM: OpMap = makeOpMap(token, fixed, optop, 'ternary')
 
+  const keyTM: KeyMap = makeKeyMap(optop)
+
   const parenOTM: OpMap = makeParenMap(token, fixed, optop)
   const parenCTM: OpMap = omap(parenOTM, ([_, pdef]: [Tin, Op]) => [
     undefined,
@@ -182,6 +274,34 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
       },
     },
   })
+
+  // Deferred mode: fold the finished root on the last pass of the parse.
+  // The engine's post-process rule event fires after every pass in every
+  // grammar; the last pass is a depth-0 close whose alternate neither
+  // pushes nor replaces, outside any probe and not synthesised by
+  // recovery. The start rule's own after-close is not that event: a
+  // grammar may replace its start rule (yaml's `stream` does on a
+  // directive or a document marker), and `parse` returns the original
+  // root rule's node, which is what is written here.
+  if (options.fold) {
+    const foldOptions = options.fold
+    const tokensByNode = new WeakMap<object, Token>()
+    tn.sub({
+      ruleDone: (r: Rule, ctx: Context, done: any) => {
+        if (foldOptions.positions && 'o' === done.state) {
+          const n: any = r.node
+          if (null != n && 'object' === typeof n && !tokensByNode.has(n) && r.o0) {
+            tokensByNode.set(n, r.o0)
+          }
+        }
+        if (0 !== r.d || 'c' !== done.state || !done.alt || done.alt.p || done.alt.r || done.probe || done.forced) {
+          return
+        }
+        const root = ctx.root()
+        root.node = foldTree(root.node, { ...foldOptions, op: optop }, keyTM, tokensByNode)
+      },
+    })
+  }
 
   // Append 'expr' to the g (group tag) of every alt added below. Mirrors
   // the jsonic grammar(...) setting {rule:{alt:{g:'expr'}}}, applied
@@ -1348,6 +1468,8 @@ function makeOpMap(
           active: false,
           required: false,
         },
+        key: false,
+        dynamic: false,
         token: {} as Token,
         OP_MARK,
       })
@@ -1426,12 +1548,278 @@ function makeParenMap(
         tkn: '',
         tin: -1,
         terms: 1,
+        key: false,
+        dynamic: false,
         token: {} as Token,
         OP_MARK,
       }
     }
     return a
   }, {}) as OpMap
+}
+
+
+// Key operators, by the member name that marks a site. A key operator
+// carries no token, no tin and no binding power; `terms` is 2 (the
+// member's value, then the sibling map).
+function makeKeyMap(optop: { [name: string]: OpDef }): KeyMap {
+  return entries(optop).reduce((a: KeyMap, [name, kdef]: [string, any]) => {
+    if (kdef && kdef.key) {
+      const src = 'string' === typeof kdef.src ? kdef.src : (kdef.src || [])[0]
+      a[src] = {
+        name: name + (name.endsWith('-key') ? '' : '-key'),
+        src,
+        left: Number.MIN_SAFE_INTEGER,
+        right: Number.MAX_SAFE_INTEGER,
+        use: kdef.use || {},
+        prefix: false,
+        suffix: false,
+        infix: false,
+        ternary: false,
+        paren: false,
+        terms: 2,
+        tkn: '',
+        tin: -1,
+        osrc: '',
+        csrc: '',
+        otkn: '',
+        otin: -1,
+        ctkn: '',
+        ctin: -1,
+        preval: { active: false, required: false },
+        key: true,
+        dynamic: !!kdef.dynamic,
+        token: {} as Token,
+        OP_MARK,
+      }
+    }
+    return a
+  }, {})
+}
+
+
+// A plain object: not an array, not a boxed string, not null.
+function isRecord(v: any): boolean {
+  return null != v && 'object' === typeof v && !Array.isArray(v) && !(v instanceof String)
+}
+
+// The key operator a map is an occurrence of, by shape: the first
+// declared key the map owns. Undefined for anything else.
+function keyOpOf(keys: KeyMap, node: any): Op | undefined {
+  if (!isRecord(node)) return undefined
+  for (const src in keys) {
+    if (Object.prototype.hasOwnProperty.call(node, src)) return keys[src]
+  }
+  return undefined
+}
+
+// RFC 6901: the memo and cycle key of a path.
+function pointer(path: Path): string {
+  let out = ''
+  for (const seg of path) {
+    out += '/' + String(seg).replace(/~/g, '~0').replace(/\//g, '~1')
+  }
+  return out
+}
+
+// A new container of the same prototype as `like` (the engine builds
+// null-prototype objects), with members DEFINED rather than assigned so a
+// member named `__proto__` stays data.
+function newRecord(like: any): any {
+  return Object.create(Object.getPrototypeOf(like))
+}
+function define(o: any, k: string, v: any): void {
+  Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true })
+}
+
+
+// Fold a finished tree: walk it, reduce every key-operator site
+// bottom-up through `opts.evaluate`, and return a NEW tree; the input is
+// never changed. Values flow up through `evaluate`; context flows down
+// through `inherit`, computed per path from each node's own ancestors
+// and memoised per prefix. One result per path (memo), so every site
+// naming one target shares one folded value; every container being
+// folded is on an active set, so a site whose target is still being
+// built (the target itself, an ancestor, the root) is a cycle: kept
+// verbatim and reported, or an error. Dynamic key operators are reported
+// and folded as plain maps. Token-operator arrays met in the walk are
+// reduced through the same `evaluate` when `tokens` is on.
+function fold(root: any, opts: FoldOptions): any {
+  return foldTree(root, opts, makeKeyMap(opts.op || {}), undefined)
+}
+
+function foldTree(
+  root: any,
+  opts: FoldOptions,
+  keys: KeyMap,
+  tokensByNode: WeakMap<object, Token> | undefined,
+): any {
+  const report: FoldReport = { cycles: [], unresolved: [], dynamic: [] }
+  const out = foldRoot(root, opts, keys, tokensByNode, report)
+  if (opts.report) opts.report(report)
+  return out
+}
+
+function foldRoot(
+  root: any,
+  opts: FoldOptions,
+  keys: KeyMap,
+  tokensByNode: WeakMap<object, Token> | undefined,
+  report: FoldReport,
+): any {
+  const tokens = false !== opts.tokens
+  const memo = new Map<string, any>()
+  const active = new Set<string>()
+  // Sites whose own resolution met a cycle: a reference INTO a cycle is
+  // reported as one too, so every member of a ring is kept verbatim
+  // rather than the last one alone.
+  const cyclic = new Set<string>()
+  const kMemo = new Map<string, Record<string, any>>()
+  const inherit: Inherit = opts.inherit || ((_site, _node, k) => k)
+
+  const rawAt = (path: Path): { found: boolean; value?: any } => {
+    let node: any = root
+    for (const seg of path) {
+      if (Array.isArray(node)) node = node[Number(seg)]
+      else if (isRecord(node) && Object.prototype.hasOwnProperty.call(node, seg)) node = node[seg]
+      else return { found: false }
+      if (undefined === node) return { found: false }
+    }
+    return { found: true, value: node }
+  }
+
+  // The bag at a path: the ancestors' `inherit` calls, applied in order
+  // from the root, memoised per prefix. Arrays and scalars pass the bag
+  // through unchanged.
+  const kAt = (path: Path): Record<string, any> => {
+    const key = pointer(path)
+    const hit = kMemo.get(key)
+    if (undefined !== hit) return hit
+    let k: Record<string, any> = path.length ? kAt(path.slice(0, -1)) : (opts.k || {})
+    const node = rawAt(path).value
+    if (isRecord(node)) k = inherit(siteFor(path, node, k), node, k)
+    kMemo.set(key, k)
+    return k
+  }
+
+  const siteFor = (path: Path, node: any, k?: Record<string, any>): Site => ({
+    root,
+    path,
+    node,
+    k: k || kAt(path),
+    token: null != node && 'object' === typeof node && tokensByNode ? tokensByNode.get(node) : undefined,
+    rule: null,
+    ctx: null,
+    at: (target: Path) => at(path, target),
+    locate: rawAt,
+    fold: (other: any, k2?: Record<string, any>) =>
+      foldRoot(other, { ...opts, k: k2 || opts.k }, keys, tokensByNode, report),
+  })
+
+  // The folded value at `target`, for the resolver at `from`. Raw
+  // segments are followed from the root; a static key-operator site met
+  // on the way is folded (through the memo) and the remaining segments
+  // continue inside its folded value, so a reference to a reference
+  // resolves. A target still being folded is a cycle.
+  const at = (from: Path, target: Path): { found: boolean; cycle: boolean; value?: any } => {
+    let node: any = root
+    const cur: Path = []
+    for (let i = 0; i < target.length; i++) {
+      const seg = target[i]
+      cur.push(seg)
+      if (Array.isArray(node)) node = node[Number(seg)]
+      else if (isRecord(node) && Object.prototype.hasOwnProperty.call(node, seg)) node = node[seg]
+      else node = undefined
+      if (undefined === node) {
+        report.unresolved.push({ at: pointer(from), target: pointer(target) })
+        return { found: false, cycle: false }
+      }
+      const op = keyOpOf(keys, node)
+      if (op && !op.dynamic && i < target.length - 1) {
+        if (active.has(pointer(cur)) || cyclic.has(pointer(cur))) {
+          report.cycles.push({ at: pointer(from), target: pointer(cur) })
+          cyclic.add(pointer(from))
+          return { found: true, cycle: true }
+        }
+        let v: any = walk(node, cur.slice())
+        for (i++; i < target.length; i++) {
+          const s = target[i]
+          if (Array.isArray(v)) v = v[Number(s)]
+          else if (isRecord(v) && Object.prototype.hasOwnProperty.call(v, s)) v = v[s]
+          else v = undefined
+          if (undefined === v) {
+            report.unresolved.push({ at: pointer(from), target: pointer(target) })
+            return { found: false, cycle: false }
+          }
+        }
+        return { found: true, cycle: false, value: v }
+      }
+    }
+    if (active.has(pointer(target))) {
+      report.cycles.push({ at: pointer(from), target: pointer(target) })
+      cyclic.add(pointer(from))
+      return { found: true, cycle: true }
+    }
+    const value = walk(node, target)
+    if (cyclic.has(pointer(target))) {
+      report.cycles.push({ at: pointer(from), target: pointer(target) })
+      cyclic.add(pointer(from))
+      return { found: true, cycle: true, value }
+    }
+    return { found: true, cycle: false, value }
+  }
+
+  const walk = (node: any, path: Path): any => {
+    const key = pointer(path)
+    if (memo.has(key)) return memo.get(key)
+    if (active.has(key)) {
+      if ('error' === opts.cycle) throw new Error('expr fold: cycle at ' + key)
+      return node
+    }
+    active.add(key)
+    let out: any
+    try {
+      if (tokens && isOp(node)) {
+        out = evaluation(null as any, null as any, node, (_r: any, _c: any, op: Op, terms: any[]) =>
+          opts.evaluate(siteFor(path, node), op, terms))
+      }
+      else if (Array.isArray(node)) {
+        out = []
+        for (let i = 0; i < node.length; i++) out.push(walk(node[i], [...path, i]))
+      }
+      else if (isRecord(node)) {
+        const op = keyOpOf(keys, node)
+        if (op && !op.dynamic) {
+          const siblings = newRecord(node)
+          for (const k of Object.keys(node)) {
+            if (k !== op.src) define(siblings, k, walk(node[k], [...path, k]))
+          }
+          const value = walk(node[op.src], [...path, op.src])
+          const site = siteFor(path, node)
+          const cycles = report.cycles.length
+          out = opts.evaluate(site, { ...op, token: site.token || op.token }, [value, siblings])
+          if ('error' === opts.cycle && report.cycles.length > cycles) {
+            throw new Error('expr fold: cycle at ' + key)
+          }
+        }
+        else {
+          if (op) report.dynamic.push({ at: key, src: op.src })
+          out = newRecord(node)
+          for (const k of Object.keys(node)) define(out, k, walk(node[k], [...path, k]))
+        }
+      }
+      else {
+        out = node
+      }
+    }
+    finally {
+      active.delete(key)
+    }
+    memo.set(key, out)
+    return out
+  }
+
+  return walk(root, [])
 }
 
 // Default operator precedence — the "binding power" scale.
@@ -1593,7 +1981,13 @@ function prattify(expr: any, op?: Op, whence?: string): any[] {
 const EVALUATED = new WeakSet<any>()
 
 
-function evaluation(rule: Rule, ctx: Context, expr: any, evaluate: Evaluate) {
+function evaluation(
+  rule: Rule,
+  ctx: Context,
+  expr: any,
+  evaluate: Evaluate,
+  opts?: { objects?: boolean },
+) {
   let out = expr ?? null
 
   if (null == expr || EVALUATED.has(expr)) {
@@ -1605,7 +1999,7 @@ function evaluation(rule: Rule, ctx: Context, expr: any, evaluate: Evaluate) {
       rule,
       ctx,
       expr[0],
-      expr.slice(1).map((term: any) => evaluation(rule, ctx, term, evaluate)),
+      expr.slice(1).map((term: any) => evaluation(rule, ctx, term, evaluate, opts)),
     )
   }
 
@@ -1618,10 +2012,23 @@ function evaluation(rule: Rule, ctx: Context, expr: any, evaluate: Evaluate) {
   // the expr rule's close hook does that itself — mutating its own tree
   // is the parser's business, not this function's.
   else if (Array.isArray(expr)) {
-    out = expr.map((term: any) => evaluation(rule, ctx, term, evaluate))
+    out = expr.map((term: any) => evaluation(rule, ctx, term, evaluate, opts))
   }
 
-  if (null != out && 'object' === typeof out) {
+  // A plain object is passed through unchanged by default, as the
+  // reference documents; with `objects` on it is reduced member by member
+  // into a NEW object of the same prototype, which is what the eager
+  // `evaluate` option already does for an expression inside a map.
+  else if (opts && opts.objects && isRecord(expr)) {
+    const o = newRecord(expr)
+    for (const k of Object.keys(expr)) define(o, k, evaluation(rule, ctx, expr[k], evaluate, opts))
+    out = o
+  }
+
+  // Only a value this fold PRODUCED is marked: a node passed through
+  // unchanged (a plain object, by default) is not, so a later fold with
+  // `objects` on still reaches the operators inside it.
+  if (null != out && 'object' === typeof out && out !== expr) {
     EVALUATED.add(out)
   }
 
@@ -1692,9 +2099,18 @@ function parseSimplified(tn: Tabnas, src: string, meta?: any): any {
 }
 
 
+// Mark a hand-built operator description as this plugin's, so `isOp` and
+// `evaluation` recognise a node headed by it. A sibling plugin that builds
+// operator nodes needs this; `simplify` needs it not, reading any
+// `src`-headed array. Fills nothing else: pass a complete description.
+function opify<T extends object>(op: T): T {
+  ;(op as any).OP_MARK = OP_MARK
+  return op
+}
+
 const testing = {
   prattify,
-  opify: (x: any) => ((x.OP_MARK = OP_MARK), x),
+  opify,
 }
 
 // VERSION is this package's version. It MUST equal package.json "version":
@@ -1702,9 +2118,9 @@ const testing = {
 // build if they drift. Mirrors `const VERSION` in go/expr.go.
 const VERSION = '0.5.19'
 
-export { VERSION, Expr, evaluation, simplify, parseSimplified, testing }
+export { VERSION, Expr, evaluation, simplify, parseSimplified, fold, opify, isOp, keyOpOf, makeKeyMap, testing }
 
-export type { ExprOptions, OpDef, Op, Evaluate }
+export type { ExprOptions, OpDef, Op, Evaluate, FoldOptions, FoldEvaluate, Inherit, Site, FoldReport, Path, KeyMap }
 
 // The translation parts a host composes a translation from (admin ADR-27):
 // the manifest and the alchemy sources, generated by ../embed-translate.js.

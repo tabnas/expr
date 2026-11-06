@@ -1,0 +1,5 @@
+input	expected
+{base:x,a:{$ref:r}}	{"base":"x","a":["r","x"]}
+{base:x,a:{$ref:r},b:{base:y,c:{$ref:r}}}	{"base":"x","a":["r","x"],"b":{"base":"y","c":["r","y"]}}
+{d:{$ref:"#/b/c"},base:x,b:{base:y,c:{$ref:r}}}	{"d":["r","y"],"base":"x","b":{"base":"y","c":["r","y"]}}
+{base:x,a:[{$ref:r}]}	{"base":"x","a":[["r","x"]]}

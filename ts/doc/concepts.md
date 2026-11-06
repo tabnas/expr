@@ -194,6 +194,37 @@ care to *not* embed a surrounding implicit list inside an expression when the
 expression is the first item of that list. These are correctness details of
 the grammar wiring, not configuration you touch.
 
+## Operators over shapes
+
+Every operator above is a token: the lexer emits it, an alternate matches
+it, and binding powers decide where it attaches. A document can also carry
+an operation as a shape: a map that owns a keyword member, `{ "$ref":
+"#/components/schemas/Pet" }`, is the reference operator applied to a
+target, with its other members as a second operand. No token marks it, the
+base grammar's pair rule owns the key position, and no binding power
+applies, because the shape fixes the operands. So the plugin recognises a
+key operator after the map is built, by its shape, and leaves the parsed
+tree exactly as written.
+
+What differs is when such an operator can be reduced. A token expression
+reduces when it closes: `1+2` is complete at the `2`. A reference is
+complete only when the whole document is, since its target may come later
+and may itself be a reference, so key operators reduce in a fold over the
+finished root, bottom-up, with context flowing down: the fold hands the
+resolver a site, with the path, the verbatim node, a bag inherited from
+the site's own ancestors (the base URI in force, say), and `at`, which
+folds another location through the same memo and cycle discipline. Some
+keywords cannot be reduced by a parser at all, because their meaning
+depends on a scope that exists only when the document is used;
+`$dynamicRef` is one. A `dynamic` key operator is recognised and reported
+and left alone. Three times, then: at close, at the end, and never.
+
+The fold keeps one result per path, so every site naming one target
+shares one value, and treats a target that is still being folded as a
+cycle, which the resolver keeps verbatim by default. The S-expression view
+of a key operator is a fold output, through a recording resolver, rather
+than a parse output: the parsed tree is the document.
+
 ## Trade-offs
 
 - **Imperative rule editing over declarative grammar.** More code and more
