@@ -14,3 +14,5 @@ input	expected
 {a:{$ref:"#/b"},b:{c:{$ref:"#/d"}},d:9}	{"a":{"c":9},"b":{"c":9},"d":9}
 {a:{$dynamicRef:"#/b"},b:1}	{"a":{"$dynamicRef":"#/b"},"b":1}
 {a:{$dynamicRef:"#/b",c:{$ref:"#/b"}},b:1}	{"a":{"$dynamicRef":"#/b","c":1},"b":1}
+{a:{$ref:"#/b/x"},b:{$ref:"#/c",x:7},c:{$ref:"#/b"}}	{"a":{"$ref":"#/b/x"},"b":{"$ref":"#/c","x":7},"c":{"$ref":"#/b"}}
+{b:{$ref:"#/c",x:7},c:{$ref:"#/b"},a:{$ref:"#/b/x"}}	{"b":{"$ref":"#/c","x":7},"c":{"$ref":"#/b"},"a":{"$ref":"#/b/x"}}

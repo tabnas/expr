@@ -213,3 +213,47 @@ describe('opify and isOp', () => {
       ['$ref', 'x', {}])
   })
 })
+
+
+// Shapes the first review of the layer found wanting.
+describe('fold: token terms, rings and a __proto__ key', () => {
+
+  test('a site inside a token expression is folded at its own path', () => {
+    const tn = new Tabnas().use(jsonic).use(Expr, { op: REF })
+    const raw = tn.parse('{a:5,e:1+2*{$ref:"#/a"}}')
+    const paths: any[] = []
+    const out: any = fold(raw, {
+      op: REF,
+      evaluate: (site, op, terms) => {
+        if (op.key) { paths.push(site.path); return site.at(pointer(terms[0])).value }
+        return '+' === op.src ? terms[0] + terms[1] : terms[0] * terms[1]
+      },
+    })
+    assert.deepEqual(paths, [['e', 2, 2]])
+    assert.deepEqual(C(out), { a: 5, e: 11 })
+  })
+
+
+  test('a pointer into a ring is a cycle in every member order', () => {
+    for (const src of [
+      '{a:{$ref:"#/b/x"},b:{$ref:"#/c",x:7},c:{$ref:"#/b"}}',
+      '{b:{$ref:"#/c",x:7},c:{$ref:"#/b"},a:{$ref:"#/b/x"}}',
+    ]) {
+      let report: FoldReport | undefined
+      const out: any = fold(parser().parse(src), { op: REF, evaluate: resolving, report: (r) => { report = r } })
+      assert.deepEqual(C(out.a), { $ref: '#/b/x' }, src)
+      assert.ok(report!.cycles.some((c) => '/a' === c.at && '/b' === c.target), src)
+    }
+  })
+
+
+  test('a key operator may be named __proto__', () => {
+    const op = { p: { key: true, src: '__proto__' } }
+    const calls: any[] = []
+    const evaluate = (site: Site, o: Op, terms: any[]) => { calls.push([o.src, terms[0]]); return site.node }
+    fold({ name: 'ordinary', src: 'data' }, { op, evaluate })
+    assert.deepEqual(calls, [], 'a map owning a member of Op is not a site')
+    fold(JSON.parse('{"__proto__":42,"k":1}'), { op, evaluate })
+    assert.deepEqual(calls, [['__proto__', 42]])
+  })
+})

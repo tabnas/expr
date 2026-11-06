@@ -1562,11 +1562,16 @@ function makeParenMap(
 // Key operators, by the member name that marks a site. A key operator
 // carries no token, no tin and no binding power; `terms` is 2 (the
 // member's value, then the sibling map).
+// A null-prototype table written through defineProperty: a key operator
+// may be named `__proto__`, and on an ordinary object that assignment
+// would set the table's prototype to the Op instead of adding an entry,
+// after which every map owning a member of Op (`name`, `src`) would
+// read as a site and the `__proto__` map itself never would.
 function makeKeyMap(optop: { [name: string]: OpDef }): KeyMap {
   return entries(optop).reduce((a: KeyMap, [name, kdef]: [string, any]) => {
     if (kdef && kdef.key) {
       const src = 'string' === typeof kdef.src ? kdef.src : (kdef.src || [])[0]
-      a[src] = {
+      define(a, src, {
         name: name + (name.endsWith('-key') ? '' : '-key'),
         src,
         left: Number.MIN_SAFE_INTEGER,
@@ -1591,10 +1596,10 @@ function makeKeyMap(optop: { [name: string]: OpDef }): KeyMap {
         dynamic: !!kdef.dynamic,
         token: {} as Token,
         OP_MARK,
-      }
+      })
     }
     return a
-  }, {})
+  }, Object.create(null))
 }
 
 
@@ -1607,7 +1612,7 @@ function isRecord(v: any): boolean {
 // declared key the map owns. Undefined for anything else.
 function keyOpOf(keys: KeyMap, node: any): Op | undefined {
   if (!isRecord(node)) return undefined
-  for (const src in keys) {
+  for (const src of Object.keys(keys)) {
     if (Object.prototype.hasOwnProperty.call(node, src)) return keys[src]
   }
   return undefined
@@ -1742,6 +1747,15 @@ function foldRoot(
           return { found: true, cycle: true }
         }
         let v: any = walk(node, cur.slice())
+        // The site may have met a cycle while it was folded, in which
+        // case the walk above kept it verbatim and reading on through
+        // it would hand back a sibling of a reference into a ring, and
+        // only in one member order.
+        if (cyclic.has(pointer(cur))) {
+          report.cycles.push({ at: pointer(from), target: pointer(cur) })
+          cyclic.add(pointer(from))
+          return { found: true, cycle: true }
+        }
         for (i++; i < target.length; i++) {
           const s = target[i]
           if (Array.isArray(v)) v = v[Number(s)]
@@ -1780,8 +1794,12 @@ function foldRoot(
     let out: any
     try {
       if (tokens && isOp(node)) {
-        out = evaluation(null as any, null as any, node, (_r: any, _c: any, op: Op, terms: any[]) =>
-          opts.evaluate(siteFor(path, node), op, terms))
+        // Each term is folded at its own path first, so a key-operator
+        // site inside a token expression resolves, a nested expression
+        // is memoised by path, and every callback sees its own site.
+        const terms: any[] = []
+        for (let i = 1; i < node.length; i++) terms.push(walk(node[i], [...path, i]))
+        out = opts.evaluate(siteFor(path, node), node[0], terms)
       }
       else if (Array.isArray(node)) {
         out = []

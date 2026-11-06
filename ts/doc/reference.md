@@ -345,9 +345,9 @@ type FoldReport = {
 changed. Every key-operator site is reduced bottom-up through `evaluate`,
 with `[value, siblings]` as its terms, both already folded. Values flow up
 through `evaluate`; context flows down through `inherit`, which is called
-for every map on the way from the root and returns the bag the map's
-subtree sees, computed per path from the map's own ancestors and
-memoised, so a site reached early through a reference gets its ancestors'
+for every map on the way from the root and returns the bag everything
+below that map sees, computed per path from the map's own ancestors and
+kept, so a site reached early through a reference gets its ancestors'
 bag and never the referrer's.
 
 `site.at(path)` is how a resolver reaches another part of the tree: the
@@ -356,8 +356,8 @@ folded value at that path, through any key-operator sites met on the way
 site naming one target shares one value. A target that is still being
 folded (the target itself, an ancestor of the site, or the root), or a
 target whose own resolution met such a cycle, comes back with `cycle:
-true`; the site is then the resolver's to keep verbatim, which is the
-default, or the fold throws under `cycle: 'error'`. A target that names
+true`; the resolver then keeps the site verbatim, which is the default,
+or the fold throws under `cycle: 'error'`. A target that names
 nothing comes back `found: false`. Both are listed in the report.
 `site.locate(path)` reads the raw tree and follows nothing.
 
