@@ -451,7 +451,7 @@ work across documents as within one, and every report row names the
 document of the site (`doc`) and of the location it named (`targetDoc`).
 A row is reported once however often a resolver asks.
 
-### Token operators, positions and depth
+### Token operators, positions, and depth
 
 Token operator arrays met in the walk are reduced through the same
 `evaluate` when `tokens` is on, so one fold handles `+` and `$ref`;
@@ -464,7 +464,7 @@ builds by recording every container the instance parses; `true` is
 accepted only in deferred mode, where it records them itself, and
 anywhere else throws a `FoldError` coded `fold_option`.
 
-`maxDepth` bounds how deep the walk goes, counting nesting and reference
+`maxDepth` bounds how deep the walk goes. It counts nesting and reference
 hops together. Past it, or if the JavaScript stack runs out first, the
 fold throws a `FoldError` coded `fold_depth`, so a hostile document gets
 a clean error and never a `RangeError`.

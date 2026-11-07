@@ -213,8 +213,9 @@ and may itself be a reference, so key operators reduce in a fold over the
 finished root, bottom-up, with context flowing down: the fold hands the
 resolver a site, with the path, the verbatim node, a bag inherited from
 the site's own ancestors and its own map (the base URI in force, say), and
-`at`, which folds another location, in this document or another the host
-loads, through the same memory and cycle rules. Shape alone does not
+`at`, which folds another location through the same memory and cycle
+rules. That location may be in this document or in another one the host
+loads. Shape alone does not
 always decide: a property named `$ref` in a schema is data, so the host
 can say, per site, whether a map that owns the keyword is an occurrence of
 it. Some keywords cannot be reduced by a parser at all, because their
