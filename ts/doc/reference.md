@@ -373,7 +373,7 @@ a `Date` or a class instance, is a leaf and comes out as it went in.
 
 What a resolver returns is placed in the output as it is, so a resolver
 that returns `site.node`, or another raw value, shares it with the input,
-and editing that part of the output edits the input. A value, `siblings`
+and editing that part of the output edits the input. A value, `siblings`,
 and `site.node` may own a member named `__proto__`, which the fold keeps
 as data: merge them with object spread or `Object.defineProperty`, never
 with `Object.assign` or `target[name] = value`, which would set the
@@ -409,8 +409,8 @@ folded, and the rest of the path reads its folded value, so a reference
 to a reference resolves and a pointer into a reference's target works.
 There is one result per location, so every site naming one target shares
 one value. A path names nothing (`found: false`) when a step does: an
-array index is an RFC 6901 index, `0` or digits with no leading zero, so
-`01`, `1.0`, an empty segment and `-` name nothing. `value` is present
+array index is an RFC 6901 index: `0`, or digits with no leading zero, so
+`01`, `1.0`, an empty segment, and `-` name nothing. `value` is present
 only when the location was found and is not a cycle.
 `site.locate(path)` reads the raw tree and follows nothing.
 
@@ -446,7 +446,7 @@ treats `undefined` as a document it cannot have, reporting the location
 unresolved. Deciding what a key may name, and fetching it, belongs to the
 host: `load` is synchronous, so a host that fetches over a network loads first
 and answers from what it has. Every document's root starts from
-`options.k`, and `inherit` sees `site.doc`. Memory, cycles and sharing
+`options.k`, and `inherit` sees `site.doc`. Memory, cycles, and sharing
 work across documents as within one, and every report row names the
 document of the site (`doc`) and of the location it named (`targetDoc`).
 A row is reported once however often a resolver asks.
@@ -464,14 +464,14 @@ builds by recording every container the instance parses; `true` is
 accepted only in deferred mode, where it records them itself, and
 anywhere else throws a `FoldError` coded `fold_option`.
 
-`maxDepth` bounds how deep the walk goes, nesting and reference hops
-counted together. Past it, or if the JavaScript stack runs out first, the
+`maxDepth` bounds how deep the walk goes, counting nesting and reference
+hops together. Past it, or if the JavaScript stack runs out first, the
 fold throws a `FoldError` coded `fold_depth`, so a hostile document gets
 a clean error and never a `RangeError`.
 
 ### Fold errors
 
-`FoldError` carries `code`, and `doc`, `at`, `targetDoc` and `target`
+`FoldError` carries `code`, and `doc`, `at`, `targetDoc`, and `target`
 where they apply. Its message quotes member names JSON-escaped and cut
 short, since they are document content.
 
