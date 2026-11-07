@@ -263,8 +263,8 @@ const resolve = (site, op, [target, siblings]) => {
 }
 
 const raw = j.parse('{ pet: { $ref: "#/schemas/Pet", note: "x" }, schemas: { Pet: { type: "object" } } }')
-JSON.stringify(fold(raw, { op, evaluate: resolve }))
-// => '{"pet":{"type":"object","note":"x"},"schemas":{"Pet":{"type":"object"}}}'
+const folded = JSON.stringify(fold(raw, { op, evaluate: resolve }))
+folded   // => '{"pet":{"type":"object","note":"x"},"schemas":{"Pet":{"type":"object"}}}'
 ```
 
 The same resolver runs inside `parse` when it is passed as the plugin's
@@ -289,15 +289,19 @@ const j = new Tabnas().use(jsonic).use(Expr, {
   },
 })
 
-JSON.stringify(j.parse('{ a: { $ref: "#/a" }, b: { $ref: "#/c" } }'))
-// => '{"a":{"$ref":"#/a"},"b":{"$ref":"#/c"}}'
-JSON.stringify(report)
-// => '{"cycles":[{"at":"/a","target":"/a"}],"unresolved":[{"at":"/b","target":"/c"}],"dynamic":[]}'
+const out = JSON.stringify(j.parse('{ a: { $ref: "#/a" }, b: { $ref: "#/c" } }'))
+out                         // => '{"a":{"$ref":"#/a"},"b":{"$ref":"#/c"}}'
+report.cycles[0].at         // => '/a'
+report.unresolved[0].target // => '/c'
+report.dynamic.length       // => 0
 ```
 
 Context that the target's own ancestors decide, such as the base URI a
 `$id` sets, flows down through `inherit`, which the fold calls for every
 map on the way from the root and whose result the site reads as `site.k`.
+A map that owns `$ref` but is data where it stands, a property named
+`$ref` in a schema, say, is kept out by `recognise`, and a resolver that
+finds no operation at a site returns `site.plain()`.
 
 ## Walk the tree yourself with `evaluation()`
 

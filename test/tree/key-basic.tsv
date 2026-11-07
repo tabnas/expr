@@ -6,6 +6,7 @@ input	expected
 {a:{$ref:1}}	{"a":["$ref",1,{}]}
 {a:{$ref:x,d:1,e:[1,2]}}	{"a":["$ref","x",{"d":1,"e":[1,2]}]}
 {a:{$ref:x,b:{$ref:y}}}	{"a":["$ref","x",{"b":["$ref","y",{}]}]}
-{a:{$ref:x,$other:1}}	{"a":["$ref","x",{"$other":1}]}
-{a:{$other:1,$ref:x}}	{"a":["$ref","x",{"$other":1}]}
+{a:{$ref:x,$zed:1}}	{"a":["$ref","x",{"$zed":1}]}
+{a:{$zed:1,$ref:x}}	{"a":["$ref","x",{"$zed":1}]}
+{a:{$zed:1,$dyn:x}}	{"a":["$zed",1,{"$dyn":"x"}]}
 {a:{ref:x}}	{"a":{"ref":"x"}}

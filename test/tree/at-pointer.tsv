@@ -16,3 +16,9 @@ input	expected
 {a:{$dynamicRef:"#/b",c:{$ref:"#/b"}},b:1}	{"a":{"$dynamicRef":"#/b","c":1},"b":1}
 {a:{$ref:"#/b/x"},b:{$ref:"#/c",x:7},c:{$ref:"#/b"}}	{"a":{"$ref":"#/b/x"},"b":{"$ref":"#/c","x":7},"c":{"$ref":"#/b"}}
 {b:{$ref:"#/c",x:7},c:{$ref:"#/b"},a:{$ref:"#/b/x"}}	{"b":{"$ref":"#/c","x":7},"c":{"$ref":"#/b"},"a":{"$ref":"#/b/x"}}
+{a:{$ref:"#/b/01"},b:[1,2]}	{"a":{"$ref":"#/b/01"},"b":[1,2]}
+{a:{$ref:"#/b/"},b:[1,2]}	{"a":{"$ref":"#/b/"},"b":[1,2]}
+{a:{$ref:"#/b/1.0"},b:[1,2]}	{"a":{"$ref":"#/b/1.0"},"b":[1,2]}
+{a:{$ref:"#/b/-"},b:[1,2]}	{"a":{"$ref":"#/b/-"},"b":[1,2]}
+{Node:{$ref:"#/Tree"},Tree:{p:{c:{$ref:"#/Node"}}}}	{"Node":{"p":{"c":{"$ref":"#/Node"}}},"Tree":{"p":{"c":{"$ref":"#/Node"}}}}
+{Tree:{p:{c:{$ref:"#/Node"}}},Node:{$ref:"#/Tree"}}	{"Tree":{"p":{"c":{"$ref":"#/Tree"}}},"Node":{"$ref":"#/Tree"}}

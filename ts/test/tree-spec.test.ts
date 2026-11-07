@@ -39,6 +39,7 @@ function runTree(specName: string, run: (s: string) => any) {
 
   test(`${specName}: every cell is the canonical JSON, byte for byte`, () => {
     for (const row of loadSpec(Path.join(TREE, specName)).rows) {
+      if (row.col(1).startsWith('ERROR')) continue
       assert.equal(JSON.stringify(run(row.unesc(0))), row.col(1), row.where())
     }
   })
@@ -70,7 +71,11 @@ describe('tree', () => {
 
   // A recording resolver: a site reads as `[src, value, siblings]`.
   describe('key-basic', () => {
-    const op = { ref: { key: true, src: '$ref' }, other: { key: true, src: '$other' } }
+    const op = {
+      ref: { key: true, src: '$ref' },
+      zed: { key: true, src: '$zed' },
+      dyn: { key: true, src: '$dyn', dynamic: true },
+    }
     const tn = new Tabnas().use(jsonic).use(Expr, { op: { ...NO_DEFAULTS, ...op } })
     const opts: FoldOptions = { op, evaluate: (_site, op, [value, siblings]) => [op.src, value, siblings] }
     runTree('key-basic.tsv', (s) => C(fold(tn.parse(s), opts)))
@@ -123,6 +128,16 @@ describe('tree', () => {
           : [value, site.k.base],
     }
     runTree('inherit.tsv', (s) => C(fold(tn.parse(s), opts)))
+  })
+
+
+  // The fold's own failures, pinned by code: a cycle under
+  // `cycle: 'error'`, and nesting past `maxDepth` (3 here).
+  describe('errors', () => {
+    const op = { ref: { key: true, src: '$ref' } }
+    const tn = new Tabnas().use(jsonic).use(Expr, { op: { ...NO_DEFAULTS, ...op } })
+    const opts: FoldOptions = { op, evaluate: resolving, cycle: 'error', maxDepth: 3 }
+    runTree('errors.tsv', (s) => C(fold(tn.parse(s), opts)))
   })
 
 

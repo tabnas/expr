@@ -79,7 +79,8 @@ type OpDef = {
   // A key operator that a fold recognises and reports but never
   // evaluates: `$dynamicRef`, whose meaning depends on a scope the parser
   // does not have. Its map folds as a plain map, so operators inside it
-  // still reduce.
+  // still reduce. A host that wants to look at such a site declares it as
+  // an ordinary key operator and returns `site.plain()` instead.
   dynamic?: boolean
 }
 
@@ -87,8 +88,8 @@ type OpDef = {
 type ExprOptions = {
   op?: { [name: string]: OpDef }
 
-  // TODO: define Evalute type
-  evaluate?: typeof evaluation
+  // Reduce each expression to a value as it closes.
+  evaluate?: Evaluate
 
   // Fold the finished document before `parse` returns (deferred mode):
   // the plugin subscribes to the engine's post-process rule event and
@@ -134,36 +135,43 @@ type Op = {
 type OpMap = { [tin: number]: Op }
 
 // Lookup key operators by the member name that marks a site, in the
-// order the `op` table declared them (the first declared wins when a map
-// owns two).
-type KeyMap = { [src: string]: Op }
+// order a map that owns two of them is resolved by: static operators
+// before dynamic ones, then member names in code-point order.
+type KeyMap = Map<string, Op>
 
-// Resolve the value of an operartion
-type Evaluate = (rule: Rule, ctx: Context, op: Op, ...terms: any) => any
+// Resolve the value of an operation: `terms` is one array, the folded
+// terms in order.
+type Evaluate = (rule: Rule, ctx: Context, op: Op, terms: any[]) => any
 
-// A location in a folded tree, as segments from the root: member names
-// and array indices.
+// A location, as segments from a document's root: member names, and
+// array indices as numbers or as RFC 6901 index strings (`0`, `12`).
 type Path = (string | number)[]
 
-// What `fold` hands the resolver for one site: the verbatim root, the
-// path to the site, the site's verbatim node, the bag inherited from the
-// site's ancestors (`inherit`), the site's opening token when the parse
-// recorded one, and the two ways to reach the rest of the tree: `at`
-// folds another location (through any key-operator sites on the way,
-// memoised, cycle-aware) and `locate` reads it raw. `fold` runs the same
-// fold over another root, for a document the resolver loaded itself.
-// `rule` and `ctx` are null: a fold runs after the parse.
+// What `site.at` gives back: whether the location names anything,
+// whether reaching it closed a cycle, and, only when it was found and is
+// not a cycle, its folded value.
+type FoldHit = { found: boolean; cycle: boolean; value?: any }
+
+// What `fold` hands its callbacks for one map (or one token operator
+// array): the verbatim root of the map's document and that document's
+// key, the path to the map, the verbatim map, the bag inherited along the
+// path (`inherit`, applied at every map from the root down to and
+// including this one), the map's opening token when positions are
+// recorded, and the ways to reach the rest of the tree: `at` folds
+// another location, in this document or another, through any key-operator
+// sites on the way; `locate` reads one raw; `plain` is this map folded as
+// a plain map, member by member in its own order, which is what a
+// resolver returns where the operator does not apply.
 type Site = {
-  root: any
-  path: Path
-  node: any
-  k: Record<string, any>
-  token?: Token
-  rule: null
-  ctx: null
-  at: (path: Path) => { found: boolean; cycle: boolean; value?: any }
-  locate: (path: Path) => { found: boolean; value?: any }
-  fold: (root: any, k?: Record<string, any>) => any
+  readonly root: any
+  readonly doc: string
+  readonly path: Path
+  readonly node: any
+  readonly k: Record<string, any>
+  readonly token?: Token
+  at: (path: Path, doc?: string) => FoldHit
+  locate: (path: Path, doc?: string) => { found: boolean; value?: any }
+  plain: () => any
 }
 
 // Reduce one site: a key operator with `[value, siblings]`, both already
@@ -171,16 +179,29 @@ type Site = {
 // its folded terms.
 type FoldEvaluate = (site: Site, op: Op, terms: any[]) => any
 
-// Extend the bag a node's subtree inherits. Called on the way down for
-// every object on a path, from the ancestors' bags, so a site reached
-// early through a reference gets ITS ancestors' context, never the
-// referrer's: the engine's `k` discipline, for a finished tree.
+// The bag a map's subtree inherits, from the bag its parent's subtree
+// sees. Called once per map on a path the fold needs, from the root
+// down, so a site reached early through a reference gets ITS ancestors'
+// context, never the referrer's: the engine's `k` discipline, for a
+// finished tree. Inside the call, `site.k` is the parent's bag.
 type Inherit = (site: Site, node: any, k: Record<string, any>) => Record<string, any>
 
+// Whether a map that owns a key operator's member is an occurrence of it
+// here. A map for which this is false folds as a plain map, with no
+// `evaluate` call and no report row.
+type Recognise = (site: Site, op: Op) => boolean
+
+// The opening token of a container, by the container's identity.
+type Positions = (node: object) => Token | undefined
+
+// One report row: the site (`doc`, `at`) and the location it named
+// (`targetDoc`, `target`), as document keys and RFC 6901 pointers.
+type FoldEntry = { doc: string; at: string; targetDoc: string; target: string }
+
 type FoldReport = {
-  cycles: { at: string; target: string }[]
-  unresolved: { at: string; target: string }[]
-  dynamic: { at: string; src: string }[]
+  cycles: FoldEntry[]
+  unresolved: FoldEntry[]
+  dynamic: { doc: string; at: string; src: string }[]
 }
 
 type FoldOptions = {
@@ -189,17 +210,28 @@ type FoldOptions = {
   op?: { [name: string]: OpDef }
   evaluate: FoldEvaluate
   inherit?: Inherit
+  recognise?: Recognise
+  // The starting bag of every document's root.
   k?: Record<string, any>
-  // A site whose target is still being folded (the target itself, an
-  // ancestor of the site, or the root): keep the site verbatim and record
-  // the cycle (default), or throw.
+  // The key of the document being folded. Default ''.
+  doc?: string
+  // Another document's raw root, by key, for `site.at(path, doc)`: called
+  // once per key, `undefined` when it cannot be had. Deciding what a key
+  // may name, and loading it, is the host's.
+  load?: (doc: string, site: Site) => any
+  // A cycle: tell the resolver (`cycle: true`), which is the default, or
+  // throw a FoldError.
   cycle?: 'verbatim' | 'error'
   // Reduce token-operator arrays met in the walk through `evaluate` too,
   // so one fold handles `+` and `$ref`. Default true.
   tokens?: boolean
-  // Deferred mode only: record every container's opening token while
-  // parsing, grammar-neutrally, so `site.token` carries a position.
-  positions?: boolean
+  // The opening token of each container, as a lookup by identity
+  // (`recordPositions` builds one); in deferred mode `true` records them
+  // during the parse.
+  positions?: boolean | Positions
+  // How deep the walk may go, nesting and reference hops counted
+  // together. Default 1000.
+  maxDepth?: number
   report?: (report: FoldReport) => void
 }
 
@@ -278,27 +310,28 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
   // Deferred mode: fold the finished root on the last pass of the parse.
   // The engine's post-process rule event fires after every pass in every
   // grammar; the last pass is a depth-0 close whose alternate neither
-  // pushes nor replaces, outside any probe and not synthesised by
-  // recovery. The start rule's own after-close is not that event: a
-  // grammar may replace its start rule (yaml's `stream` does on a
-  // directive or a document marker), and `parse` returns the original
-  // root rule's node, which is what is written here.
+  // pushes, replaces nor failed (a rule with no close alternates reports
+  // none), outside any probe and not synthesised by recovery. A parse
+  // that fails is therefore never folded: the engine reports the failing
+  // pass with `alt.err` set, from a handler that swallows subscriber
+  // errors. The start rule's own after-close is not that event: a grammar
+  // may replace its start rule (yaml's `stream` does on a directive or a
+  // document marker), and `parse` returns the original root rule's node,
+  // which is what is written here.
   if (options.fold) {
     const foldOptions = options.fold
-    const tokensByNode = new WeakMap<object, Token>()
+    const deferred: FoldOptions = {
+      ...foldOptions,
+      op: optop,
+      positions: true === foldOptions.positions ? recordPositions(tn) : foldOptions.positions,
+    }
     tn.sub({
       ruleDone: (r: Rule, ctx: Context, done: any) => {
-        if (foldOptions.positions && 'o' === done.state) {
-          const n: any = r.node
-          if (null != n && 'object' === typeof n && !tokensByNode.has(n) && r.o0) {
-            tokensByNode.set(n, r.o0)
-          }
-        }
-        if (0 !== r.d || 'c' !== done.state || !done.alt || done.alt.p || done.alt.r || done.probe || done.forced) {
-          return
-        }
+        if (0 !== r.d || 'c' !== done.state || done.probe || done.forced) return
+        const alt = done.alt
+        if (null != alt && (alt.p || alt.r || alt.err)) return
         const root = ctx.root()
-        root.node = foldTree(root.node, { ...foldOptions, op: optop }, keyTM, tokensByNode)
+        root.node = foldTree(root.node, deferred, keyTM)
       },
     })
   }
@@ -1561,70 +1594,123 @@ function makeParenMap(
 
 // Key operators, by the member name that marks a site. A key operator
 // carries no token, no tin and no binding power; `terms` is 2 (the
-// member's value, then the sibling map).
-// A null-prototype table written through defineProperty: a key operator
-// may be named `__proto__`, and on an ordinary object that assignment
-// would set the table's prototype to the Op instead of adding an entry,
-// after which every map owning a member of Op (`name`, `src`) would
-// read as a site and the `__proto__` map itself never would.
+// member's value, then the sibling map). The table is a Map in the order
+// a map that owns two of the members is resolved by: static operators
+// before dynamic ones, then member names in code-point order. Neither
+// declaration order nor object key order is used: a Go option table has
+// no declaration order, and a JavaScript object lists integer-like names
+// first. Two operators on one member name are refused.
 function makeKeyMap(optop: { [name: string]: OpDef }): KeyMap {
-  return entries(optop).reduce((a: KeyMap, [name, kdef]: [string, any]) => {
-    if (kdef && kdef.key) {
-      const src = 'string' === typeof kdef.src ? kdef.src : (kdef.src || [])[0]
-      define(a, src, {
-        name: name + (name.endsWith('-key') ? '' : '-key'),
-        src,
-        left: Number.MIN_SAFE_INTEGER,
-        right: Number.MAX_SAFE_INTEGER,
-        use: kdef.use || {},
-        prefix: false,
-        suffix: false,
-        infix: false,
-        ternary: false,
-        paren: false,
-        terms: 2,
-        tkn: '',
-        tin: -1,
-        osrc: '',
-        csrc: '',
-        otkn: '',
-        otin: -1,
-        ctkn: '',
-        ctin: -1,
-        preval: { active: false, required: false },
-        key: true,
-        dynamic: !!kdef.dynamic,
-        token: {} as Token,
-        OP_MARK,
-      })
+  const found: Op[] = []
+  const owner = new Map<string, string>()
+  for (const [name, kdef] of entries(optop) as [string, any][]) {
+    if (!kdef || !kdef.key) continue
+    const src = 'string' === typeof kdef.src ? kdef.src : (kdef.src || [])[0]
+    if ('string' !== typeof src || '' === src) {
+      throw new FoldError('fold_key', 'key operator ' + shown(name) + ' names no member')
     }
-    return a
-  }, Object.create(null))
+    const prior = owner.get(src)
+    if (undefined !== prior) {
+      throw new FoldError('fold_key',
+        'key operators ' + shown(prior) + ' and ' + shown(name) + ' both name the member ' + shown(src))
+    }
+    owner.set(src, name)
+    found.push({
+      name: name + (name.endsWith('-key') ? '' : '-key'),
+      src,
+      left: Number.MIN_SAFE_INTEGER,
+      right: Number.MAX_SAFE_INTEGER,
+      use: kdef.use || {},
+      prefix: false,
+      suffix: false,
+      infix: false,
+      ternary: false,
+      paren: false,
+      terms: 2,
+      tkn: '',
+      tin: -1,
+      osrc: '',
+      csrc: '',
+      otkn: '',
+      otin: -1,
+      ctkn: '',
+      ctin: -1,
+      preval: { active: false, required: false },
+      key: true,
+      dynamic: !!kdef.dynamic,
+      token: {} as Token,
+      OP_MARK,
+    })
+  }
+  found.sort((a, b) => a.dynamic === b.dynamic ? byCodePoint(a.src, b.src) : a.dynamic ? 1 : -1)
+  return new Map(found.map((op) => [op.src, op]))
+}
+
+// Compare two strings by Unicode code point, which is the order Go and
+// Rust compare strings in; JavaScript's own `<` compares UTF-16 code
+// units, which differs above U+FFFF.
+function byCodePoint(a: string, b: string): number {
+  const x = Array.from(a)
+  const y = Array.from(b)
+  for (let i = 0; i < x.length && i < y.length; i++) {
+    const d = (x[i].codePointAt(0) as number) - (y[i].codePointAt(0) as number)
+    if (0 !== d) return d
+  }
+  return x.length - y.length
 }
 
 
-// A plain object: not an array, not a boxed string, not null.
+// A plain record: an object whose prototype is `null` (the engine's
+// maps) or `Object.prototype` (`JSON.parse`, a literal). Anything else, a
+// Map, a Date, a class instance, a boxed value, is a leaf to a fold and
+// to `evaluation`: passed through by identity, never rebuilt, since a
+// rebuilt copy would carry the prototype without the internal state.
 function isRecord(v: any): boolean {
-  return null != v && 'object' === typeof v && !Array.isArray(v) && !(v instanceof String)
+  if (null == v || 'object' !== typeof v || Array.isArray(v)) return false
+  const proto = Object.getPrototypeOf(v)
+  return null === proto || Object.prototype === proto
 }
 
-// The key operator a map is an occurrence of, by shape: the first
-// declared key the map owns. Undefined for anything else.
+// The key operator a map is an occurrence of, by shape: the first, in the
+// table's order, whose member the map owns. Undefined for anything else.
 function keyOpOf(keys: KeyMap, node: any): Op | undefined {
   if (!isRecord(node)) return undefined
-  for (const src of Object.keys(keys)) {
-    if (Object.prototype.hasOwnProperty.call(node, src)) return keys[src]
+  for (const op of keys.values()) {
+    if (Object.prototype.hasOwnProperty.call(node, op.src)) return op
   }
   return undefined
 }
 
-// RFC 6901: the memo and cycle key of a path.
+// RFC 6901: a pointer from path segments.
 function pointer(path: Path): string {
   let out = ''
   for (const seg of path) {
     out += '/' + String(seg).replace(/~/g, '~0').replace(/\//g, '~1')
   }
   return out
+}
+
+// An RFC 6901 array index: `0`, or digits with no leading zero, given as
+// a string, or a non-negative integer; -1 for anything else, `-` and
+// out-of-range indices included.
+const INDEX = /^(0|[1-9][0-9]*)$/
+function arrayIndex(seg: string | number, length: number): number {
+  const i = 'number' === typeof seg
+    ? (Number.isInteger(seg) ? seg : -1)
+    : (INDEX.test(seg) ? Number(seg) : -1)
+  return 0 <= i && i < length ? i : -1
+}
+
+// One step of a path: an index into a list, or an own member of a plain
+// record. NOTHING when the step names nothing.
+const NOTHING = Symbol('nothing')
+function step(node: any, seg: string | number): any {
+  if (Array.isArray(node)) {
+    const i = arrayIndex(seg, node.length)
+    return i < 0 ? NOTHING : node[i]
+  }
+  if (isRecord(node) && Object.prototype.hasOwnProperty.call(node, seg)) return node[seg]
+  return NOTHING
 }
 
 // A new container of the same prototype as `like` (the engine builds
@@ -1638,206 +1724,458 @@ function define(o: any, k: string, v: any): void {
 }
 
 
+// The fold's own errors. `code` is what a fixture pins: `fold_cycle` (a
+// cycle under `cycle: 'error'`), `fold_depth` (nesting and reference hops
+// past `maxDepth`, or the stack ran out first), `fold_inherit` (an
+// `inherit` that returned no bag, or folded its own subtree), `fold_key`
+// (an operator table with two key operators on one member name, or one
+// on none) and `fold_option` (`positions: true` outside deferred mode).
+// The document key and the pointers are fields; the message quotes them
+// JSON-escaped and cut short, since member names are document content.
+class FoldError extends Error {
+  code: string
+  doc?: string
+  at?: string
+  targetDoc?: string
+  target?: string
+  constructor(
+    code: string,
+    message: string,
+    fields?: { doc?: string; at?: string; targetDoc?: string; target?: string },
+  ) {
+    super('expr fold: ' + message)
+    this.name = 'FoldError'
+    this.code = code
+    if (fields) Object.assign(this, fields)
+  }
+}
+
+// A key or pointer for a message: JSON-escaped, so a newline or an escape
+// sequence in a member name stays visible, and at most about 80
+// characters long.
+function shown(s: string): string {
+  const q = JSON.stringify(s)
+  return q.length <= 80 ? q : q.slice(0, 76) + '..."'
+}
+
+
+// Record the opening token of every container a parse builds, by the
+// container's identity, and return the lookup `fold` takes as
+// `positions`. It subscribes to the engine's post-process rule event on
+// the instance, so it works in any grammar; the table is weak, so a
+// parsed tree's entries go with the tree.
+function recordPositions(tn: Tabnas): Positions {
+  const tokens = new WeakMap<object, Token>()
+  tn.sub({
+    ruleDone: (r: Rule, _ctx: Context, done: any) => {
+      if ('o' !== done.state) return
+      const node: any = r.node
+      if (null != node && 'object' === typeof node && !tokens.has(node) && r.o0) {
+        tokens.set(node, r.o0)
+      }
+    },
+  })
+  return (node: object) => tokens.get(node)
+}
+
+
+// The fold's memory: one node per container location the fold has
+// reached, in a trie that follows the document, so a location's memo,
+// state and inherited bag cost a constant amount however deep it is.
+// Pointers are rendered only for report rows and errors.
+type FoldDoc = { key: string; root: any; top: PNode }
+
+class PNode {
+  kids: Map<string, PNode> | undefined = undefined
+  // 0 not yet folded, 1 being folded (on the active stack), 2 folded.
+  state = 0
+  value: any = undefined
+  // How the walk entered it: 0 from its parent, 1 through a reference.
+  via = 0
+  k: Record<string, any> | undefined = undefined
+  kBusy = false
+  // Its resolution met a cycle, so the resolver was told `cycle: true`.
+  cut = false
+  // A member of a loop of references with no container in it, or a
+  // reference into one: there is nothing to resolve it to.
+  loop = false
+  // The key operator this map is an occurrence of, decided once (shape,
+  // then the host's `recognise`): undefined until decided, null for none.
+  site: Op | null | undefined = undefined
+  parts: { op: Op; value: any; siblings: any } | undefined = undefined
+  plainDone = false
+  plainValue: any = undefined
+  ptr: string | undefined = undefined
+  constructor(
+    public doc: FoldDoc,
+    public parent: PNode | undefined,
+    public seg: string | number,
+    public raw: any,
+  ) {}
+}
+
+
 // Fold a finished tree: walk it, reduce every key-operator site
 // bottom-up through `opts.evaluate`, and return a NEW tree; the input is
-// never changed. Values flow up through `evaluate`; context flows down
-// through `inherit`, computed per path from each node's own ancestors
-// and memoised per prefix. One result per path (memo), so every site
-// naming one target shares one folded value; every container being
-// folded is on an active set, so a site whose target is still being
-// built (the target itself, an ancestor, the root) is a cycle: kept
-// verbatim and reported, or an error. Dynamic key operators are reported
-// and folded as plain maps. Token-operator arrays met in the walk are
-// reduced through the same `evaluate` when `tokens` is on.
+// never changed (though a value a resolver returns, `site.node` among
+// them, is placed in the output as it is). Values flow up through
+// `evaluate`; context flows down through `inherit`, computed per path
+// from each map's own ancestors and kept. One result per location, so
+// every site naming one target shares one folded value. Every container
+// being folded is on an active stack: a site whose target is on it
+// closes a cycle, which the resolver is told about (or which throws).
+// Dynamic key operators are reported and folded as plain maps. Token
+// operator arrays met in the walk are reduced through the same
+// `evaluate` when `tokens` is on.
 function fold(root: any, opts: FoldOptions): any {
-  return foldTree(root, opts, makeKeyMap(opts.op || {}), undefined)
+  return foldTree(root, opts, makeKeyMap(opts.op || {}))
 }
 
-function foldTree(
-  root: any,
-  opts: FoldOptions,
-  keys: KeyMap,
-  tokensByNode: WeakMap<object, Token> | undefined,
-): any {
-  const report: FoldReport = { cycles: [], unresolved: [], dynamic: [] }
-  const out = foldRoot(root, opts, keys, tokensByNode, report)
-  if (opts.report) opts.report(report)
-  return out
-}
+function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
+  if (true === opts.positions) {
+    throw new FoldError('fold_option',
+      'positions: true records tokens during a parse, so it works in the deferred mode only;'
+      + ' pass a lookup, such as recordPositions(tn), to fold')
+  }
 
-function foldRoot(
-  root: any,
-  opts: FoldOptions,
-  keys: KeyMap,
-  tokensByNode: WeakMap<object, Token> | undefined,
-  report: FoldReport,
-): any {
   const tokens = false !== opts.tokens
-  const memo = new Map<string, any>()
-  const active = new Set<string>()
-  // Sites whose own resolution met a cycle: a reference INTO a cycle is
-  // reported as one too, so every member of a ring is kept verbatim
-  // rather than the last one alone.
-  const cyclic = new Set<string>()
-  const kMemo = new Map<string, Record<string, any>>()
-  const inherit: Inherit = opts.inherit || ((_site, _node, k) => k)
+  const inherit = opts.inherit
+  const recognise = opts.recognise
+  const lookup = 'function' === typeof opts.positions ? opts.positions : undefined
+  const maxDepth = null == opts.maxDepth ? 1000 : opts.maxDepth
+  const base = opts.k || {}
+  const report: FoldReport = { cycles: [], unresolved: [], dynamic: [] }
+  const noted = new Set<string>()
+  const stack: PNode[] = []
+  const docs = new Map<string, FoldDoc | null>()
 
-  const rawAt = (path: Path): { found: boolean; value?: any } => {
-    let node: any = root
-    for (const seg of path) {
-      if (Array.isArray(node)) node = node[Number(seg)]
-      else if (isRecord(node) && Object.prototype.hasOwnProperty.call(node, seg)) node = node[seg]
-      else return { found: false }
-      if (undefined === node) return { found: false }
+  const makeDoc = (key: string, raw: any): FoldDoc => {
+    const doc = { key, root: raw } as FoldDoc
+    doc.top = new PNode(doc, undefined, '', raw)
+    docs.set(key, doc)
+    return doc
+  }
+
+  // Another document, by key, loaded once; undefined when it cannot be had.
+  const docOf = (from: PNode, key?: string): FoldDoc | undefined => {
+    if (undefined === key || key === from.doc.key) return from.doc
+    let doc = docs.get(key)
+    if (undefined === doc) {
+      const raw = undefined === opts.load ? undefined : opts.load(key, siteOf(from))
+      doc = undefined === raw ? null : makeDoc(key, raw)
+      docs.set(key, doc)
+    }
+    return null === doc ? undefined : doc
+  }
+
+  const kid = (pn: PNode, seg: string | number, raw: any): PNode => {
+    const name = String(seg)
+    let kids = pn.kids
+    if (undefined === kids) kids = pn.kids = new Map()
+    let node = kids.get(name)
+    if (undefined === node) {
+      node = new PNode(pn.doc, pn, seg, raw)
+      kids.set(name, node)
+    }
+    return node
+  }
+
+  const ptrOf = (pn: PNode): string => {
+    if (undefined !== pn.ptr) return pn.ptr
+    const chain: PNode[] = []
+    let p: PNode | undefined = pn
+    while (undefined !== p && undefined === p.ptr) {
+      chain.push(p)
+      p = p.parent
+    }
+    let s = undefined === p ? '' : (p.ptr as string)
+    for (let i = chain.length - 1; 0 <= i; i--) {
+      const c = chain[i]
+      s = undefined === c.parent ? '' : s + '/' + String(c.seg).replace(/~/g, '~0').replace(/\//g, '~1')
+      c.ptr = s
+    }
+    return s
+  }
+
+  const pathOf = (pn: PNode): Path => {
+    const path: Path = []
+    for (let p: PNode | undefined = pn; undefined !== p && undefined !== p.parent; p = p.parent) {
+      path.push(p.seg)
+    }
+    return path.reverse()
+  }
+
+  const note = (list: 'cycles' | 'unresolved' | 'dynamic', row: any) => {
+    const id = JSON.stringify([list, row.doc, row.at, row.targetDoc, row.target, row.src])
+    if (noted.has(id)) return
+    noted.add(id)
+    report[list].push(row)
+  }
+
+  // The bag at a map: the `inherit` calls of its ancestors and of the map
+  // itself, from the root down, each kept, worked out without recursion.
+  const kOf = (pn: PNode): Record<string, any> => {
+    if (undefined === inherit) return base
+    if (undefined !== pn.k) return pn.k
+    const chain: PNode[] = []
+    let p: PNode | undefined = pn
+    while (undefined !== p && undefined === p.k) {
+      if (p.kBusy) {
+        throw new FoldError('fold_inherit', 'inherit folded its own subtree at ' + shown(ptrOf(p)),
+          { doc: p.doc.key, at: ptrOf(p) })
+      }
+      chain.push(p)
+      p = p.parent
+    }
+    let k: Record<string, any> = undefined === p ? base : (p.k as Record<string, any>)
+    for (let i = chain.length - 1; 0 <= i; i--) {
+      const c = chain[i]
+      if (isRecord(c.raw)) {
+        c.kBusy = true
+        let next: any
+        try {
+          next = inherit(siteOf(c, k), c.raw, k)
+        }
+        finally {
+          c.kBusy = false
+        }
+        if (null == next || 'object' !== typeof next) {
+          throw new FoldError('fold_inherit', 'inherit returned no bag at ' + shown(ptrOf(c)),
+            { doc: c.doc.key, at: ptrOf(c) })
+        }
+        k = next
+      }
+      c.k = k
+    }
+    return k
+  }
+
+  const siteOf = (pn: PNode, parentK?: Record<string, any>): Site => {
+    let path: Path | undefined
+    const node = pn.raw
+    return {
+      root: pn.doc.root,
+      doc: pn.doc.key,
+      get path() {
+        return undefined === path ? (path = pathOf(pn)) : path
+      },
+      node,
+      get k() {
+        return undefined === parentK ? kOf(pn) : parentK
+      },
+      token: undefined !== lookup && null != node && 'object' === typeof node ? lookup(node) : undefined,
+      at: (target: Path, doc?: string) => at(pn, target, doc),
+      locate: (target: Path, doc?: string) => locate(pn, target, doc),
+      plain: () => plainOf(pn),
+    }
+  }
+
+  const locate = (from: PNode, target: Path, key?: string): { found: boolean; value?: any } => {
+    const doc = docOf(from, key)
+    if (undefined === doc) return { found: false }
+    let node = doc.root
+    for (const seg of target) {
+      node = step(node, seg)
+      if (NOTHING === node) return { found: false }
     }
     return { found: true, value: node }
   }
 
-  // The bag at a path: the ancestors' `inherit` calls, applied in order
-  // from the root, memoised per prefix. Arrays and scalars pass the bag
-  // through unchanged.
-  const kAt = (path: Path): Record<string, any> => {
-    const key = pointer(path)
-    const hit = kMemo.get(key)
-    if (undefined !== hit) return hit
-    let k: Record<string, any> = path.length ? kAt(path.slice(0, -1)) : (opts.k || {})
-    const node = rawAt(path).value
-    if (isRecord(node)) k = inherit(siteFor(path, node, k), node, k)
-    kMemo.set(key, k)
-    return k
+  const miss = (from: PNode, targetDoc: string, target: Path): FoldHit => {
+    note('unresolved', { doc: from.doc.key, at: ptrOf(from), targetDoc, target: pointer(target) })
+    return { found: false, cycle: false }
   }
 
-  const siteFor = (path: Path, node: any, k?: Record<string, any>): Site => ({
-    root,
-    path,
-    node,
-    k: k || kAt(path),
-    token: null != node && 'object' === typeof node && tokensByNode ? tokensByNode.get(node) : undefined,
-    rule: null,
-    ctx: null,
-    at: (target: Path) => at(path, target),
-    locate: rawAt,
-    fold: (other: any, k2?: Record<string, any>) =>
-      foldRoot(other, { ...opts, k: k2 || opts.k }, keys, tokensByNode, report),
-  })
-
-  // The folded value at `target`, for the resolver at `from`. Raw
-  // segments are followed from the root; a static key-operator site met
-  // on the way is folded (through the memo) and the remaining segments
-  // continue inside its folded value, so a reference to a reference
-  // resolves. A target still being folded is a cycle.
-  const at = (from: Path, target: Path): { found: boolean; cycle: boolean; value?: any } => {
-    let node: any = root
-    const cur: Path = []
-    for (let i = 0; i < target.length; i++) {
-      const seg = target[i]
-      cur.push(seg)
-      if (Array.isArray(node)) node = node[Number(seg)]
-      else if (isRecord(node) && Object.prototype.hasOwnProperty.call(node, seg)) node = node[seg]
-      else node = undefined
-      if (undefined === node) {
-        report.unresolved.push({ at: pointer(from), target: pointer(target) })
-        return { found: false, cycle: false }
+  // A cycle: `from` named `target` while `target` was still being folded
+  // (a back edge), or `target` is in a loop of references. Every member of
+  // a loop made only of references is a cycle, and so is every reference
+  // into one, since none of them has anything to resolve to. A cycle that
+  // passes through a container is cut once, at the site whose target was
+  // being folded; a later reference to that site gets its folded value.
+  const cycleTo = (from: PNode, target: PNode): FoldHit => {
+    const row = { doc: from.doc.key, at: ptrOf(from), targetDoc: target.doc.key, target: ptrOf(target) }
+    if ('error' === opts.cycle) {
+      throw new FoldError('fold_cycle', 'cycle at ' + shown(row.at) + ' to ' + shown(row.target), row)
+    }
+    note('cycles', row)
+    from.cut = true
+    if (1 === target.state) {
+      const i = stack.lastIndexOf(target)
+      let refs = 0 <= i
+      for (let j = i + 1; refs && j < stack.length; j++) refs = 1 === stack[j].via
+      if (refs) {
+        for (let j = i; j < stack.length; j++) stack[j].loop = true
+        from.loop = true
       }
-      const op = keyOpOf(keys, node)
-      if (op && !op.dynamic && i < target.length - 1) {
-        if (active.has(pointer(cur)) || cyclic.has(pointer(cur))) {
-          report.cycles.push({ at: pointer(from), target: pointer(cur) })
-          cyclic.add(pointer(from))
-          return { found: true, cycle: true }
-        }
-        let v: any = walk(node, cur.slice())
-        // The site may have met a cycle while it was folded, in which
-        // case the walk above kept it verbatim and reading on through
-        // it would hand back a sibling of a reference into a ring, and
-        // only in one member order.
-        if (cyclic.has(pointer(cur))) {
-          report.cycles.push({ at: pointer(from), target: pointer(cur) })
-          cyclic.add(pointer(from))
-          return { found: true, cycle: true }
-        }
-        for (i++; i < target.length; i++) {
-          const s = target[i]
-          if (Array.isArray(v)) v = v[Number(s)]
-          else if (isRecord(v) && Object.prototype.hasOwnProperty.call(v, s)) v = v[s]
-          else v = undefined
-          if (undefined === v) {
-            report.unresolved.push({ at: pointer(from), target: pointer(target) })
-            return { found: false, cycle: false }
-          }
-        }
+    }
+    else if (target.loop) {
+      from.loop = true
+    }
+    return { found: true, cycle: true }
+  }
+
+  // The folded value at `target` in a document, for the site at `from`.
+  // Raw members are followed from the root; a key-operator map met on the
+  // way is folded (through the memo) and the remaining segments read its
+  // folded value, so a reference to a reference resolves. A target still
+  // being folded is a cycle, and so is a path that must pass through a
+  // site that was cut.
+  const at = (from: PNode, target: Path, key?: string): FoldHit => {
+    const targetDoc = undefined === key ? from.doc.key : key
+    const doc = docOf(from, key)
+    if (undefined === doc) return miss(from, targetDoc, target)
+    let pn = doc.top
+    let node: any = doc.root
+    for (let i = 0; i < target.length; i++) {
+      const v = step(node, target[i])
+      if (NOTHING === v) return miss(from, targetDoc, target)
+      if (i === target.length - 1 && !Array.isArray(v) && !isRecord(v)) {
         return { found: true, cycle: false, value: v }
       }
+      pn = kid(pn, Array.isArray(node) ? arrayIndex(target[i], node.length) : String(target[i]), v)
+      node = v
+      // Only a static site changes what lies below it; any other map,
+      // a dynamic one or one `recognise` refused, folds member by member,
+      // so the raw path below it names the same location.
+      const op = i < target.length - 1 && isRecord(node) ? siteOpOf(pn) : null
+      if (null !== op && !op.dynamic) {
+        if (1 === pn.state || pn.loop) return cycleTo(from, pn)
+        let folded = walk(pn, 1)
+        if (pn.loop || pn.cut) return cycleTo(from, pn)
+        for (i++; i < target.length; i++) {
+          folded = step(folded, target[i])
+          if (NOTHING === folded) return miss(from, targetDoc, target)
+        }
+        return { found: true, cycle: false, value: folded }
+      }
     }
-    if (active.has(pointer(target))) {
-      report.cycles.push({ at: pointer(from), target: pointer(target) })
-      cyclic.add(pointer(from))
-      return { found: true, cycle: true }
-    }
-    const value = walk(node, target)
-    if (cyclic.has(pointer(target))) {
-      report.cycles.push({ at: pointer(from), target: pointer(target) })
-      cyclic.add(pointer(from))
-      return { found: true, cycle: true, value }
-    }
+    if (1 === pn.state) return cycleTo(from, pn)
+    const value = walk(pn, 1)
+    if (pn.loop) return cycleTo(from, pn)
     return { found: true, cycle: false, value }
   }
 
-  const walk = (node: any, path: Path): any => {
-    const key = pointer(path)
-    if (memo.has(key)) return memo.get(key)
-    if (active.has(key)) {
-      if ('error' === opts.cycle) throw new Error('expr fold: cycle at ' + key)
-      return node
+  // The key operator a map is an occurrence of here, if any: its shape,
+  // then the host's `recognise`, decided once per location.
+  const siteOpOf = (pn: PNode): Op | null => {
+    if (undefined !== pn.site) return pn.site
+    let op: Op | null = keyOpOf(keys, pn.raw) ?? null
+    pn.site = op
+    if (null !== op && undefined !== recognise && !recognise(siteOf(pn), op)) op = pn.site = null
+    return op
+  }
+
+  // A member's folded value: a container through the memo, anything else
+  // as it is.
+  const member = (pn: PNode, seg: string | number, child: any): any =>
+    Array.isArray(child) || isRecord(child) ? walk(kid(pn, seg, child), 0) : child
+
+  // A map folded as a plain map, members in its own order.
+  const plainOf = (pn: PNode): any => {
+    if (pn.plainDone) return pn.plainValue
+    const node = pn.raw
+    if (!isRecord(node)) return walk(pn, 0)
+    const parts = pn.parts
+    const out = newRecord(node)
+    for (const name of Object.keys(node)) {
+      define(out, name,
+        undefined === parts ? member(pn, name, node[name])
+          : name === parts.op.src ? parts.value : parts.siblings[name])
     }
-    active.add(key)
-    let out: any
-    try {
-      if (tokens && isOp(node)) {
-        // Each term is folded at its own path first, so a key-operator
-        // site inside a token expression resolves, a nested expression
-        // is memoised by path, and every callback sees its own site.
-        const terms: any[] = []
-        for (let i = 1; i < node.length; i++) terms.push(walk(node[i], [...path, i]))
-        out = opts.evaluate(siteFor(path, node), node[0], terms)
-      }
-      else if (Array.isArray(node)) {
-        out = []
-        for (let i = 0; i < node.length; i++) out.push(walk(node[i], [...path, i]))
-      }
-      else if (isRecord(node)) {
-        const op = keyOpOf(keys, node)
-        if (op && !op.dynamic) {
-          const siblings = newRecord(node)
-          for (const k of Object.keys(node)) {
-            if (k !== op.src) define(siblings, k, walk(node[k], [...path, k]))
-          }
-          const value = walk(node[op.src], [...path, op.src])
-          const site = siteFor(path, node)
-          const cycles = report.cycles.length
-          out = opts.evaluate(site, { ...op, token: site.token || op.token }, [value, siblings])
-          if ('error' === opts.cycle && report.cycles.length > cycles) {
-            throw new Error('expr fold: cycle at ' + key)
-          }
-        }
-        else {
-          if (op) report.dynamic.push({ at: key, src: op.src })
-          out = newRecord(node)
-          for (const k of Object.keys(node)) define(out, k, walk(node[k], [...path, k]))
-        }
-      }
-      else {
-        out = node
-      }
-    }
-    finally {
-      active.delete(key)
-    }
-    memo.set(key, out)
+    pn.plainDone = true
+    pn.plainValue = out
     return out
   }
 
-  return walk(root, [])
+  const walk = (pn: PNode, via: number): any => {
+    if (2 === pn.state) return pn.value
+    const node = pn.raw
+    const list = Array.isArray(node)
+    if (!list && (!isRecord(node) || OP_MARK === node.OP_MARK)) return node
+    if (1 === pn.state) return node
+    if (maxDepth <= stack.length) {
+      throw new FoldError('fold_depth',
+        'nesting and references deeper than ' + maxDepth + ' at ' + shown(ptrOf(pn)),
+        { doc: pn.doc.key, at: ptrOf(pn) })
+    }
+    pn.state = 1
+    pn.via = via
+    stack.push(pn)
+    let out: any
+    try {
+      if (list && isOp(node)) {
+        // Each term is folded at its own path first, so a key-operator
+        // site inside a token expression resolves, and a nested
+        // expression is kept by path. With `tokens` off the operator
+        // node is rebuilt around its own head, so it stays an operator.
+        const terms: any[] = []
+        for (let i = 1; i < node.length; i++) terms.push(member(pn, i, node[i]))
+        out = tokens ? opts.evaluate(siteOf(pn), node[0], terms) : [node[0], ...terms]
+      }
+      else if (list) {
+        // Members are walked inline, not through `member`, so a level of
+        // nesting costs one stack frame.
+        out = []
+        for (let i = 0; i < node.length; i++) {
+          const c = node[i]
+          out.push(Array.isArray(c) || isRecord(c) ? walk(kid(pn, i, c), 0) : c)
+        }
+      }
+      else {
+        const op = siteOpOf(pn)
+        if (null === op || op.dynamic) {
+          if (null !== op) note('dynamic', { doc: pn.doc.key, at: ptrOf(pn), src: op.src })
+          if (pn.plainDone) {
+            out = pn.plainValue
+          }
+          else {
+            out = newRecord(node)
+            for (const name of Object.keys(node)) {
+              const c = node[name]
+              define(out, name, Array.isArray(c) || isRecord(c) ? walk(kid(pn, name, c), 0) : c)
+            }
+            pn.plainDone = true
+            pn.plainValue = out
+          }
+        }
+        else {
+          const siblings = newRecord(node)
+          let value: any
+          for (const name of Object.keys(node)) {
+            const v = member(pn, name, node[name])
+            if (name === op.src) value = v
+            else define(siblings, name, v)
+          }
+          pn.parts = { op, value, siblings }
+          const site = siteOf(pn)
+          out = opts.evaluate(site, { ...op, token: site.token || op.token }, [value, siblings])
+        }
+      }
+    }
+    finally {
+      stack.pop()
+      pn.state = 0
+    }
+    pn.state = 2
+    pn.value = out
+    return out
+  }
+
+  const main = makeDoc(null == opts.doc ? '' : opts.doc, root)
+  let out: any
+  try {
+    out = walk(main.top, 0)
+  }
+  catch (err: any) {
+    if (err instanceof RangeError && /call stack/i.test(String(err.message))) {
+      throw new FoldError('fold_depth',
+        'the stack ran out before maxDepth (' + maxDepth + ') was reached; lower maxDepth',
+        { doc: main.key })
+    }
+    throw err
+  }
+  if (opts.report) opts.report(report)
+  return out
 }
 
 // Default operator precedence — the "binding power" scale.
@@ -2136,9 +2474,39 @@ const testing = {
 // build if they drift. Mirrors `const VERSION` in go/expr.go.
 const VERSION = '0.5.19'
 
-export { VERSION, Expr, evaluation, simplify, parseSimplified, fold, opify, isOp, keyOpOf, makeKeyMap, testing }
+export {
+  VERSION,
+  Expr,
+  evaluation,
+  simplify,
+  parseSimplified,
+  fold,
+  recordPositions,
+  FoldError,
+  opify,
+  isOp,
+  keyOpOf,
+  makeKeyMap,
+  testing,
+}
 
-export type { ExprOptions, OpDef, Op, Evaluate, FoldOptions, FoldEvaluate, Inherit, Site, FoldReport, Path, KeyMap }
+export type {
+  ExprOptions,
+  OpDef,
+  Op,
+  Evaluate,
+  FoldOptions,
+  FoldEvaluate,
+  FoldHit,
+  FoldEntry,
+  Inherit,
+  Recognise,
+  Positions,
+  Site,
+  FoldReport,
+  Path,
+  KeyMap,
+}
 
 // The translation parts a host composes a translation from (admin ADR-27):
 // the manifest and the alchemy sources, generated by ../embed-translate.js.

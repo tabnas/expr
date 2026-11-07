@@ -1,0 +1,8 @@
+input	expected
+{a:{$ref:"#/b"},b:1}	{"a":1,"b":1}
+{a:{$ref:"#/a"}}	ERROR:fold_cycle
+{a:{b:{$ref:"#/a"}}}	ERROR:fold_cycle
+{x:{$ref:"#/y"},y:{$ref:"#/x"}}	ERROR:fold_cycle
+{a:{b:{c:1}}}	{"a":{"b":{"c":1}}}
+{a:{b:{c:{d:1}}}}	ERROR:fold_depth
+{a:{$ref:"#/b"},b:{$ref:"#/c"},c:{$ref:"#/d"},d:1}	ERROR:fold_depth

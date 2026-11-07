@@ -212,18 +212,24 @@ complete only when the whole document is, since its target may come later
 and may itself be a reference, so key operators reduce in a fold over the
 finished root, bottom-up, with context flowing down: the fold hands the
 resolver a site, with the path, the verbatim node, a bag inherited from
-the site's own ancestors (the base URI in force, say), and `at`, which
-folds another location through the same memo and cycle discipline. Some
-keywords cannot be reduced by a parser at all, because their meaning
-depends on a scope that exists only when the document is used;
+the site's own ancestors and its own map (the base URI in force, say), and
+`at`, which folds another location, in this document or another the host
+loads, through the same memory and cycle rules. Shape alone does not
+always decide: a property named `$ref` in a schema is data, so the host
+can say, per site, whether a map that owns the keyword is an occurrence of
+it. Some keywords cannot be reduced by a parser at all, because their
+meaning depends on a scope that exists only when the document is used;
 `$dynamicRef` is one. A `dynamic` key operator is recognised and reported
 and left alone. Three times, then: at close, at the end, and never.
 
-The fold keeps one result per path, so every site naming one target
-shares one value, and treats a target that is still being folded as a
-cycle, which the resolver keeps verbatim by default. The S-expression view
-of a key operator is a fold output, through a recording resolver, rather
-than a parse output: the parsed tree is the document.
+The fold keeps one result per location, so every site naming one target
+shares one value. A site whose target is still being folded closes a
+cycle, and the resolver is told so: a loop made of references alone has
+nothing to resolve to, so all of it stays as written, while a cycle that
+passes through a map, the normal shape of a recursive schema, is cut once,
+where the walk meets it. The S-expression view of a key operator is a fold
+output, through a recording resolver, rather than a parse output: the
+parsed tree is the document.
 
 ## Trade-offs
 
