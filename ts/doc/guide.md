@@ -239,6 +239,70 @@ show('1+2*3')   // => ['+', 1, ['*', 2, 3]]
 
 `+`, `-`, `*` still work; `/` and `%` are now ordinary text.
 
+## Resolve `$ref` with a key operator
+
+A key operator is recognised by a map's shape rather than by a token, and
+is reduced by `fold` against the finished document, so a reference to a
+target that comes later resolves. Declare the keyword with `key: true`,
+parse to the verbatim tree, then fold with a resolver that reads the
+target through `site.at`:
+
+```js
+const { Tabnas } = require('@tabnas/parser')
+const { jsonic } = require('@tabnas/jsonic')
+const { Expr, fold } = require('@tabnas/expr')
+
+const op = { ref: { key: true, src: '$ref' } }
+const j = new Tabnas().use(jsonic).use(Expr, { op })
+const pointer = (ref) => ref.slice(2).split('/')
+
+const resolve = (site, op, [target, siblings]) => {
+  const hit = site.at(pointer(target))
+  if (!hit.found || hit.cycle) return site.node       // unresolved, or a cycle: keep it as written
+  return { ...hit.value, ...siblings }
+}
+
+const raw = j.parse('{ pet: { $ref: "#/schemas/Pet", note: "x" }, schemas: { Pet: { type: "object" } } }')
+const folded = JSON.stringify(fold(raw, { op, evaluate: resolve }))
+folded   // => '{"pet":{"type":"object","note":"x"},"schemas":{"Pet":{"type":"object"}}}'
+```
+
+The same resolver runs inside `parse` when it is passed as the plugin's
+`fold` option, and a `report` callback lists cycles, unresolved targets
+and dynamic sites:
+
+```js
+const { Tabnas } = require('@tabnas/parser')
+const { jsonic } = require('@tabnas/jsonic')
+const { Expr } = require('@tabnas/expr')
+
+const pointer = (ref) => ref.slice(2).split('/')
+let report
+const j = new Tabnas().use(jsonic).use(Expr, {
+  op: { ref: { key: true, src: '$ref' } },
+  fold: {
+    evaluate: (site, op, [target]) => {
+      const hit = site.at(pointer(target))
+      return hit.found && !hit.cycle ? hit.value : site.node
+    },
+    report: (r) => { report = r },
+  },
+})
+
+const out = JSON.stringify(j.parse('{ a: { $ref: "#/a" }, b: { $ref: "#/c" } }'))
+out                         // => '{"a":{"$ref":"#/a"},"b":{"$ref":"#/c"}}'
+report.cycles[0].at         // => '/a'
+report.unresolved[0].target // => '/c'
+report.dynamic.length       // => 0
+```
+
+Context that the target's own ancestors decide, such as the base URI a
+`$id` sets, flows down through `inherit`, which the fold calls for every
+map on the way from the root and whose result the site reads as `site.k`.
+A map that owns `$ref` but is data where it stands, a property named
+`$ref` in a schema, say, is kept out by `recognise`, and a resolver that
+finds no operation at a site returns `site.plain()`.
+
 ## Walk the tree yourself with `evaluation()`
 
 If you parse with **no** `evaluate` option you get the raw S-expression, and

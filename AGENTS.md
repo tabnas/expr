@@ -85,6 +85,7 @@ There are three implementations that must behave identically — TypeScript
 | [`go/`](go/) | Go port — `github.com/tabnas/expr/go`. Plugin in `go/expr.go`. Imports the engine as `github.com/tabnas/parser/go` (`tabnas`) and the base grammar as `github.com/tabnas/jsonic/go` (for jsonic's own `Make`). Tests: `expr_test.go` (shared `.tsv` fixtures + units), `parity_test.go` (prattify/ternary/config cases mirroring the TS suite), `perf_test.go`. |
 | [`rs/`](rs/) | Rust port — the `tabnas-expr` crate (library `tabnas_expr`). Plugin in `rs/src/lib.rs`. Depends on sibling `tabnas/parser` and `tabnas/jsonic` checkouts (and `tabnas/support` for tests) through Cargo `path` dependencies. Tests: `rs/tests/parity_test.rs` (the shared `.tsv` fixtures), `expr_test.rs`, `debug_model_test.rs`, `perf_test.rs`, `version_test.rs`. `rs/AGENTS.md` has the crate-specific hazards. |
 | [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures (`input → expected` JSON), run by **all three** runtimes. The precedence/associativity regression oracle. |
+| [`test/tree/`](test/tree/) | The tree layer's fixtures (`fold`, key operators), run by the TypeScript suite only until the Go and Rust ports carry the layer; they move into `test/spec/` with the ports. See "The tree layer" below. |
 | [`ts/test/`](ts/test/) | TS suite: `spec.test.ts` (runs the shared `.tsv`s), `expr.test.ts`, `ternary.test.ts`, `debug-model.test.ts`, `doc-examples.test.ts`, `perf.test.ts` (instance-reuse ratio), plus spec generators (`gen-*.mjs`/`gen-spec.js`) and `spec-util.ts`. |
 | [`alchemy/render.alc`](alchemy/render.alc) | **The expression format's render**, an [alchemy](https://github.com/tabnas/alchemy) library whose entry point `expr-render` writes a tree's events as an expression document: jsonic text in which an operation of the default operators, a list whose first element is the operator, is written in infix, a term that would need parentheses (which read back as a group) as a list instead, so the reader builds the same tree, every string and key double-quoted, a negative number with its sign and a number that is not finite as a string. The operator is its source text, as the shared fixtures, the TypeScript and Rust `simplify` and Go's `Simplify` and `SimplifyOrdered` reduce it, or the object that describes it, as the reader's own value carries it (TypeScript's parse, and Rust's realized one), which the render reads by its `src` member. A list led by an object whose `src` the reader would read as any other operator (TypeScript's `simplify` reads any `src` that is not empty, zero, false or null; Go's `SimplifyOrdered` and Rust's `simplify` any string but the empty one), the token a C syntax tree puts first in a node's children among them, has no document that reads back as it, so the render refuses it with `TARGET_VALUE_UNREPRESENTABLE`, naming the object's path in jq's syntax and its `src`. [`test/spec/render.tsv`](test/spec/render.tsv) pins what every reader reads from the documents it writes, and each runtime's translation test the `src` the reader gives each default operator. Every definition is named `expr-...`. The `translate` object in [`tabnas.plugin.json`](tabnas.plugin.json) names it, says the tree has the schema `expr` and any root, and lists what a written document does not keep (`loss`). |
 | [`alchemy/embed.alc`](alchemy/embed.alc) | **The expression format's embedding**, beside the render: `expr-embed` and its reverse `expr-unembed` are both the identity, since the reader builds its trees on jsonic's values and so a plain tree is already an expression tree, a list whose first element describes a default operator by its `src` member included. The one kind of plain tree that is not, a list led by an object with any other `src` the reader reads, is the render's to refuse, since a tree of the schema `expr` reaches the render without the embedding. |
@@ -285,6 +286,126 @@ way it does so the fixes are not "simplified" back into bugs.
 When porting a behaviour change, keep all four invariants: instance-level
 `FixedSrc` lookups, sorted op iteration, the suffix paren-guard/infix
 drill, and the zero-is-unset fallback.
+
+## The tree layer: key operators and `fold`
+
+The plugin has two kinds of operator. A **token** operator is what the
+rest of this guide is about: lexed, matched by an alternate, placed by
+binding power, reduced at its expression's close. A **key** operator
+(`OpDef.key: true`, `src` the member name, `$ref` say) is recognised
+after the base grammar has built a map, by the map's shape, and reduced
+by `fold(root, options)` against the finished document; `dynamic: true`
+marks a key the fold reports and never evaluates. Nothing is rewritten in
+the parsed tree, which stays the document as written; the S-expression
+view of a key operator is a fold output through a recording resolver. The
+contract, in `ts/src/expr.ts` beside `evaluation`, and what each port
+reproduces:
+
+- **Recognition.** By shape at fold time, never by a parse-time hook or a
+  marker: a marker would miss a tree that was not parsed by the grammar,
+  die on a copy, and in Go force the `info` option on. The host's
+  `recognise(site, op)` can refuse a site (a property named `$ref`, a
+  `$ref` in example data), and the map then folds as a plain map. A map
+  that owns two key members is an occurrence of the static one before a
+  dynamic one, then of the member name first by code point; declaration
+  order is not used (Go has none) and two key operators on one member name
+  are refused with `fold_key`.
+- **What is walked.** Plain records (prototype `null` or
+  `Object.prototype`) and arrays, members in their own order. Any other
+  object is a leaf, kept by identity: rebuilding a `Date` or a `Map` from
+  its prototype gives a shell whose methods throw.
+- **The site.** `evaluate(site, op, [value, siblings])`, bottom-up, both
+  terms folded. `site` carries the document's root and key, the path, the
+  verbatim node, the bag (`inherit` applied from the root down to and
+  including the site's own map, each map's bag kept, so a target reached
+  early through a reference gets its own ancestors' bag, never the
+  referrer's), the opening token when `positions` gives one, `at(path,
+  doc?)`, `locate(path, doc?)` and `plain()`, the map folded as a plain
+  map, for a resolver that finds no operation there. `inherit` must
+  return an object and must not fold below its own map (`fold_inherit`).
+- **Memory.** One result per location, kept in a trie of locations per
+  document, so a deep document costs a constant amount per container;
+  neither a pointer string per node (O(depth) each, measured at 311 MB
+  for 10,000 nodes 1,000 deep) nor object identity (Rust's values are
+  copy-on-write). Pointer strings are made only for report rows and
+  errors. Array indices are RFC 6901: `0` or digits with no leading zero.
+- **Cycles.** Every container being folded is on an active stack that
+  records how each frame was entered, from its parent or through a
+  reference. A site whose target is on the stack closes a cycle. If every
+  frame after the target was entered through a reference, the loop is made
+  of references alone: all its members are cycles, and so is every later
+  reference into it. Otherwise the cycle passes through a container and is
+  cut once, at that site; a later reference to the cut site gets its
+  folded value, and a path through it is a cycle. `at` never returns a
+  `value` with `cycle: true`. Where the cut falls follows the walk, from
+  the root in member order, so it is stable for a document and can move
+  when members are reordered.
+- **Several documents.** `options.doc` names the document folded and
+  `options.load(key, site)` returns another's raw root, once per key, or
+  `undefined`. Memory, the active stack and sharing span documents. Report
+  rows are `{ doc, at, targetDoc, target }` (`{ doc, at, src }` for
+  dynamic sites), each kept once.
+- **Bounds and errors.** `maxDepth` (default 1000) counts nesting and
+  reference hops together; past it, or when the JavaScript stack runs out
+  first, the fold throws `fold_depth`, never a `RangeError`. Every error
+  of the layer's own is a `FoldError` with a `code` (`fold_cycle`,
+  `fold_depth`, `fold_inherit`, `fold_key`, `fold_option`) and the
+  location as fields; member names in its message are JSON-escaped and cut
+  short.
+- **Deferred mode.** `ExprOptions.fold`, through the engine's `ruleDone`
+  event, filtered to the last pass of the parse: a depth-0 close whose
+  alternate is null (a rule with no close alternates) or neither pushes,
+  replaces nor failed (`alt.err`), outside probes and recovery-forced
+  closes. A failing parse is therefore never folded, and under recovery
+  the recovered value is folded once. It writes `ctx.root().node`, which
+  is what TypeScript's `parse` returns. The start rule's after-close is
+  not that event: yaml replaces its `stream` rule on directives and
+  markers.
+
+**Port status.** The layer is TypeScript-only at this writing, and
+`test/tree/*.tsv` runs in TypeScript alone, from
+`ts/test/tree-spec.test.ts`; the files move into `test/spec/` with the
+ports, under the parity rule. What each port has to settle, from the
+review of the TypeScript layer against the Go and Rust code:
+
+- **Go.** `Key` and `Dynamic` on `OpDef` and `Op`. Recognition over
+  `*OrderedMap`, whose member order is defined, and over `map[string]any`
+  and `MapRef`, whose `Val` is a plain Go map with no order: sort their
+  member names by code point, or document the result as unordered, and
+  run the fixtures on `*OrderedMap`; siblings a new `*OrderedMap`. The
+  precedence rule and the RFC 6901 index rule port as they are (Go
+  compares strings by byte, which is code-point order for UTF-8). An error
+  channel: `Fold(root, opts) (any, error)` and `FoldEvaluate` returning
+  `(any, error)`; in deferred mode a failure must be panicked as a
+  `*TabnasError` carrying the fold code, since the engine relabels any
+  other panic `internal`. The deferred filter needs `RuleDone.Probe`,
+  which the parser Go module added after v0.12.11, the version `go/go.mod`
+  requires today; moving to the latest parser release is the standing
+  instruction. Go's `Parse` returns the private `resultRule`'s node, which
+  a start-rule replace moves, so the fold writes the node of the rule the
+  final event handed over, not `ctx.Root`, and the filter is to be
+  measured to match exactly one pass per parse, with and without a
+  replace. Go has no weak map: the positions table lives in `ctx.U` for
+  one parse, keyed by the `*OrderedMap` pointer (a `MapRef` is a struct
+  value and cannot be a map key; use `reflect.ValueOf(mr.Val).Pointer()`),
+  and the fold takes it as a lookup. The occurrence token on the Go
+  operator node (`ListRef.Meta`) is still missing.
+- **Rust.** Every public parse realizes operator nodes into plain arrays
+  headed by an operator description, which `is_op` and `evaluation` no
+  longer recognise, so `tokens` cannot be mirrored over the parse result
+  as it stands: either fold inside `parse_scope`, on the arena-live
+  value, or recognise the realized form and rebuild the `Op` from it.
+  Pick one before porting `tokens.tsv`. `fold` returns `Result<Value,
+  TabnasError>` and `FoldEvaluate` returns a `Result` too. The function
+  form only: the rule subscriber observes and cannot replace the result.
+  Positions are open: a container's `Arc` at its open pass need not be the
+  one in the returned tree, since `Arc::make_mut` copies a shared
+  container, so record at the close pass, or by path, and measure it;
+  until then `site.token` is `None` for a key site.
+- **Shape pins.** Adding `key` and `dynamic` to `Op` does not fail the
+  `DIVERGENCE.md` pins, which test for particular keys, not the whole set;
+  update the record's prose, and add the two keys to Rust's
+  `Op::to_value` so its realized description matches the TypeScript JSON.
 
 ## debug-model composition test (@tabnas/debug)
 
@@ -666,6 +787,14 @@ The machine-readable list is [`tabnas.plugin.json`](tabnas.plugin.json)
 contract a fixture pins with `ERROR:<code>`, and declaring one here without
 adding it to the descriptor fails admin's `make ax-descriptor` staleness
 check.
+
+The tree layer's `FoldError` carries codes of its own (`fold_cycle`,
+`fold_depth`, `fold_inherit`, `fold_key`, `fold_option`), pinned by
+`ERROR:<code>` rows in `test/tree/errors.tsv`. They are deliberately not
+engine codes yet: no runtime declares them in `options.error`, and the
+descriptor stays empty, because the layer is TypeScript-only and a
+descriptor code must be declared in every runtime. They join the
+catalogue and the descriptor when the Go and Rust ports land.
 
 ## Untrusted input
 
