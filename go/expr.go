@@ -1843,13 +1843,24 @@ func Parse(src string, opts ...map[string]interface{}) (interface{}, error) {
 // operators on one member name, or a "fold" option it cannot take), and
 // MakeJsonic drops it: call j.Use(Expr, opts) to see it.
 func MakeJsonic(opts ...map[string]interface{}) *tabnas.Tabnas {
-	j := jsonic.Make()
 	var pluginOpts map[string]interface{}
 	if len(opts) > 0 {
 		pluginOpts = opts[0]
 	}
-	_ = j.Use(Expr, pluginOpts)
-	return j
+	return makeJsonicOn(jsonic.Make(), pluginOpts)
+}
+
+// makeJsonicOn installs the Expr plugin on base, jsonic's grammar, and
+// declares this parser's own window setting: lex.window false, so that
+// ParseReader reads a reader whole (admin ADR-30). The plugin's matchers
+// are not yet verified at the window's edge, and a base that declares
+// the window must not carry it to them; the setting comes last, after
+// everything the base and the plugin set.
+func makeJsonicOn(base *tabnas.Tabnas, pluginOpts map[string]interface{}) *tabnas.Tabnas {
+	_ = base.Use(Expr, pluginOpts)
+	no := false
+	base.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{Window: &no}})
+	return base
 }
 
 func resolveOptions(opts map[string]interface{}) *ExprOptions {

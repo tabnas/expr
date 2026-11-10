@@ -3645,11 +3645,40 @@ pub fn make() -> Tabnas {
 
 /// Build a parser with the jsonic base grammar and the given options.
 pub fn make_with(options: ExprOptions) -> Tabnas {
-    let mut parser = tabnas_jsonic::make();
+    make_on(tabnas_jsonic::make(), options)
+}
+
+/// Install the expression grammar on `parser`, jsonic's base, and declare
+/// this parser's own window setting: `lex.window` false, so that
+/// [`Tabnas::parse_reader`] reads a reader whole (admin ADR-30). The
+/// grammar's matchers are not yet verified at the window's edge, and a base
+/// that declares the window must not carry it to them; the setting comes
+/// last, after everything the base and the grammar set.
+fn make_on(mut parser: Tabnas, options: ExprOptions) -> Tabnas {
     parser
         .use_plugin(plugin_with(options), None)
         .expect("the expression grammar installs on the jsonic base");
     parser
+        .set_options(|options| options.lex.window = false)
+        .expect("lex.window sets");
+    parser
+}
+
+#[cfg(test)]
+mod window_tests {
+    /// The parser's own setting wins over its base's: a base that declares
+    /// `lex.window`, as jsonic's own constructor may, given the
+    /// constructor's steps, comes out with the window off.
+    #[test]
+    fn a_windowed_base_comes_out_without_the_window() {
+        let mut base = tabnas_jsonic::make();
+        base.set_options(|options| options.lex.window = true)
+            .expect("lex.window sets");
+        assert!(base.options.lex.window);
+        let parser = super::make_on(base, super::ExprOptions::new());
+        assert!(!parser.options.lex.window);
+        assert!(super::parse_with(&parser, "1+2*3").is_ok());
+    }
 }
 
 /// The lazily built instance the no-options [`parse`] reuses.

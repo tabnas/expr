@@ -137,6 +137,21 @@ without editing a tracked file. Keep both out of version control.
 `npm i ../../parser/ts` is not a substitute: it writes a `file:` path
 into `ts/package.json`.
 
+## The window setting
+
+A parse from a reader (`ParseReader`, `parse_reader`, admin ADR-30) reads
+a window of the source at a time only on a parser that declares
+`lex.window`. This grammar's matchers are not yet verified at the
+window's edge, so its whole parser declares its own setting, `false`:
+Go's `MakeJsonic` (through `makeJsonicOn`) and Rust's `make`/`make_with`
+(through `make_on`) set `lex.window` to false after installing the
+plugin on jsonic's base, so a base that declares the window does not
+carry it to this grammar. `go/window_test.go` and `rs/tests/window_test.rs`
+hold the parser to it, and `TestMakeJsonicOnAWindowedBase` and
+`window_tests` in `rs/src/lib.rs` give the constructor's steps a base that
+declares the window. TypeScript has no constructor of its own; a host
+composes `new Tabnas().use(jsonic).use(Expr)`.
+
 ## Authority and alignment rules
 
 **TypeScript is canonical. Go and Rust are ports of it.** When you change
