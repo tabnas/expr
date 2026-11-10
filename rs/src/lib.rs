@@ -29,6 +29,15 @@
 //! }
 //! ```
 //!
+//! # Folding a finished tree
+//!
+//! A key operator ([`OpDef::key()`]) is an operation spelled as a map, a
+//! `$ref` say, recognised by the map's shape when [`fold`] walks a
+//! finished document and reduces each occurrence through a resolver, with
+//! the rest of the tree in reach through its [`Site`]. One fold can reduce
+//! the token operators too, on the live expression nodes inside
+//! [`parse_scope`]; a realized operator array is plain data to it.
+//!
 //! # Untrusted input
 //!
 //! A parsed expression is data, never instructions. This plugin reads
@@ -78,6 +87,15 @@ mod readme_examples {}
 /// depend on the engine crate directly.
 pub use tabnas::TabnasError as ExprError;
 
+// The tree layer: key operators and the fold over a finished tree.
+mod tree;
+
+pub use tree::{
+    fold, key_op_of, make_key_map, FoldCycle, FoldDynamic, FoldEntry, FoldError, FoldEvaluate,
+    FoldHit, FoldOptions, FoldReport, Inherit, KeyMap, Load, Path, Positions, Recognise, Seg, Site,
+    FOLD_CYCLE, FOLD_DEPTH, FOLD_INHERIT, FOLD_KEY, FOLD_MAX_STACK, FOLD_OPTION,
+};
+
 /// JavaScript's `Number.MIN_SAFE_INTEGER`, the binding power an operator
 /// with no declared `left` takes: it binds loosest on the left.
 pub const MIN_SAFE_INTEGER: i64 = -9_007_199_254_740_991;
@@ -104,7 +122,8 @@ pub struct PrevalDef {
 ///
 /// `src` carries one source string for a prefix, suffix or infix
 /// operator and two for a ternary (`["?", ":"]`); a paren operator uses
-/// `osrc` and `csrc` instead.
+/// `osrc` and `csrc` instead. A key operator's `src` is the member name
+/// that marks a site, `$ref` say.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpDef {
     pub src: Vec<String>,
@@ -120,6 +139,17 @@ pub struct OpDef {
     pub preval: Option<PrevalDef>,
     /// Custom operator data, handed back to an evaluator as `op.use`.
     pub use_data: Value,
+    /// A STRUCTURAL operator: an occurrence is a map that owns the member
+    /// named by `src`, recognised by its shape when a tree is folded
+    /// ([`fold`]), never by a token. No fixed token is registered for it,
+    /// so the base grammar keeps the key position, and no binding power
+    /// applies: its two terms are fixed by the shape, the member's value
+    /// and the map of the other members.
+    pub key: bool,
+    /// A key operator a fold recognises and reports but never evaluates,
+    /// such as `$dynamicRef`, whose meaning depends on a scope the parser
+    /// does not have. Its map folds as a plain map.
+    pub dynamic: bool,
 }
 
 impl Default for OpDef {
@@ -137,6 +167,8 @@ impl Default for OpDef {
             paren: false,
             preval: None,
             use_data: Value::Undefined,
+            key: false,
+            dynamic: false,
         }
     }
 }
@@ -192,6 +224,25 @@ impl OpDef {
         }
     }
 
+    /// A key operator: a map that owns the member `src` is an occurrence
+    /// of it when a tree is folded.
+    pub fn key(src: impl Into<String>) -> Self {
+        OpDef {
+            src: vec![src.into()],
+            key: true,
+            ..Default::default()
+        }
+    }
+
+    /// A dynamic key operator: recognised and reported by a fold, never
+    /// evaluated.
+    pub fn dynamic_key(src: impl Into<String>) -> Self {
+        OpDef {
+            dynamic: true,
+            ..OpDef::key(src)
+        }
+    }
+
     /// Give a paren operator a preval configuration.
     pub fn with_preval(mut self, preval: PrevalDef) -> Self {
         self.preval = Some(preval);
@@ -232,6 +283,12 @@ pub struct Op {
     /// Which of a ternary's two source strings this operator is, as the
     /// canonical `use.ternary.opI`. `None` for every other operator.
     pub ternary_index: Option<usize>,
+    /// A key operator, recognised by a map's shape when a tree is folded:
+    /// see [`OpDef::key()`] and [`fold`].
+    pub key: bool,
+    /// A key operator a fold reports and never evaluates: see
+    /// [`OpDef::dynamic`].
+    pub dynamic: bool,
 }
 
 impl Default for Op {
@@ -258,6 +315,8 @@ impl Default for Op {
             ctin: -1,
             preval: PrevalDef::default(),
             ternary_index: None,
+            key: false,
+            dynamic: false,
         }
     }
 }
@@ -288,6 +347,10 @@ impl Op {
         map.insert("otin".into(), Value::Number(f64::from(self.otin)));
         map.insert("ctin".into(), Value::Number(f64::from(self.ctin)));
         map.insert("preval".into(), self.preval_value());
+        // In the canonical key order: TypeScript's operator builders list
+        // `key` and `dynamic` after `preval` and before `token`.
+        map.insert("key".into(), Value::Bool(self.key));
+        map.insert("dynamic".into(), Value::Bool(self.dynamic));
         map.insert("token".into(), token_value(token));
         Value::object(map)
     }
@@ -550,6 +613,8 @@ fn op_def_from_value(def: &Value) -> OpDef {
         ternary: value_bool(object_get(def, "ternary")),
         paren: value_bool(object_get(def, "paren")),
         use_data: object_get(def, "use").cloned().unwrap_or(Value::Undefined),
+        key: value_bool(object_get(def, "key")),
+        dynamic: value_bool(object_get(def, "dynamic")),
         ..Default::default()
     };
     match object_get(def, "src") {
@@ -1486,13 +1551,37 @@ fn evaluated_mark(value: &Value) {
     }
 }
 
+/// What [`evaluation_with`] reduces besides expressions and implicit lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EvaluationOptions {
+    /// Reduce a map member by member into a NEW map of the same kind,
+    /// which is what the eager `evaluate` option already does for an
+    /// expression inside a map. Off by default: a map is then passed
+    /// through as it is, as [`evaluation`] documents.
+    pub objects: bool,
+}
+
 /// Reduce an expression tree with an evaluator, innermost first.
 ///
 /// An implicit list is reduced a member at a time as its members close and
 /// again as a whole once it is complete, so a value the evaluator has
 /// already produced is returned untouched rather than reduced twice. That
 /// record is per-thread and is cleared with the expression arena.
+///
+/// A map is passed through unchanged; [`evaluation_with`] can reduce it
+/// member by member instead.
 pub fn evaluation(site: &mut EvalSite<'_>, value: &Value, evaluate: &Evaluate) -> Value {
+    evaluation_with(site, value, evaluate, EvaluationOptions::default())
+}
+
+/// [`evaluation`] with options: the port of the canonical
+/// `evaluation(rule, ctx, expr, evaluate, { objects })`.
+pub fn evaluation_with(
+    site: &mut EvalSite<'_>,
+    value: &Value,
+    evaluate: &Evaluate,
+    options: EvaluationOptions,
+) -> Value {
     if value.is_undefined() || matches!(value, Value::Null) {
         return Value::Null;
     }
@@ -1508,7 +1597,7 @@ pub fn evaluation(site: &mut EvalSite<'_>, value: &Value, evaluate: &Evaluate) -
         };
         let reduced: Vec<Value> = terms
             .iter()
-            .map(|term| evaluation(&mut site.reborrow(), term, evaluate))
+            .map(|term| evaluation_with(&mut site.reborrow(), term, evaluate, options))
             .collect();
         // The occurrence token travels on the site, not on the shared
         // description: `op` is one entry of the operator table and is the
@@ -1527,14 +1616,39 @@ pub fn evaluation(site: &mut EvalSite<'_>, value: &Value, evaluate: &Evaluate) -
         Value::array(
             entries
                 .iter()
-                .map(|entry| evaluation(&mut site.reborrow(), entry, evaluate))
+                .map(|entry| evaluation_with(&mut site.reborrow(), entry, evaluate, options))
                 .collect(),
         )
+    } else if options.objects && matches!(value, Value::Object(_) | Value::MapRef(_)) {
+        // Into a NEW map of the same kind, members in their own order.
+        let mut reduce = |entries: &IndexMap<String, Value>| -> IndexMap<String, Value> {
+            entries
+                .iter()
+                .map(|(name, member)| {
+                    let member = evaluation_with(&mut site.reborrow(), member, evaluate, options);
+                    (name.clone(), member)
+                })
+                .collect()
+        };
+        match value {
+            Value::MapRef(map) => {
+                let mut out = (**map).clone();
+                out.value = reduce(&map.value);
+                Value::MapRef(Arc::new(out))
+            }
+            Value::Object(entries) => Value::object(reduce(entries)),
+            _ => value.clone(),
+        }
     } else {
         value.clone()
     };
 
-    evaluated_mark(&out);
+    // Only a value this reduction PRODUCED is marked. A node passed
+    // through unchanged (a map, by default) is not, so a later reduction
+    // with `objects` on still reaches the operators inside it.
+    if eval_key(&out) != eval_key(value) {
+        evaluated_mark(&out);
+    }
     out
 }
 
@@ -1944,6 +2058,17 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
     }
 
     let ops = resolve_options(options);
+
+    // A key operator registers no token: a fold recognises it by a map's
+    // shape. The table is still checked here, as the canonical plugin
+    // checks it when it installs, so two key operators on one member name
+    // are refused when the grammar is built rather than at the first fold.
+    if let Err(error) = make_key_map(&ops) {
+        return Err(PluginError(format!(
+            "tabnas-expr: {error} [{}]",
+            error.code()
+        )));
+    }
 
     let prefix = make_op_map(parser, &ops, Anyfix::Prefix);
     let suffix = make_op_map(parser, &ops, Anyfix::Suffix);

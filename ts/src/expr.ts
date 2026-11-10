@@ -330,6 +330,14 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         if (0 !== r.d || 'c' !== done.state || done.probe || done.forced) return
         const alt = done.alt
         if (null != alt && (alt.p || alt.r || alt.err)) return
+        // A token the last close backtracked over is still in the
+        // lookahead buffer, and the engine's trailing-content check fails
+        // the parse on it once the rule loop ends: such a parse is not
+        // folded, so a fold error cannot stand in for the syntax error.
+        // Under recovery the parse returns its value all the same.
+        const t0 = ctx.t0
+        if (!ctx.cfg.parse.recover.enabled && null != t0 &&
+          ctx.NOTOKEN.tin !== t0.tin && ZZ !== t0.tin) return
         const root = ctx.root()
         root.node = foldTree(root.node, deferred, keyTM)
       },
