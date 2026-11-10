@@ -28,9 +28,10 @@ func Parse(src string, opts ...map[string]interface{}) (interface{}, error)
 
 Convenience parser. With **no** options it reuses a single lazily created,
 concurrency-safe default instance (so repeated calls don't rebuild the
-grammar). With options it builds a fresh instance per call. Returns the raw
-result; pass it through `Simplify` for a readable tree, or supply an
-`"evaluate"` option to get evaluated values.
+grammar). With options it builds a fresh instance per call, and returns the
+plugin's error when the plugin refuses them (see [Fold errors](#fold-errors)).
+Returns the raw result; pass it through `Simplify` for a readable tree, or
+supply an `"evaluate"` option to get evaluated values.
 
 ### `MakeJsonic`
 
@@ -39,7 +40,9 @@ func MakeJsonic(opts ...map[string]interface{}) *jsonic.Jsonic
 ```
 
 Build a `*jsonic.Jsonic` instance configured with the Expr plugin. Use this
-to configure once and call `j.Parse(src)` many times.
+to configure once and call `j.Parse(src)` many times. It drops the error the
+plugin returns for options it cannot take; call `j.Use(Expr, opts)` on a
+`jsonic.Make()` instance to see it.
 
 ### `Simplify`
 
@@ -110,7 +113,53 @@ Prepare a hand-built `*Op` for use as the head of an expression op-array
 (mirrors the TS module's `testing.opify`). In TS, `opify` stamps the private
 `OP_MARK` onto a plain object; in Go the `*Op` type itself is the mark, so
 `Opify` normalises the operator (filling the derived `Terms` count when
-unset) and returns it.
+unset: 3 for a ternary, 2 for an infix or key operator, 1 otherwise) and
+returns it.
+
+### `IsOp`
+
+```go
+func IsOp(node interface{}) bool
+```
+
+Whether a value is an operator node: a `*jsonic.ListRef` or an
+`[]interface{}` whose first element is an `*Op`, which is how a parse
+result carries an operation. The TypeScript `isOp`.
+
+### `Fold`
+
+```go
+func Fold(root interface{}, opts FoldOptions) (interface{}, error)
+```
+
+Fold a finished tree: resolve its key operators against the whole
+document and return a new tree. See [The tree layer](#the-tree-layer-fold).
+
+### `RecordPositions`
+
+```go
+func RecordPositions(j *jsonic.Jsonic) Positions
+```
+
+Record the opening token of every map and operator node a parse on `j`
+builds, for the `Positions` option of `Fold`. See
+[Token operators, positions, and depth](#token-operators-positions-and-depth).
+
+### `MakeKeyMap` / `KeyOpOf`
+
+```go
+func MakeKeyMap(op map[string]*OpDef) (KeyMap, error)
+func KeyOpOf(keys KeyMap, node interface{}) *Op
+
+type KeyMap []*Op
+```
+
+`MakeKeyMap` builds the key-operator table `Fold` reads from an operator
+table: one `*Op` for each `Key` entry, in resolution order (see
+[Key operators](#key-operators)). Each has `Key` set, `Name` ending
+`-key`, `Src` the member name and `Terms` 2. `KeyOpOf` is the key
+operator a map is an occurrence of, by shape: the first in the table whose
+member the map owns, or `nil`.
 
 ### `Expr`
 
@@ -156,18 +205,19 @@ carries the same powers as `i64`.
 ## Options map
 
 Both `Parse` and `MakeJsonic` (and `j.Use(Expr, …)`) take a
-`map[string]interface{}` with two recognised keys:
+`map[string]interface{}` with three recognised keys:
 
 | Key | Type | Description |
 |---|---|---|
 | `"op"` | `map[string]interface{}` | Operator definitions, keyed by a name you choose. Merged over the built-in defaults. Set an entry to `nil` to remove a default. |
 | `"evaluate"` | `func(*jsonic.Rule, *jsonic.Context, *Op, []interface{}) interface{}` | If set, each expression is reduced to a value during parsing, and `Parse` returns values instead of S-expression trees. |
+| `"fold"` | `FoldOptions` or `*FoldOptions` | If set, the finished document is folded before `Parse` returns: its key operators are resolved against the whole tree. See [Deferred mode](#deferred-mode). |
 
 Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 
 | Field | Type | Applies to | Description |
 |---|---|---|---|
-| `"src"` | `string` or `[]interface{}` | infix/prefix/suffix; ternary | Operator text, for example `"+"`. For ternary, a two-element slice `[]interface{}{"?", ":"}`. |
+| `"src"` | `string` or `[]interface{}` | infix/prefix/suffix; ternary; key | Operator text, for example `"+"`. For ternary, a two-element slice `[]interface{}{"?", ":"}`. For key, the member name that marks a site, for example `"$ref"`. |
 | `"osrc"` | `string` | paren | Opening token text, for example `"("`. |
 | `"csrc"` | `string` | paren | Closing token text, for example `")"`. |
 | `"left"` | `int64` (or `int`, or `float64`) | infix, suffix | Left binding power. Higher binds tighter. Defaults to `MinSafeInteger` (loosest); a declared `0` takes that default too. |
@@ -178,6 +228,8 @@ Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 | `"ternary"` | `bool` | (none) | Ternary operator (3 terms). Requires `"src": []interface{}{open, close}`. |
 | `"paren"` | `bool` | (none) | Paren/grouping operator. Requires `"osrc"`/`"csrc"`. |
 | `"preval"` | `bool` or `map[string]interface{}` | paren | Allow a preceding value (call/index syntax). See [Preval](#preval). |
+| `"key"` | `bool` | (none) | Key operator: a map that owns the member `"src"` names is an occurrence, recognised by shape when a tree is folded, never by a token. No binding power applies. See [Key operators](#key-operators). |
+| `"dynamic"` | `bool` | key | A key operator that a fold recognises and reports but never evaluates. |
 | `"use"` | `interface{}` | any | Arbitrary data carried onto the resolved `Op.Use`. |
 
 `left`/`right` are compared **only by order**, never magnitude. `left <
@@ -212,12 +264,42 @@ type OpDef struct {
     Paren   bool
     Preval  interface{} // bool, map[string]interface{}, or PrevalDef
     Use     interface{}
+    Key     bool        // a key operator, recognised by a map's shape
+    Dynamic bool        // a key operator a fold reports and never evaluates
 }
 ```
 
 The struct form of an operator definition. (In practice you usually pass the
 `map[string]interface{}` form to the options map, which is decoded into
-`OpDef` internally.)
+`OpDef` internally. `FoldOptions.Op` takes this form.)
+
+A definition with `Key` set and none of the kind flags is a key operator
+only: it registers no token, so the base grammar's pair rule keeps the key
+position. One with a kind flag as well is both kinds of operator, as in
+TypeScript.
+
+### Key operators
+
+A key operator is recognised after the base grammar has built a map, by
+the map's shape: it owns the member named by `Src`. Nothing changes in the
+parsed tree, which stays the document as written; the operator exists for
+[`Fold`](#the-tree-layer-fold), which hands the resolver two terms, the
+member's value and a new map of the other members.
+
+A map that owns the members of two key operators is an occurrence of one
+of them, chosen by a rule every runtime computes alike: a static operator
+before a dynamic one, then the member name that comes first by Unicode
+code point (Go compares strings by byte, which for UTF-8 text is that
+order). Neither declaration order nor the order of a Go map plays any
+part. Two key operators on one member name, or one that names no member,
+are refused when the table is built, with a `FoldError` coded `fold_key`:
+`j.Use(Expr, opts)` returns it.
+
+`Dynamic` marks a key the fold reports and leaves alone, such as
+`$dynamicRef`, whose meaning depends on a scope a parser does not have;
+the map still folds as a plain map, so operators inside it reduce. A host
+that wants to look at such a site declares the key as an ordinary key
+operator instead and returns `site.Plain()` from its resolver.
 
 ### `Op`
 
@@ -246,6 +328,8 @@ type Op struct {
     CTin    int
     Preval  PrevalDef
     Use     interface{}
+    Key     bool   // a key operator, recognised by a map's shape (see Fold)
+    Dynamic bool   // a key operator a fold reports and never evaluates
 }
 ```
 
@@ -265,6 +349,7 @@ type PrevalDef struct {
 type ExprOptions struct {
     Op       map[string]*OpDef
     Evaluate func(rule *jsonic.Rule, ctx *jsonic.Context, op *Op, terms []interface{}) interface{}
+    Fold     *FoldOptions
 }
 ```
 
@@ -283,6 +368,7 @@ that way:
 | suffix | `-suffix` | `factorial` → `factorial-suffix` |
 | ternary | `-ternary` | `cond` → `cond-ternary` |
 | paren | `-paren` | `plain` → `plain-paren` |
+| key | `-key` | `ref` → `ref-key` |
 
 Dispatch on `op.Name`, or on `op.Src` plus the kind booleans.
 
@@ -316,6 +402,221 @@ Invoked bottom-up: `terms` holds the already-evaluated operands (length 1
 unary, 2 infix, 3 ternary). For a preval paren call like `f(1,2)`, terms are
 `[funcName, argsSlice]`. Return the reduced value. Numbers from jsonic arrive
 as `float64`, so coerce accordingly.
+
+## The tree layer: `Fold`
+
+```go
+func Fold(root interface{}, opts FoldOptions) (interface{}, error)
+
+type FoldOptions struct {
+    Op        map[string]*OpDef      // the operator table; only Key entries matter
+    Evaluate  FoldEvaluate           // required
+    Inherit   Inherit
+    Recognise Recognise
+    K         map[string]interface{} // every document root's starting bag; nil is empty
+    Doc       string                 // the key of the document folded; default ""
+    Load      func(doc string, site *Site) (root interface{}, ok bool, err error)
+    Cycle     string                 // "verbatim" (the default) or "error"
+    Tokens    *bool                  // nil is true: operator nodes met in the walk reduce too
+    Positions interface{}            // a Positions lookup, or true in deferred mode
+    MaxDepth  int                    // 0 is the default, 1000
+    Report    func(report FoldReport)
+}
+
+type FoldEvaluate func(site *Site, op *Op, terms []interface{}) (interface{}, error)
+type Inherit func(site *Site, node interface{}, k map[string]interface{}) (map[string]interface{}, error)
+type Recognise func(site *Site, op *Op) (bool, error)
+type Positions func(node interface{}) *jsonic.Token
+
+type Site struct {
+    Root  interface{}   // the verbatim root of the site's document
+    Doc   string        // that document's key
+    Node  interface{}   // the verbatim map, or operator node
+    Token *jsonic.Token // the map's opening token, with Positions; nil otherwise
+}
+
+func (s *Site) Path() Path                                      // from the root to this map
+func (s *Site) K() (map[string]interface{}, error)              // the bag down to and including this map
+func (s *Site) At(path Path, doc ...string) (FoldHit, error)    // fold another location
+func (s *Site) Locate(path Path, doc ...string) (FoldHit, error) // read one raw
+func (s *Site) Plain() (interface{}, error)                     // this map folded as a plain map
+
+type Path []interface{}      // member names as strings, indices as ints or index strings
+type FoldHit struct {
+    Found bool
+    Cycle bool               // At only
+    Value interface{}        // set only when found and not a cycle
+}
+
+type FoldReport struct {
+    Cycles     []FoldEntry
+    Unresolved []FoldEntry
+    Dynamic    []FoldDynamic
+}
+type FoldEntry struct{ Doc, At, TargetDoc, Target string }
+type FoldDynamic struct{ Doc, At, Src string }
+```
+
+`Fold` walks a finished tree and returns a new one; the input is never
+changed. Every key-operator site is reduced bottom-up through `Evaluate`,
+with `[]interface{}{value, siblings}` as its terms, both already folded;
+`siblings` is always a new `*jsonic.OrderedMap`. The maps walked are
+`*jsonic.OrderedMap`, whose members go in the order it holds them, and
+`map[string]interface{}` and `jsonic.MapRef`, which have no order, so
+their members go in code-point order. The lists walked are
+`[]interface{}`, `jsonic.ListRef` and `*jsonic.ListRef`. A folded map or
+list is a new one of the same kind. Any other value, a struct, a `time.Time`,
+a map of another type, is a leaf and comes out as it went in. A nil map or
+slice, which JSON writes as `null`, is a leaf too.
+
+What a resolver returns is placed in the output as it is, so a resolver
+that returns `site.Node`, or another raw value, shares it with the input,
+and editing that part of the output edits the input. An error a callback
+returns stops the fold, and `Fold` returns it as it is.
+
+The report rows carry `json` tags (`doc`, `at`, `targetDoc`, `target`,
+`src`), so a report serialises as the TypeScript one does.
+
+### Context: `Inherit` and `Recognise`
+
+Values flow up through `Evaluate`; context flows down through `Inherit`.
+It is called once for every map on a path whose bag something reads
+(`site.K()`), from the root down, with the bag the map's parent passes
+on, and returns the bag for the map and everything below it; inside the
+call, `site.K()` is the parent's bag. A site's own `site.K()` therefore
+includes its own map's contribution. Each bag is worked out from the
+map's own ancestors and kept, so a site reached early through a reference
+gets its ancestors' bag and never the referrer's. `Inherit` must return a
+bag, a nil map being none, and must not fold the part of the tree below
+the map it is called for; either mistake is a `FoldError` coded
+`fold_inherit`.
+
+`Recognise(site, op)` decides whether a map that owns a key operator's
+member is an occurrence of it there, once per map. When it returns
+`false` the map folds as a plain map, with no `Evaluate` call and no
+report row: a property named `$ref` in the `properties` of a schema, or a
+`$ref` inside example data, is data. A resolver that can decide only
+from the value (a `$ref` whose value is not a string) returns
+`site.Plain()`: the map folded as a plain map, members in their own order.
+
+### Reaching the rest of the tree
+
+`site.At(path)` folds another location and returns its folded value. It
+follows raw members from the root; a key-operator map met on the way is
+folded, and the rest of the path reads its folded value, so a reference
+to a reference resolves and a pointer into a reference's target works.
+There is one result per location, so every site naming one target shares
+one value. A path names nothing (`Found` false) when a step does. An
+array index is an RFC 6901 index, `"0"` or digits with no leading zero,
+or an `int` or an integral `float64`: `"01"`, `"1.0"`, an empty segment
+and `"-"` name nothing. `Value` is set only when the location was found
+and is not a cycle. `site.Locate(path)` reads the raw tree and follows
+nothing.
+
+### Cycles
+
+A site whose target is still being folded closes a cycle: the target
+itself, an ancestor of the site, the root, or a map the walk entered on
+the way. `site.At` then returns `Cycle` true, and the resolver keeps the
+site as written; under `Cycle: "error"` the fold returns a `FoldError`
+coded `fold_cycle` instead. Any other value of `Cycle` reads as
+`"verbatim"`.
+
+A cycle made of references alone, `x` naming `y` and `y` naming `x`, has
+nothing to resolve to: every site in it is a cycle, and so is every later
+reference into it. A cycle that passes through a map, `Tree` holding a
+site that names `Node`, which names `Tree`, is cut once, at the site
+whose target was still being folded; a later reference to that site gets
+its folded value, and a path that has to pass through it to go further is
+a cycle. Which site holds the cut follows the walk, which runs from the
+root in member order, so a document gives the same cuts every time it is
+folded, and reordering its members can move them.
+
+### Several documents
+
+`site.At(path, doc)` and `site.Locate(path, doc)` reach a location in
+another document, named by a key the host chooses. The fold asks
+`Load(doc, site)` for that document's raw root once per key; `ok` false
+is a document it cannot have, and the location is reported unresolved,
+while an error stops the fold. Deciding what a key may name, and fetching
+it, belongs to the host. Every document's root starts from `K`, and
+`Inherit` is given `site.Doc`. Memory, cycles, and sharing work across
+documents as within one, and every report row names the document of the
+site (`Doc`) and of the location it named (`TargetDoc`). A row is reported
+once however often a resolver asks.
+
+### Token operators, positions, and depth
+
+An operator node met in the walk (what `IsOp` reports) is reduced
+through the same `Evaluate` unless `Tokens` is `jsonic.Bool(false)`, so
+one fold handles `+` and `$ref`; `op.Key` is what differs, and each
+term is folded at its own path first. With `Tokens` false an operator node
+comes out as an operator node of the same kind, its terms folded.
+
+`Positions` gives sites their opening token. `RecordPositions(j)`
+subscribes to the engine's post-process rule event on `j`, records the
+opening token of every map and operator node a parse builds, and returns
+the function `Fold` takes. Go has no weak map, so each parse records into
+a table of its own, keyed by the container's pointer, and the function
+answers from the table of the last parse on `j` that finished, which it
+keeps, with the containers it names, until the next one finishes. A
+`[]interface{}` list has no pointer that stays put while it grows, so
+only maps and operator nodes have a position. `Positions: true` is
+accepted only in deferred mode, where the fold reads the table of the
+parse it is folding; `Fold` refuses it, and any value that is neither
+`true` nor a function, with `fold_option`.
+
+`MaxDepth` bounds how deep the walk goes. It counts nesting and reference
+hops together; past it the fold returns a `FoldError` coded `fold_depth`.
+A Go value that contains itself is folded until it goes past `MaxDepth`.
+Running out of stack is fatal in Go rather than an error, so `MaxDepth`
+is the only guard: keep it within what a stack can hold, as the default
+of 1000 is.
+
+### Fold errors
+
+`FoldError` carries `Code`, and `Doc`, `At`, `TargetDoc` and `Target`
+where they apply. Its message, `Error()`, starts `expr fold: ` and quotes
+member names JSON-escaped and cut short, since they are document content.
+
+| Code | Returned when |
+|---|---|
+| `fold_cycle` | a cycle is met under `Cycle: "error"` |
+| `fold_depth` | nesting and references go past `MaxDepth` |
+| `fold_inherit` | `Inherit` returns a nil bag, or folds below its own map |
+| `fold_key` | two key operators name one member, or one names none |
+| `fold_option` | `Positions: true` is given to `Fold`, `Positions` is neither `true` nor a function, `Evaluate` is missing, or the `"fold"` option is no `FoldOptions` |
+
+These are the layer's own codes, not engine error codes: they join the
+engine's catalogue and the plugin descriptor when the Rust port carries
+the layer as well.
+
+### Deferred mode
+
+With the `"fold"` option set, the plugin runs the same fold on the
+finished root before `Parse` returns, through the engine's post-process
+rule event, on the last pass of the parse: a close at depth 0 whose
+alternate is nil (a rule with no close alternates) or neither pushes,
+replaces nor failed, outside any probe, and not a close that recovery
+forced. The fold writes the node of the rule that pass belongs to, which
+is the node `Parse` returns, so a start rule replaced on the way is
+followed. The plugin's own operator table is the one folded with,
+whatever `FoldOptions.Op` holds.
+
+A parse that fails is not folded. The engine reports a failed pass in
+three ways the filter reads: an alternate that matched none, an
+alternate that matched and then raised (the error is on the context),
+and, with recovery off, a lexer error or a token left over after the
+last pass, which fail the parse once the rule loop ends. Under the
+engine's error recovery a recovered value is folded once, when its root
+closes; a recovered parse whose root never closes is not folded.
+
+A fold failure surfaces from `Parse` as a `*jsonic.JsonicError` (the
+engine's `TabnasError`) with the fold's code and the `FoldError`'s
+message as its `Detail`: the plugin panics it as a `TabnasError`, whose
+code the engine keeps. Any other error a callback returns arrives coded
+`internal`, its text kept, since the engine reports any other panic that
+way. The instance keeps working.
 
 ## S-expression output shape
 

@@ -59,7 +59,9 @@ lower-casing every Go key does **not** make the two key sets equal.
 TypeScript additionally carries `OP_MARK` and a `token` object (`sI`,
 `rI`, `cI`, `len`, `isToken`, `why`); Go additionally carries
 `Preval.Allow`. So a consumer serialising the parse cannot read both ports
-with one shape.
+with one shape. The tree layer's two fields are on both sides, `key` and
+`dynamic` in TypeScript and `Key` and `Dynamic` in Go, so they add nothing
+to the difference but the case of their names.
 
 ### Where the pins measure
 

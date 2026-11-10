@@ -483,9 +483,9 @@ short, since they are document content.
 | `fold_key` | two key operators name one member, or one names none |
 | `fold_option` | `positions: true` is given outside deferred mode |
 
-These are the layer's own codes, not engine error codes: the layer is
-TypeScript only for now, and they join the engine's catalogue and the
-plugin descriptor when the Go and Rust ports carry it.
+These are the layer's own codes, not engine error codes: no runtime
+declares them in its error catalogue, and the Go port raises the same
+ones.
 
 ### Deferred mode
 

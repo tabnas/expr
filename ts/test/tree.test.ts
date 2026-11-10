@@ -300,6 +300,20 @@ describe('fold: second review', () => {
       op: { ...NO_DEFAULTS, ...REF }, fold: { evaluate: () => { throw new Error('resolver: boom') } },
     })
     assert.throws(() => boom.parse('{a:{$ref:"#/b"},b:1}'), /resolver: boom/)
+
+    // A start rule whose last close backtracks over a token leaves it for
+    // the engine's trailing-content check, which fails the parse after the
+    // rule loop: that pass is not folded either.
+    const back = new Tabnas().use(jsonic).use(Expr, {
+      op: { ...NO_DEFAULTS, ...REF }, fold: { evaluate: () => { calls++; throw new Error('folded') } },
+    })
+    const ZZ = back.token.ZZ
+    const CS = back.token.CS
+    back.rule('top', (rs: any) =>
+      rs.open([{ p: 'val' }]).close([{ s: [ZZ] }, { s: [CS], b: 1 }]).bc((r: any) => { r.node = r.child.node }))
+    back.options({ rule: { start: 'top' } })
+    assert.throws(() => back.parse('{a:{$ref:"#/b"},b:1} ]'), (err: any) => 'unexpected' === err.code)
+    assert.equal(calls, 0)
   })
 
 

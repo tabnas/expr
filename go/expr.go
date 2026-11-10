@@ -9,6 +9,7 @@
 package tabnasexpr
 
 import (
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -37,6 +38,18 @@ type OpDef struct {
 	Paren   bool
 	Preval  interface{}
 	Use     interface{}
+
+	// Key marks a key operator: a map that owns the member named by Src
+	// (for example "$ref") is an occurrence, recognised by its shape when
+	// a tree is folded (Fold), never by a token. No fixed token is
+	// registered, so the base grammar's pair rule keeps the key position,
+	// and no binding power applies.
+	Key bool
+
+	// Dynamic marks a key operator that a fold recognises and reports but
+	// never evaluates, such as "$dynamicRef"; its map folds as a plain
+	// map.
+	Dynamic bool
 }
 
 // Op is the full operator description available during parsing and evaluation.
@@ -61,6 +74,8 @@ type Op struct {
 	CTin    int
 	Preval  PrevalDef
 	Use     interface{}
+	Key     bool // a key operator, recognised by a map's shape (see Fold)
+	Dynamic bool // a key operator a fold reports and never evaluates
 }
 
 // PrevalDef specifies paren-preval options.
@@ -74,6 +89,13 @@ type PrevalDef struct {
 type ExprOptions struct {
 	Op       map[string]*OpDef
 	Evaluate func(rule *tabnas.Rule, ctx *tabnas.Context, op *Op, terms []interface{}) interface{}
+
+	// Fold, when set, folds the finished document before Parse returns
+	// (deferred mode): the plugin runs Fold on the last pass of the parse,
+	// with the plugin's own operator table, and never on a parse that
+	// fails. Given in the options map as "fold", a FoldOptions or a
+	// *FoldOptions.
+	Fold *FoldOptions
 }
 
 // _unfilled is a sentinel value for pre-allocated but unfilled expression slots.
@@ -228,6 +250,26 @@ func asListRef(node interface{}) *tabnas.ListRef {
 // Expr is the expression parser plugin for jsonic.
 func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	eopts := resolveOptions(opts)
+
+	// The key operators, built whether or not the plugin folds, so a table
+	// with two key operators on one member name is refused here, as the
+	// canonical refuses it when the plugin is installed.
+	keys, err := MakeKeyMap(eopts.Op)
+	if err != nil {
+		return err
+	}
+	if eopts.Fold, err = foldOption(opts); err != nil {
+		return err
+	}
+
+	// Deferred mode: fold the finished root on the last pass of the parse
+	// (see lastPass and deferFold in fold.go).
+	if eopts.Fold != nil {
+		if err := deferFold(j, *eopts.Fold, keys); err != nil {
+			return err
+		}
+	}
+
 	allOps := makeAllOps(j, eopts)
 
 	// Build lookup maps.
@@ -1786,11 +1828,20 @@ func Parse(src string, opts ...map[string]interface{}) (interface{}, error) {
 		defaultOnce.Do(func() { defaultParser = MakeJsonic() })
 		return defaultParser.Parse(src)
 	}
-	j := MakeJsonic(opts...)
+	// Built here rather than through MakeJsonic, so that the plugin's
+	// refusal of its options (two key operators on one member name, or a
+	// "fold" option it cannot take) is returned rather than dropped.
+	j := jsonic.Make()
+	if err := j.Use(Expr, opts[0]); err != nil {
+		return nil, err
+	}
 	return j.Parse(src)
 }
 
 // MakeJsonic creates a jsonic instance configured with the Expr plugin.
+// The plugin returns an error only for options it cannot take (two key
+// operators on one member name, or a "fold" option it cannot take), and
+// MakeJsonic drops it: call j.Use(Expr, opts) to see it.
 func MakeJsonic(opts ...map[string]interface{}) *tabnas.Tabnas {
 	j := jsonic.Make()
 	var pluginOpts map[string]interface{}
@@ -1860,6 +1911,12 @@ func resolveOptions(opts map[string]interface{}) *ExprOptions {
 					if v, ok := defMap["use"]; ok {
 						od.Use = v
 					}
+					if v, ok := defMap["key"].(bool); ok {
+						od.Key = v
+					}
+					if v, ok := defMap["dynamic"].(bool); ok {
+						od.Dynamic = v
+					}
 					eopts.Op[name] = od
 				}
 			}
@@ -1872,6 +1929,22 @@ func resolveOptions(opts map[string]interface{}) *ExprOptions {
 	}
 	addDefaultOps(eopts)
 	return eopts
+}
+
+// foldOption reads the "fold" option: a FoldOptions, a *FoldOptions, or
+// nothing.
+func foldOption(opts map[string]interface{}) (*FoldOptions, error) {
+	switch fold := opts["fold"].(type) {
+	case nil:
+		return nil, nil
+	case FoldOptions:
+		return &fold, nil
+	case *FoldOptions:
+		return fold, nil
+	default:
+		return nil, &FoldError{Code: codeFoldOption,
+			message: fmt.Sprintf("the fold option takes a FoldOptions, not %T", fold)}
+	}
 }
 
 func addDefaultOps(eopts *ExprOptions) {
@@ -2010,6 +2083,13 @@ func makeAllOps(j *tabnas.Tabnas, eopts *ExprOptions) []*Op {
 		if def == nil {
 			continue
 		}
+		// A key operator is no token: it registers no fixed token, so the
+		// base grammar's pair rule keeps the key position. The canonical
+		// builds token operators only from the kind flags, so a definition
+		// that is a key and also has one is both kinds of operator.
+		if def.Key && !def.Prefix && !def.Suffix && !def.Infix && !def.Ternary && !def.Paren {
+			continue
+		}
 		op := &Op{
 			Name:   name,
 			Left:   bindingPower(def.Left, MinSafeInteger),
@@ -2117,14 +2197,15 @@ func Prattify(expr interface{}, op *Op) *tabnas.ListRef {
 // OP_MARK onto a plain object so isOp recognises it; in Go that mark is
 // the *Op type itself, so Opify normalises the operator (filling the
 // derived Terms count when unset, as the parser's own operator builder
-// does) and returns it ready for use as the head of an expression
-// op-array (e.g. with Prattify).
+// does: 2 for a key operator, as MakeKeyMap gives it) and returns it ready
+// for use as the head of an expression op-array (e.g. with Prattify), which
+// IsOp then recognises.
 func Opify(op *Op) *Op {
 	if op.Terms == 0 {
 		switch {
 		case op.Ternary:
 			op.Terms = 3
-		case op.Infix:
+		case op.Infix, op.Key:
 			op.Terms = 2
 		default:
 			op.Terms = 1
