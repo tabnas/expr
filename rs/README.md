@@ -183,8 +183,129 @@ grammar.
 
 Parse errors are the engine's `TabnasError`, re-exported as `ExprError`,
 with `code`, `row`, `col` and a report that shows the offending source.
-This plugin declares no error codes of its own: a malformed expression
-raises one of the base codes the engine and the jsonic grammar define.
+This plugin declares no parse error codes of its own: a malformed
+expression raises one of the base codes the engine and the jsonic grammar
+define. A fold has codes of its own, described next.
+
+## Folding a finished tree
+
+A key operator is an operation spelled as a map, a `$ref` say, rather
+than as a token. `OpDef::key` declares one by the member that marks it,
+and a map that owns that member is an occurrence, recognised by its shape
+when the finished document is folded. The parse itself is unchanged, and
+`fold` hands a resolver the site, the operator and two terms, the
+member's value and a new map of the other members, both already folded:
+
+```rust
+use tabnas::Value;
+use tabnas_expr::{ExprOptions, FoldOptions, OpDef, Seg};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let parser = tabnas_expr::make_with(ExprOptions::new().with_op("ref", OpDef::key("$ref")));
+    let raw = tabnas_expr::parse_with(&parser, r##"{ a: { $ref: "#/b", note: 1 }, b: { c: 2 } }"##)?;
+    assert_eq!(raw.to_string(), r##"{"a":{"$ref":"#/b","note":1},"b":{"c":2}}"##);
+
+    let options = FoldOptions::new(|site, _op, terms| {
+        let Value::String(reference) = &terms[0] else {
+            return Ok(site.node().clone());
+        };
+        let path: Vec<Seg> = reference
+            .trim_start_matches("#/")
+            .split('/')
+            .map(Seg::from)
+            .collect();
+        let hit = site.at(&path, None)?;
+        Ok(match (hit.value, &terms[1]) {
+            (Some(Value::Object(target)), Value::Object(siblings)) => {
+                let mut out = (*target).clone();
+                out.extend(siblings.iter().map(|(name, value)| (name.clone(), value.clone())));
+                Value::object(out)
+            }
+            _ => site.node().clone(),
+        })
+    })
+    .with_op("ref", OpDef::key("$ref"));
+    let out = tabnas_expr::fold(&raw, &options)?;
+    assert_eq!(out.to_string(), r#"{"a":{"c":2,"note":1},"b":{"c":2}}"#);
+    Ok(())
+}
+```
+
+`site.at` folds the location it names first, so a reference to a
+reference resolves, and every site that names one location shares one
+folded value. A hit carries a value only when the location was found and
+is not a cycle. The input is never changed: the result is a new tree.
+
+The rest of the contract is the canonical one, and the TypeScript
+reference documents it in full: `inherit` passes a bag of context down
+from the root, `recognise` lets a host decide that a map owning `$ref` is
+data, `load` reaches another document by a key the host chooses, a
+dynamic key operator is reported and never evaluated, and the report
+lists cycles, unresolved targets, and dynamic sites. A site whose target
+is still being folded closes a cycle, which `at` reports with `cycle`
+set, or which fails the fold under `FoldCycle::Error`.
+
+One resolver can reduce the token operators too, and `op.key` sets the
+two kinds apart. A token operator is recognised only on a live expression
+node, so that fold runs inside `parse_scope`:
+
+```rust
+use tabnas::Value;
+use tabnas_expr::{ExprOptions, FoldOptions, OpDef, Seg};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let parser = tabnas_expr::make_with(ExprOptions::new().with_op("ref", OpDef::key("$ref")));
+    let out = tabnas_expr::parse_scope(&parser, r##"{ a: 1+2, b: { $ref: "#/a" } }"##, |raw| {
+        let options = FoldOptions::new(|site, op, terms| {
+            if op.key {
+                let hit = site.at(&[Seg::from("a")], None)?;
+                return Ok(hit.value.unwrap_or(Value::Null));
+            }
+            Ok(match terms {
+                [Value::Number(left), Value::Number(right)] => Value::Number(left + right),
+                _ => Value::Null,
+            })
+        })
+        .with_op("ref", OpDef::key("$ref"));
+        tabnas_expr::fold(&raw, &options)
+    })??;
+    assert_eq!(out.to_string(), r#"{"a":3,"b":3}"#);
+    Ok(())
+}
+```
+
+Outside the scope a parse is realized, and a realized operator is a plain
+array led by its description. The fold reads that array as data, never
+as an operator, because a document can spell the same array, and reading
+it would let the text of a document choose what the resolver runs.
+
+A fold that fails returns a `FoldError`. For the layer's own failures its
+`code` is `fold_cycle`, `fold_depth`, `fold_inherit` or `fold_key`, and
+`doc`, `at`, `target_doc` and `target` give the location, as pointers
+into the document; member names in its message are escaped and cut
+short, since they are document content. A resolver returns the engine's
+`TabnasError`, and a resolver that fails stops the fold with its error
+kept, unchanged, as the `cause`. `TabnasError::from` turns a `FoldError`
+back into an engine error, which is what lets a resolver use `?` on
+`site.at`, and the fold still knows its own failure when it comes back
+out of a resolver that way.
+
+`max_depth`, 1000 by default, bounds nesting and reference hops, the
+two together. Nesting costs no stack, since the walk over containers keeps
+its own. A reference hop does: a resolver that asks `site.at` enters the
+fold again, and the hops of one chain pile up. `max_stack` bounds that,
+at a megabyte by default, half the stack of a spawned thread, so a long
+chain of references is refused with `fold_depth` rather than overflowing
+the stack, which would end the process. A resolver like the first one
+here makes about 240 hops in a debug build and about 320 in a release
+build within the default. Raise `max_stack` only on a thread that has the
+stack to give.
+
+`site.token()` is the token a token operator occurrence was matched from.
+At a map it is whatever `FoldOptions::positions` returns for the map:
+this crate records no opening tokens of its own, because realizing a
+parse builds every container afresh, so a container in the result was
+never seen by the parse.
 
 ## Install
 
@@ -280,6 +401,25 @@ points where the host language has no way to say what JavaScript says:
 - **Lone surrogates fold to U+FFFD**, and the regular expression dialect
   is the `regex` crate's. Both come from the engine, and both are
   recorded there.
+- **The fold is a function, and only a function.** TypeScript can also
+  fold during the parse, through the plugin's `fold` option, on the
+  engine's rule event. The engine's rule events here observe a parse and
+  cannot replace its result, so this port folds the value a parse
+  returns, and it has no `recordPositions` either: a site's position is
+  the host's to supply.
+- **A token operator folds only inside `parse_scope`,** on the live
+  expression nodes, because a realized operator is plain data here.
+  TypeScript recognises its operator arrays wherever they are.
+- **A long chain of references is refused sooner.** TypeScript follows
+  reference hops up to `maxDepth` for as long as its stack lasts. This
+  port stops at `max_stack`, which by default is about 240 hops in a
+  debug build and 320 in a release build, with `fold_depth` in both
+  cases. Nesting is bounded by `max_depth` alone in both.
+- **A fold error is a value.** `FoldError` carries the code and the
+  location, and an error a resolver returns rides in it unchanged as its
+  `cause`, where TypeScript lets an exception a resolver throws through
+  as it is. The code `fold_option` is TypeScript's refusal of a `positions`
+  option this port cannot express, so a Rust fold never raises it.
 
 ## Build and test
 
@@ -298,12 +438,14 @@ including formatting, Clippy and the lockfile check, run
 The suite runs every shared `../test/spec/*.tsv` fixture, each with the
 operator table its file assumes, the same way the TypeScript and Go
 suites do, and a test fails when a fixture on disk has no runner here.
+The tree layer's fixtures in `../test/tree` are held the same way, each
+with the operator table and the resolver its TypeScript runner uses.
 Beside them are the in-language tests: the Pratt core through its
 exported entry point, comma-operator suppression, the evaluator over a
 small configuration language, the ternary after-close, the instance token
 binding, the serialized shape of a parsed expression, the grammar
 composed with the `tabnas-debug` plugin, thread safety, hostile input,
-instance reuse, and the version sites.
+instance reuse, the fold and its key operators, and the version sites.
 
 ## License
 

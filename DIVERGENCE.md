@@ -272,3 +272,32 @@ It is deliberately NOT in the shared fixtures: a row asserting `cancel`
 would be red in TypeScript and Go, and a row asserting the expression
 would be red in Rust. The rule in [`test/AGENTS.md`](test/AGENTS.md) keeps
 intentional divergences out of `test/spec`.
+
+## The Rust fold refuses a long chain of references sooner
+
+**Not repaired**: it is a crash fix. A resolver that folds its target
+through `site.at` re-enters the fold, so each reference hop costs stack.
+TypeScript follows hops up to `maxDepth` (1000) while its stack lasts,
+and turns a `RangeError` into `fold_depth`; Go grows its stacks. A Rust
+stack overflow ends the process, so the Rust fold measures the stack used
+since the outermost fold on the thread and refuses past
+`FoldOptions::max_stack` (1 MiB by default) with `fold_depth`. Nesting is
+unaffected: the walk over containers is iterative, and only `max_depth`
+bounds it.
+
+Measured with the fixtures' resolver on a default 2 MiB thread, the
+longest chain of references that folds:
+
+| | hops |
+| --- | --- |
+| TypeScript | at least 500 (its depth test folds 500), up to `maxDepth` |
+| Go | up to `MaxDepth` |
+| Rust, debug | 238 |
+| Rust, release | 313 (rustc 1.85) to 324 (1.97) |
+
+A host with more stack raises `max_stack`. Pinned by
+*"on a default thread the stack bound refuses rather than aborts"*
+(`rs/tests/tree_test.rs`), where 500 hops are refused with the stack
+message, and by *"depth: a deep chain or nesting raises fold_depth, never
+a RangeError"* (`ts/test/tree.test.ts`), which folds them. It is not a
+shared fixture, since a row would be red in one runtime.

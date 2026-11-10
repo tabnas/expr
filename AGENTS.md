@@ -83,9 +83,9 @@ There are three implementations that must behave identically — TypeScript
 |---|---|
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/expr` package. Plugin in `src/expr.ts` (single file). Library only — `main: dist/expr.js`, **no CLI bin**. Imports the engine as `@tabnas/parser` and the base grammar as `@tabnas/jsonic`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/expr/go`. Plugin in `go/expr.go`, the tree layer (key operators and `Fold`) in `go/fold.go`. Imports the engine as `github.com/tabnas/parser/go` (`tabnas`) and the base grammar as `github.com/tabnas/jsonic/go` (for jsonic's own `Make`). Tests: `expr_test.go` (shared `.tsv` fixtures + units), `parity_test.go` (prattify/ternary/config cases mirroring the TS suite), `perf_test.go`, `tree_spec_test.go` (the `test/tree/` fixtures) and `fold_test.go` (the tree layer in the language). |
-| [`rs/`](rs/) | Rust port — the `tabnas-expr` crate (library `tabnas_expr`). Plugin in `rs/src/lib.rs`. Depends on sibling `tabnas/parser` and `tabnas/jsonic` checkouts (and `tabnas/support` for tests) through Cargo `path` dependencies. Tests: `rs/tests/parity_test.rs` (the shared `.tsv` fixtures), `expr_test.rs`, `debug_model_test.rs`, `perf_test.rs`, `version_test.rs`. `rs/AGENTS.md` has the crate-specific hazards. |
+| [`rs/`](rs/) | Rust port — the `tabnas-expr` crate (library `tabnas_expr`). Plugin in `rs/src/lib.rs`, the tree layer in `rs/src/tree.rs`. Depends on sibling `tabnas/parser` and `tabnas/jsonic` checkouts (and `tabnas/support` for tests) through Cargo `path` dependencies. Tests: `rs/tests/parity_test.rs` (the shared `.tsv` fixtures), `expr_test.rs`, `debug_model_test.rs`, `perf_test.rs`, `version_test.rs`, `tree_spec_test.rs` (the `test/tree/` fixtures) and `tree_test.rs` (the tree layer in the language). `rs/AGENTS.md` has the crate-specific hazards. |
 | [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures (`input → expected` JSON), run by **all three** runtimes. The precedence/associativity regression oracle. |
-| [`test/tree/`](test/tree/) | The tree layer's fixtures (`fold`, key operators), run by the TypeScript and Go suites until the Rust port carries the layer too; they move into `test/spec/` when it does. See "The tree layer" below. |
+| [`test/tree/`](test/tree/) | The tree layer's fixtures (`fold`, key operators), run by all three suites. Each file folds with its own operator table and resolver, which the generic runners of `test/spec/` do not carry, so they stay here; the parity rule applies all the same. See "The tree layer" below. |
 | [`ts/test/`](ts/test/) | TS suite: `spec.test.ts` (runs the shared `.tsv`s), `expr.test.ts`, `ternary.test.ts`, `debug-model.test.ts`, `doc-examples.test.ts`, `perf.test.ts` (instance-reuse ratio), plus spec generators (`gen-*.mjs`/`gen-spec.js`) and `spec-util.ts`. |
 | [`alchemy/render.alc`](alchemy/render.alc) | **The expression format's render**, an [alchemy](https://github.com/tabnas/alchemy) library whose entry point `expr-render` writes a tree's events as an expression document: jsonic text in which an operation of the default operators, a list whose first element is the operator, is written in infix, a term that would need parentheses (which read back as a group) as a list instead, so the reader builds the same tree, every string and key double-quoted, a negative number with its sign and a number that is not finite as a string. The operator is its source text, as the shared fixtures, the TypeScript and Rust `simplify` and Go's `Simplify` and `SimplifyOrdered` reduce it, or the object that describes it, as the reader's own value carries it (TypeScript's parse, and Rust's realized one), which the render reads by its `src` member. A list led by an object whose `src` the reader would read as any other operator (TypeScript's `simplify` reads any `src` that is not empty, zero, false or null; Go's `SimplifyOrdered` and Rust's `simplify` any string but the empty one), the token a C syntax tree puts first in a node's children among them, has no document that reads back as it, so the render refuses it with `TARGET_VALUE_UNREPRESENTABLE`, naming the object's path in jq's syntax and its `src`. [`test/spec/render.tsv`](test/spec/render.tsv) pins what every reader reads from the documents it writes, and each runtime's translation test the `src` the reader gives each default operator. Every definition is named `expr-...`. The `translate` object in [`tabnas.plugin.json`](tabnas.plugin.json) names it, says the tree has the schema `expr` and any root, and lists what a written document does not keep (`loss`). |
 | [`alchemy/embed.alc`](alchemy/embed.alc) | **The expression format's embedding**, beside the render: `expr-embed` and its reverse `expr-unembed` are both the identity, since the reader builds its trees on jsonic's values and so a plain tree is already an expression tree, a list whose first element describes a default operator by its `src` member included. The one kind of plain tree that is not, a list led by an object with any other `src` the reader reads, is the render's to refuse, since a tree of the schema `expr` reaches the render without the embedding. |
@@ -366,11 +366,13 @@ reproduces:
   rule's after-close is not that event: yaml replaces its `stream` rule on
   directives and markers.
 
-**Port status.** The layer is in TypeScript and Go; Rust does not carry
-it yet. `test/tree/*.tsv` runs in both, from `ts/test/tree-spec.test.ts`
-and `go/tree_spec_test.go` (which also checks that every file there has a
-runner); the files move into `test/spec/` when Rust runs them too, under
-the parity rule. What the Go port settled, and what Rust still has to:
+**Port status.** The layer is in all three runtimes. `test/tree/*.tsv`
+runs in each, from `ts/test/tree-spec.test.ts`, `go/tree_spec_test.go` and
+`rs/tests/tree_spec_test.rs`, and each of the three checks that every file
+there has a runner. The files stay beside `test/spec/` rather than in it,
+because each folds with its own operator table and resolver, which the
+generic runners there do not carry; a row red in one runtime is a parity
+failure all the same. What each port settled:
 
 - **Go.** In `go/fold.go`. `Key` and `Dynamic` on `OpDef` and `Op`; a
   definition that is a key operator and nothing else registers no token.
@@ -407,23 +409,34 @@ the parity rule. What the Go port settled, and what Rust still has to:
   `evaluation`'s `objects` option, since Go's `Evaluation` takes no
   options. The occurrence token on the Go operator node (`ListRef.Meta`)
   is still missing, so a token operator's `Op` carries none.
-- **Rust.** Every public parse realizes operator nodes into plain arrays
-  headed by an operator description, which `is_op` and `evaluation` no
-  longer recognise, so `tokens` cannot be mirrored over the parse result
-  as it stands: either fold inside `parse_scope`, on the arena-live
-  value, or recognise the realized form and rebuild the `Op` from it.
-  Pick one before porting `tokens.tsv`. `fold` returns `Result<Value,
-  TabnasError>` and `FoldEvaluate` returns a `Result` too. The function
-  form only: the rule subscriber observes and cannot replace the result.
-  Positions are open: a container's `Arc` at its open pass need not be the
-  one in the returned tree, since `Arc::make_mut` copies a shared
-  container, so record at the close pass, or by path, and measure it;
-  until then `site.token` is `None` for a key site.
+- **Rust.** In `rs/src/tree.rs`, in the function form only:
+  `fold(&root, &FoldOptions) -> Result<Value, FoldError>`, since the
+  engine's rule subscriber observes a parse and cannot replace its result,
+  so Rust has no deferred mode and no `recordPositions`. A token operator
+  is recognised only on an arena-live expression handle, so a fold that
+  should reduce `+` runs inside `parse_scope`, as `tokens.tsv` does; a
+  realized array (the operator description followed by its terms) is
+  plain data, never an operator, since document data can spell exactly
+  that array. Key operators are recognised by map shape on `Value::Object`
+  and `Value::MapRef`, and every rebuilt container keeps its kind.
+  `FoldError` carries the code and the location and converts to a
+  `TabnasError`; resolvers return `TabnasError`, and a resolver's own
+  error comes back unchanged as `FoldError::cause`. Memory is a trie of
+  locations in one `Vec`, behind one `RefCell` that is never borrowed
+  across a callback, so a resolver can re-enter through `site.at`. The
+  walk over containers is iterative; the re-entry through a resolver, one
+  level per reference hop, is bounded by `max_stack` (1 MiB by default)
+  with `fold_depth`, recorded in `DIVERGENCE.md`. Positions are not
+  recorded: `site.token()` is the occurrence token at a token-operator
+  site and the host's `positions` lookup at a map. `fold_option` is never
+  raised, since the options cannot express `positions: true`.
+  `evaluation`'s `objects` option is ported as `evaluation_with`.
+  `rs/AGENTS.md` has the measurements.
 - **Shape pins.** Adding `key` and `dynamic` to `Op` does not fail the
   `DIVERGENCE.md` pins, which test for particular keys, not the whole set.
-  Go has both (`Key`, `Dynamic`) and the record's prose says so; add the
-  two keys to Rust's `Op::to_value` so its realized description matches
-  the TypeScript JSON.
+  Go has both (`Key`, `Dynamic`) and the record's prose says so. Rust's
+  `Op::to_value` carries `key` and `dynamic` after `preval` and before
+  `token`, as the TypeScript builders list them.
 
 ## debug-model composition test (@tabnas/debug)
 
@@ -809,11 +822,12 @@ check.
 The tree layer's `FoldError` carries codes of its own (`fold_cycle`,
 `fold_depth`, `fold_inherit`, `fold_key`, `fold_option`), pinned by
 `ERROR:<code>` rows in `test/tree/errors.tsv`. They are deliberately not
-engine codes yet: no runtime declares them in `options.error`, and the
-descriptor stays empty, because the Rust port does not carry the layer
-yet and a descriptor code must be declared in every runtime. They join
-the catalogue and the descriptor when it does. Go returns them on a
-`FoldError`, and from a deferred fold as a `TabnasError` with the code.
+engine codes: no runtime declares them in `options.error`, and the
+descriptor lists none. All three runtimes raise the same ones: TypeScript
+and Go on a `FoldError`, Go's deferred fold as a `TabnasError` with the
+code, and Rust on a `FoldError` that converts to a `TabnasError`.
+Declaring them in each catalogue and in the descriptor is a change of its
+own, since a descriptor code must be declared in every runtime.
 
 ## Untrusted input
 

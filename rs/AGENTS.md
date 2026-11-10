@@ -9,7 +9,8 @@ is specific to this crate.
 
 | Path | |
 |---|---|
-| `src/lib.rs` | the whole port: the operator model, the options, the expression arena, the Pratt core, every rule the plugin adds, the evaluator, `realize` / `simplify`, and `plugin` / `plugin_with` / `apply` / `make` / `make_with` / `parse`; and the translation parts, `translate()` (its `embed` and `render`) with `manifest_text` and `render_text`, `include_str!` of the copies in `translate/` |
+| `src/lib.rs` | the port but for the tree layer: the operator model, the options, the expression arena, the Pratt core, every rule the plugin adds, the evaluator, `realize` / `simplify`, and `plugin` / `plugin_with` / `apply` / `make` / `make_with` / `parse`; and the translation parts, `translate()` (its `embed` and `render`) with `manifest_text` and `render_text`, `include_str!` of the copies in `translate/` |
+| `src/tree.rs` | the tree layer: key operators (`make_key_map`, `key_op_of`) and `fold`, with `FoldOptions`, `Site`, `FoldError` and the report; re-exported from the crate root |
 | `translate/` | the crate's copies of `../tabnas.plugin.json` (as `manifest.json`), `../alchemy/render.alc` and `../alchemy/embed.alc`, which a packaged crate needs, written by `npm run embed` from `../ts`; `tests/translate_test.rs` holds them to the files |
 | `tests/parity_test.rs` | every shared `../test/spec/*.tsv` fixture through `tabnas_support::Runner`, each with the operator table its file assumes, plus `every_shared_fixture_is_run`, which reads the fixture directory and fails when a file has no runner here |
 | `tests/expr_test.rs` | in-language behaviour: the Pratt core, comma-operator suppression, the evaluator, the ternary after-close, the instance token binding, the parsed shape, threads, hostile input |
@@ -18,7 +19,9 @@ is specific to this crate.
 | `tests/version_test.rs` | `Cargo.toml` equals `VERSION` equals `ts/package.json` |
 | `tests/translate_test.rs` | the translation parts: the render and the embedding the embedded manifest names are the ones the crate embeds, the manifest's shapes, root, schema and loss lines, every definition of both named `expr-...`, and the `src` the reader's realized value and `simplify` give each default operator, which the render reads |
 | `tests/translate_render_test.rs` | the parts run, where `TABNAS_ALCHEMY` names the `alchemy` command (each test passes having run nothing, and says so, where it does not): the embedding and the render over trees, each document read back with `parse_simplified`, a list led by an object with a `src` the reader reads and no default operator has refused with its path, and every shared fixture's value and realized value written and read back; the Rust half of `ts/test/translate-render.test.ts` |
-| `tests/common/mod.rs` | shared helpers: the spec directory, the per-row parser, failure conversion, number normalization |
+| `tests/tree_spec_test.rs` | every `../test/tree/*.tsv` fixture, each with the operator table and resolver `ts/test/tree-spec.test.ts` gives it, held to its cells byte for byte, plus `every_tree_fixture_is_run`; `tokens.tsv` folds inside `parse_scope` |
+| `tests/tree_test.rs` | the tree layer in the language: the Rust half of `ts/test/tree.test.ts`, and what is this port's own: re-entry from a resolver, a realized operator array as data, `MapRef`, the error type, the stack bound on a default thread |
+| `tests/common/mod.rs` | shared helpers: the spec directory, the per-row parser, failure conversion, number normalization, the canonical JSON writer (`canonical`, `js_number`) both fixture runners hold cells with, and the fold helpers the tree tests share (`resolving`, `pointer`, `no_defaults`) |
 | `README.md` | the crate front page, prose-gated; its `rust` fences are doctests of this crate |
 
 Crate `tabnas-expr`, library `tabnas_expr`. The engine (`tabnas`), the
@@ -185,6 +188,132 @@ reduced a member at a time as its members close and again as a whole once
 it is complete, so a value the evaluator has already produced is returned
 untouched rather than reduced twice. It is keyed by identity (a node's
 own, or a container's pointer and length) and cleared with the arena.
+
+## The tree layer
+
+`src/tree.rs` ports the canonical `fold` and key operators. The contract
+is the one `../AGENTS.md` states under "The tree layer"; these are the
+choices this port made where the contract left room, and the hazards in
+the code.
+
+- **The function form only.** `fold(&root, &FoldOptions)` returns
+  `Result<Value, FoldError>`. There is no deferred mode: the engine's
+  `subscribe_rule_done` observes a parse and cannot replace its result.
+- **Token operators only on arena-live handles.** The walk reduces an
+  expression node through `evaluate` only when `node_id` finds it in the
+  arena, so a fold that should see `+` runs inside `parse_scope`. A
+  realized array, the description object followed by the terms, is plain
+  data and is never read as an operator: a document can spell exactly
+  that array, so recognising it would let input forge an operator. With
+  `tokens` off a node is rebuilt as a NEW arena node around the same
+  `Arc<Op>` and occurrence token, so the caller realizes the result inside
+  the scope. Path index 0 of a live node is its realized description, a
+  leaf the rest of a path reads raw, as the canonical treats its operator
+  object; terms are indices 1 and up. A released handle panics, as
+  `realize` does.
+- **Key operators by map shape** on `Value::Object` and `Value::MapRef`.
+  Siblings, a plain fold and every rebuilt map keep the kind of the map
+  they replace; a `MapRef` keeps its `implicit` flag and `meta`. Lists
+  likewise (`Array` or `ListRef`). The install (`expr()`) builds the key
+  table once to refuse a bad one with a `PluginError` naming `fold_key`,
+  as the canonical refuses it at `use`.
+- **Memory.** A trie of `PNode`s in one `Vec`, addressed by index, the
+  children of a map by member name and of a list by index. Never a
+  pointer string per node (`ptr_of` makes one only for a report row or an
+  error, and keeps it) and never a value's identity: `Arc` identity says
+  nothing about a location, since values are copied on write.
+- **Re-entry.** Every resolver can call back into the fold through its
+  `Site` (`at`, `locate`, `plain`, `k`) while the fold is inside an outer
+  callback. All state is one `RefCell<State>` and NO borrow of it may be
+  held across a callback. The trap is a temporary in an `if let` or
+  `match` scrutinee, which lives to the end of the whole statement: bind
+  the cloned value to a local first, then call. A double borrow is a
+  panic, not a compile error.
+- **Errors.** `FoldError` is a boxed struct, eight bytes, with the code,
+  the message and the location, and `cause` for a callback's own
+  `TabnasError`. Callbacks return `TabnasError`, as decided for the API,
+  so a fold failure raised inside `site.at` reaches the fold again as a
+  `TabnasError` through the resolver's `?`. `raise` records each of the
+  layer's own failures in `State::failure`, and `callback_error`
+  recognises it by code and message coming back out of a callback and
+  restores the located `FoldError`; anything else is the callback's, kept
+  unchanged as `cause`, and `TabnasError::from` hands it back as it was.
+  `fold_option` is declared and never raised: it is TypeScript's refusal
+  of `positions: true`, which these options cannot express. An `inherit`
+  result is a bag when it is a container, as the canonical's
+  `typeof === 'object'` admits.
+- **Hosts pay `clippy::result_large_err`.** `TabnasError` is 680 bytes,
+  and every resolver closure returning it trips the lint, so the test
+  files allow it at their roots as the crate does.
+
+### The stack
+
+A stack overflow aborts the process, so the fold may not recurse with
+the document. The walk over containers is iterative (`walk`, `descend`,
+`finish`, with the containers being folded as `Frame`s on a heap
+`Vec`), so nesting costs heap. What still recurses is the re-entry: one
+reference hop is `walk` → `finish` → `reduce_site` → `call_evaluate` →
+the resolver → `Site::at` → `at` → `reach` → `walk`. Measured per hop,
+with a resolver that records the stack address and calls the fixtures'
+`resolving`: about 4.5 KB in a debug build and 3.3 KB in a release build,
+of which the resolver's frames are about 1.5 KB in release, since a `?`
+into a `TabnasError` result needs room for one.
+
+The frames on that path are kept small on purpose, and a change there is
+to be re-measured. `at` takes its steps in `find`, whose frame is gone
+before the walk starts; `finish` reads the frame in place, as `pop` would
+move it; `call_evaluate` inspects the 680-byte callback result by
+reference, since moving it into a conversion copied it twice more; the
+operator frame does not carry the 192-byte `Token`. Together that took a
+hop from 10 KB to 4.5 KB in debug and from 4.3 KB to 3.3 KB in release.
+
+`guard` refuses with `fold_depth` once the stack has grown
+`FoldOptions::max_stack` bytes (a megabyte, `FOLD_MAX_STACK`) from where
+the OUTERMOST fold on the thread started (`STACK_BASE`, so a fold inside a
+resolver shares its caller's budget). It runs at every entry the re-entry
+passes through: `walk`, `at`, `locate`, `plain_of`, `k_of` and a `load`.
+On a 2 MiB thread with the defaults, 238 hops fold in a debug build, and
+313 (rustc 1.85, the MSRV) or 324 (1.97) in a release build; 3,000 nested
+maps fold with `max_depth` raised.
+A `Value` itself drops and displays recursively, so a document nested
+deeper than a few thousand levels aborts on a 2 MiB thread when it is
+dropped, whatever the fold does (in a debug build 4,000 levels dropped and
+8,000 aborted), and far less deep when it is displayed: a test that
+printed the 998-deep result of a fold aborted under rustc 1.85, so the
+test reads that result down iteratively instead.
+`tree_test.rs` holds the canonical depth test to `max_depth` on a 64 MiB
+thread with `max_stack` raised, and the default bound on a 2 MiB thread.
+
+### Positions
+
+`site.token()` is the occurrence token at a token operator site and the
+host's `positions` lookup at a map; this crate records no opening tokens.
+Measured before deciding, with a rule-event subscriber logging each
+container's `Arc` pointer: inside `parse_scope` the `Arc` a container had
+at its open pass was the one in the returned tree for every container of
+the value tree probed (maps, lists, an implicit map), and a map inside an
+expression, which the arena holds, kept its `Arc` from its open pass to
+its close. But `realize`, which `parse`, `parse_with` and
+`parse_simplified` apply, rebuilds every container, so no pointer
+recorded during a parse survives into what they return; and the engine's
+`unwrap_undefined` rebuilds every container whenever the tree holds an
+`Undefined`. A table keyed by pointer must also pin each container
+against address reuse, and a clone pinned at the open pass would make the
+next `Arc::make_mut` copy the map and change the identity being recorded
+(reasoned from `make_mut`, not measured). Recording at the close pass
+instead meets `pair` closing before `map` (measured), so "first close
+wins" records the key's token rather than the brace. And a table hung on
+an instance grows across parses and is shared between threads. A port of
+`recordPositions` that works on `parse_scope` values only is possible; it
+was not worth those hazards without a host asking for it.
+
+### Also in this change
+
+`evaluation_with` and `EvaluationOptions { objects }` port the
+canonical's `evaluation(..., { objects })`, which reduces a map member
+by member into a new map, and the canonical's rule that only a value a
+reduction PRODUCED is marked evaluated: a map passed through is not, so a
+later reduction with `objects` on still reaches the operators inside it.
 
 ## The operator table is ordered
 

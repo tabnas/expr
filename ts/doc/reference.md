@@ -484,8 +484,8 @@ short, since they are document content.
 | `fold_option` | `positions: true` is given outside deferred mode |
 
 These are the layer's own codes, not engine error codes: no runtime
-declares them in its error catalogue, and the Go port raises the same
-ones.
+declares them in its error catalogue, and the Go and Rust ports raise the
+same ones.
 
 ### Deferred mode
 
