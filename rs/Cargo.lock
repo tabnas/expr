@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "tabnas-expr"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "indexmap",
  "serde_json",
