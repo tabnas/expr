@@ -113,7 +113,7 @@ and `crates-release.yml` rewrites the paths only in the copy it publishes.
   the linked checkouts still resolve. A plain `npm i` resolves them all
   from the npm registry. `engines.node` is `">=24"`.
 - Go: `go/go.mod` requires `github.com/tabnas/jsonic/go` (currently
-  `v0.7.11`), `github.com/tabnas/parser/go` (`v0.12.16`) and
+  `v0.7.11`), `github.com/tabnas/parser/go` (`v0.12.20`) and
   `github.com/tabnas/support/go` (`v0.3.9`), with `json/go` (`v0.5.20`)
   as an indirect dep, all resolved from the Go module proxy. `go/expr.go`
   imports the engine as `tabnas` and names the engine's types and values
@@ -393,7 +393,7 @@ failure all the same. What each port settled:
   finished, and the deferred mode's `Positions: true` from the parse being
   folded. A `[]any` list has no identity that survives its growth, so it
   has no position. The deferred filter reads `RuleDone.Probe`, which the
-  parser Go module has from v0.12.12 (`go/go.mod` requires v0.12.16, the
+  parser Go module has from v0.12.12 (`go/go.mod` requires v0.12.20, the
   latest release). Two failures reach a Go subscriber where
   TypeScript's reaches it as `alt.err`, and the filter reads both: an
   alternate that matched and then raised leaves `ctx.ParseErr` set, and,
