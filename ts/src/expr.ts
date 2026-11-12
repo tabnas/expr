@@ -60,6 +60,16 @@ type OpDef = {
   prefix?: boolean
   suffix?: boolean
   infix?: boolean
+
+  // A ternary with a binding power on its left (`left`) is placed as an
+  // infix operator is, its middle term between its two tokens and its
+  // last term an operand on its right (`right`): `x = a ? b : c` is
+  // `x = (a ? b : c)` where the ternary binds tighter than `=`, and an
+  // operator after the last term binds into it, or takes the whole
+  // ternary, by the same comparison. The middle term is a whole
+  // expression of its own, in which a comma is the comma operator even
+  // where the context separates on commas. A ternary with no `left`
+  // takes the whole expression before it, and the whole one after it.
   ternary?: boolean
   paren?: boolean
   preval?: {
@@ -132,6 +142,14 @@ type ExprOptions = {
   // engine's `unexpected`. A document's own implicit list, outside any
   // expression, and the items of a list or a map are unchanged.
   juxtapose?: boolean
+
+  // The value tokens of a host grammar that lexes its own (an identifier,
+  // a number), by name, beside jsonic's text, number, string and keyword
+  // values. With `juxtapose: false`, one of them after a value or an
+  // expression is refused, with the engine's `unexpected`, wherever it
+  // stands: an expression never ends at one, and the rule the expression
+  // is in never sees it. The items of a list or a map are not exempt.
+  values?: string[]
 }
 
 // Full operator description (provided for evaluation).
@@ -446,6 +464,16 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
     .filter((op: any) => 1 === op.use.ternary.opI)
     .map((op: any) => op.tin)
 
+  // The ternaries with a binding power, placed as an infix operator is
+  // (see OpDef.ternary), by their first and second tokens.
+  const TERN0B = values(ternaryTM)
+    .filter((op: any) => 0 === op.use.ternary.opI && boundTernary(op))
+    .map((op: any) => op.tin)
+  const TERN1B = values(ternaryTM)
+    .filter((op: any) => 1 === op.use.ternary.opI && boundTernary(op))
+    .map((op: any) => op.tin)
+  const hasBoundTernary = 0 < TERN0B.length && 0 < TERN1B.length
+
   const OP = [...new Set(parenOps.map((pdef: Op) => pdef.otin as Tin))]
   const CP = [...new Set(parenOps.map((pdef: Op) => pdef.ctin as Tin))]
 
@@ -516,7 +544,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
     const parent = r.parent
     const node: any = parent?.node
     return null != parent && 'expr' === parent.name && isOp(node) &&
-      !isTernaryOp(node) && !isParenOp(node) ? node[0] : undefined
+      !isUnboundTernaryOp(node) && !isParenOp(node) ? node[0] : undefined
   }
 
   // Whether a bound preval paren takes the value before it, compared as a
@@ -551,8 +579,16 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
   // Values side by side. A token that starts a value, where the one before
   // has ended.
   const noJuxtapose = false === options.juxtapose
+  // A host grammar's own value tokens (see ExprOptions.values).
+  const HOSTVAL: Tin[] = (options.values || [])
+    .map((name: string) => tn.token(name) as Tin)
+    .filter((tin: Tin) => 'number' === typeof tin)
+  const refuseHostVal = noJuxtapose && 0 < HOSTVAL.length
+  const hostValue = (tin: Tin) => refuseHostVal && HOSTVAL.includes(tin)
+
   const startsValue = (tin: Tin) =>
-    VAL.includes(tin) || tn.token.OB === tin || tn.token.OS === tin ||
+    VAL.includes(tin) || HOSTVAL.includes(tin) ||
+    tn.token.OB === tin || tn.token.OS === tin ||
     OP.includes(tin) || PREFIX.includes(tin)
 
   rule('val', (rs: RuleSpec) => {
@@ -660,6 +696,19 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             0 < (r.n.no_comma_op || 0) && r.c0?.src === ',',
           b: 1,
           g: 'expr,no-comma-op-bail',
+        }
+        : NONE,
+
+      // A ternary with a binding power follows a term as an infix
+      // operator does: the first term's val becomes the expression, and a
+      // later term's ends for the expression it belongs to.
+      hasBoundTernary
+        ? {
+          s: [TERN0B],
+          b: 1,
+          n: { expr_prefix: 0, expr_suffix: 0 },
+          r: (r: Rule) => (!r.n.expr ? 'expr' : ''),
+          g: 'expr,expr-ternary,expr-ternary-bound',
         }
         : NONE,
 
@@ -779,6 +828,16 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         b: 1,
         g: 'expr,list,val,imp,space,top',
       },
+
+      // A host grammar's value after this one, with `juxtapose: false`:
+      // values side by side, refused.
+      refuseHostVal
+        ? {
+          s: [HOSTVAL],
+          e: (r: Rule) => r.c0,
+          g: 'expr,expr-juxtaposed',
+        }
+        : NONE,
     ])
   })
 
@@ -972,7 +1031,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             // with a stray hole + duplicated operand). Start a fresh
             // operand expression for those (mirrors the infix guard).
             if (isOp(r.parent.node)
-              && !isTernaryOp(r.parent.node)
+              && !isUnboundTernaryOp(r.parent.node)
               && !isParenOp(r.parent.node)) {
               r.node = prattify(r.parent.node, op, 'expr-prefix')
 
@@ -1001,7 +1060,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             const op = makeOp(r.o0, infixTM)
 
             // Second and further operators.
-            if (isOp(parent.node) && !isTernaryOp(parent.node)) {
+            if (isOp(parent.node) && !isUnboundTernaryOp(parent.node)) {
               // console.log('INFIX-A', r.i, p(r.node), parent.i, p(parent.node))
               r.node = prattify(parent.node, op, 'expr-infix-more')
               // console.log('INFIX-B', r.i, p(r.node), parent.i, p(parent.node))
@@ -1019,6 +1078,59 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             }
           },
           g: 'expr,expr-infix',
+        }
+        : NONE,
+
+      // A ternary with a binding power, placed as an infix operator is:
+      // its first term is as much of the expression before it as binds
+      // tighter than its `left`. Its middle term is a whole expression of
+      // its own, up to the second token, pushed here; the close below
+      // takes the second token and pushes its last term.
+      hasBoundTernary
+        ? {
+          s: [TERN0B],
+          p: 'val',
+          n: { expr: 1, expr_prefix: 0, dlist: 1, dmap: 1 },
+          a: (r: Rule) => {
+            const prev = r.prev
+            const parent = r.parent
+            const op = makeOp(r.o0, ternaryTM)
+
+            if (isOp(parent.node) && !isUnboundTernaryOp(parent.node)) {
+              r.node = placeInfix(parent.node, op)
+            }
+            else if (isOp(prev.node)) {
+              r.node = placeInfix(prev.node, op)
+              r.parent = prev
+            }
+            else {
+              r.node = prior(r, prev, op, 'expr-ternary')
+            }
+
+            // The middle term is a new expression, bounded by the two
+            // tokens as a group is by its parens: its counters start
+            // again (a comma there is the comma operator), and those of
+            // this expression come back for the last term.
+            r.u.expr_tern_name = op.name
+            r.u.expr_tern_step = 1
+            r.u.expr_tern_n = {
+              expr_paren: r.n.expr_paren,
+              expr_sep: r.n.expr_sep,
+              expr_ternary: r.n.expr_ternary,
+            }
+            r.n.expr = 0
+            r.n.expr_paren = 0
+            r.n.expr_sep = 0
+            r.n.expr_ternary = 1
+
+            // The middle term's val starts with no node, as a paren's
+            // content does: a rule is handed its parent's node, and this
+            // one's is the ternary, whose next term the middle term is
+            // not placed as. The before-close puts it back.
+            r.u.expr_tern_node = r.node
+            r.node = undefined
+          },
+          g: 'expr,expr-ternary,expr-ternary-bound',
         }
         : NONE,
 
@@ -1050,6 +1162,14 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         : NONE,
     ])
 
+      // A ternary with a binding power, back from its middle term, has its
+      // node back (see the open alternate above).
+      .bc(false, (r: Rule) => {
+        if (1 === r.u.expr_tern_step && undefined === r.node) {
+          r.node = r.u.expr_tern_node
+        }
+      })
+
       .bc((r: Rule) => {
         const addterm =
           isOp(r.node)
@@ -1063,6 +1183,36 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
       })
 
       .close([
+        // The second token of a ternary with a binding power, after its
+        // middle term: its last term follows, an operand of this
+        // expression, with this expression's counters back.
+        hasBoundTernary
+          ? {
+            s: [TERN1B],
+            c: (r: Rule) => 1 === r.u.expr_tern_step &&
+              r.u.expr_tern_name === ternaryTM[r.c0.tin].name,
+            p: 'val',
+            a: (r: Rule) => {
+              Object.assign(r.n, r.u.expr_tern_n)
+              r.n.expr = 1
+              r.n.expr_prefix = 0
+              r.n.expr_suffix = 0
+              r.u.expr_tern_step = 2
+            },
+            g: 'expr,expr-ternary,expr-ternary-bound',
+          }
+          : NONE,
+
+        // Anything else after its middle term: the ternary is unfinished,
+        // and refused there.
+        hasBoundTernary
+          ? {
+            c: (r: Rule) => 1 === r.u.expr_tern_step,
+            e: (_r: Rule, ctx: Context) => ctx.t0,
+            g: 'expr,expr-ternary,expr-ternary-bound,unfinished',
+          }
+          : NONE,
+
         // A group the table's cast accepts: the expression goes on as a
         // cast whose operand follows (the open alternate above), so this
         // close keeps n.expr and nothing evaluates the group yet.
@@ -1198,12 +1348,53 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           }
           : NONE,
 
+        // A ternary with a binding power after this expression, placed
+        // as an infix operator is.
+        hasBoundTernary
+          ? {
+            s: [TERN0B],
+            c: (r: Rule) => !r.n.expr_prefix,
+            b: 1,
+            r: 'expr',
+            g: 'expr,expr-ternary,expr-ternary-bound',
+          }
+          : NONE,
+
         hasTernary
           ? {
             s: [TERN0],
             c: (r: Rule) => !r.n.expr_prefix,
             b: 1,
             r: 'ternary',
+            g: 'expr,expr-ternary',
+          }
+          : NONE,
+
+        // A ternary after a prefix expression: complete the prefix first,
+        // as for an infix or a suffix, and leave the ternary to the
+        // expression the prefix belongs to, which takes it as a whole
+        // (`-a ? b : c` is `(-a) ? b : c`). The expression goes on, so
+        // this close keeps n.expr and nothing evaluates it here. Without
+        // it, inside a paren, `(-a ? b : c)`, the `?` reached the implicit
+        // list below and was refused.
+        hasTernary
+          ? {
+            s: [TERN0],
+            c: (r: Rule) => !!r.n.expr_prefix,
+            b: 1,
+            g: 'expr,expr-ternary,expr-prefix',
+          }
+          : NONE,
+
+        // The `:` of a ternary whose middle term this expression is: the
+        // expression ends there, and the ternary takes the `:`. Without
+        // it, inside a paren, `(a ? b + c : d)` and `(a ? -b : c)`, the
+        // `:` reached the implicit list below and was refused.
+        hasTernary
+          ? {
+            s: [TERN1],
+            c: (r: Rule) => !!r.n.expr_ternary,
+            b: 1,
             g: 'expr,expr-ternary',
           }
           : NONE,
@@ -1261,8 +1452,10 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           g: 'expr,list,val,imp,space',
         },
 
-        // Expression ends on non-expression token.
+        // Expression ends on non-expression token, but never at a host
+        // grammar's value with `juxtapose: false`, which is refused here.
         {
+          c: (_r: Rule, ctx: Context) => !hostValue(ctx.t0.tin),
           n: { expr: 0 },
           g: 'expr,expr-end',
         },
@@ -1565,7 +1758,8 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
 
         // End of ternary.
         {
-          c: (r: Rule) => 0 < r.d && 2 === r.u.expr_ternary_step,
+          c: (r: Rule, ctx: Context) =>
+            0 < r.d && 2 === r.u.expr_ternary_step && !hostValue(ctx.t0.tin),
           a: (r: Rule) => {
             r.node.push(r.child.node)
           },
@@ -1602,11 +1796,10 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           // replace them all with the structured CST so ctx.root().node
           // — whichever one jsonic returns — reflects the evaluated form.
           let cur: any = r
-          while (cur) {
+          while (cur && ctx.NORULE !== cur) {
             cur.node = out
             cur = cur.prev
           }
-          if (r.parent) r.parent.node = out
         })
     })
   }
@@ -1899,6 +2092,17 @@ function implicitTernaryAction(r: Rule, _ctx: Context, a: AltMatch) {
 
 function isParenOp(node: any) {
   return isOpKind('paren', node)
+}
+
+// A ternary operator with a binding power (see OpDef.ternary).
+function boundTernary(op: any): boolean {
+  return null != op && true === op.ternary && Number.MIN_SAFE_INTEGER !== op.left
+}
+
+// A ternary operator with no binding power, whose rule builds its node
+// apart from the expression's own operators.
+function isUnboundTernaryOp(node: any) {
+  return isTernaryOp(node) && !boundTernary(node[0])
 }
 
 function isTernaryOp(node: any) {
@@ -2811,51 +3015,61 @@ Expr.defaults = {
 
 // Pratt algorithm embeds next operator.
 // NOTE: preserves referential integrity of root expression.
-function prattify(expr: any, op?: Op, whence?: string): any[] {
-  // console.log('PRATT-START', whence, p(expr), op?.name)
+// Place an operator that follows an expression and takes a term on each
+// side, by its binding powers: an infix operator, or a ternary with a
+// binding power, whose first term is as much of the expression as binds
+// tighter. Returns the node the operator heads, `[op, term]`.
+function placeInfix(expr: any, op: Op): any[] {
+  for (; ;) {
+    const expr_op = expr[0]
 
+    // op is lower
+    if (expr_op.suffix || op.left <= expr_op.right) {
+      updateExprNode(expr, op, dupNode(expr))
+      return expr
+    }
+
+    // op is higher
+    const end = expr_op.terms
+    if (isOp(expr[end]) && expr[end][0].right < op.left) {
+      expr = expr[end]
+      continue
+    }
+    return (expr[end] = updateExprNode([], op, expr[end]))
+  }
+}
+
+
+function prattify(expr: any, op?: Op, _whence?: string): any[] {
+  // The drilling is a loop, one level of the expression's last terms at a
+  // time, so a long right-leaning chain (`a=b=...=a`) does not grow the
+  // call stack with its length.
   let out = expr
-  let expr_op = expr[0]
 
   if (op) {
     if (op.infix) {
-      // op is lower
-      if (expr_op.suffix || op.left <= expr_op.right) {
-        updateExprNode(expr, op, dupNode(expr))
-      }
-
-      // op is higher
-      else {
-        const end = expr_op.terms
-
-        if (isOp(expr[end]) && expr[end][0].right < op.left) {
-          out = prattify(expr[end], op, 'prattify-infix')
-          // console.log('PRATT-INFIX-H0', end, out)
-        }
-        else {
-          out = expr[end] = updateExprNode([], op, expr[end])
-          // console.log('PRATT-INFIX-H1', end, out)
-        }
-      }
+      out = placeInfix(expr, op)
     }
     else if (op.prefix) {
-      out = expr[expr_op.terms] = updateExprNode([], op)
+      out = expr[expr[0].terms] = updateExprNode([], op)
     }
     else if (op.suffix) {
+      const expr_op = expr[0]
       if (!expr_op.suffix && expr_op.right <= op.left) {
-        const end = expr_op.terms
-
         // NOTE: special case: higher precedence suffix "drills" into
         // lower precedence prefixes: @@1! => @(@(1!)), not @((@1)!)
-        if (
-          isOp(expr[end]) &&
-          expr[end][0].prefix &&
-          expr[end][0].right < op.left
-        ) {
-          prattify(expr[end], op, 'prattify-suffix')
-        }
-        else {
+        for (; ;) {
+          const end = expr[0].terms
+          if (
+            isOp(expr[end]) &&
+            expr[end][0].prefix &&
+            expr[end][0].right < op.left
+          ) {
+            expr = expr[end]
+            continue
+          }
           expr[end] = updateExprNode([], op, expr[end])
+          break
         }
       }
       else {
@@ -2864,7 +3078,6 @@ function prattify(expr: any, op?: Op, whence?: string): any[] {
     }
   }
 
-  // console.log('PRATT-END', whence, p(out), op?.name)
   return out
 }
 
@@ -2875,16 +3088,19 @@ function prattify(expr: any, op?: Op, whence?: string): any[] {
 // paren heads, `[op, target]`, which the paren's content then extends.
 // NOTE: preserves referential integrity of root expression.
 function prattifyPostfix(expr: any, op: Op): any[] {
-  const expr_op = expr[0]
-  if (!expr_op.suffix && expr_op.right <= op.left) {
-    const end = expr_op.terms
-    if (isOp(expr[end]) && expr[end][0].prefix && expr[end][0].right < op.left) {
-      return prattifyPostfix(expr[end], op)
+  for (; ;) {
+    const expr_op = expr[0]
+    if (!expr_op.suffix && expr_op.right <= op.left) {
+      const end = expr_op.terms
+      if (isOp(expr[end]) && expr[end][0].prefix && expr[end][0].right < op.left) {
+        expr = expr[end]
+        continue
+      }
+      return (expr[end] = updateExprNode([], op, expr[end]))
     }
-    return (expr[end] = updateExprNode([], op, expr[end]))
+    updateExprNode(expr, op, dupNode(expr))
+    return expr
   }
-  updateExprNode(expr, op, dupNode(expr))
-  return expr
 }
 
 
@@ -2906,53 +3122,97 @@ function evaluation(
   evaluate: Evaluate,
   opts?: { objects?: boolean },
 ) {
-  let out = expr ?? null
+  // The walk is iterative, terms before the operation that holds them, so
+  // a tree as deep as a long chain of operators (`a+a+...+a`, ten
+  // thousand terms) is reduced without the call stack growing with it.
+  // Each frame is a node whose members are being reduced, and their
+  // results so far.
+  type Frame = { node: any, keys: any[], vals: any[] }
 
-  if (null == expr || EVALUATED.has(expr)) {
+  const reduced = (node: any): any => null == node ? null : node
+
+  // A node that needs no walk: nothing, a value this fold produced, or a
+  // value that is neither an operation, a list nor (with `objects`) a
+  // plain record.
+  const leaf = (node: any): boolean =>
+    null == node || EVALUATED.has(node) ||
+    !(isOp(node) || Array.isArray(node) ||
+      (!!opts && !!opts.objects && isRecord(node)))
+
+  // The members a node's reduction reads, in order.
+  const members = (node: any): any[] =>
+    isOp(node)
+      ? node.slice(1).map((_: any, i: number) => i + 1)
+      : Array.isArray(node) ? node.map((_: any, i: number) => i) : Object.keys(node)
+
+  // A node's reduced value, from its members' reduced values.
+  const finish = (frame: Frame): any => {
+    const node = frame.node
+    let out: any
+    if (isOp(node)) {
+      out = evaluate(rule, ctx, node[0], frame.vals)
+    }
+
+    // An implicit list — `f(1+2, 3+4)`, `1+2, 3+4` — is a plain array, not
+    // an op-array, so it is reduced member by member, into a NEW array:
+    // this is a documented public entry point (`ts/doc/reference.md`) and
+    // the parse-once/evaluate-many workflow in `ts/doc/guide.md` needs a
+    // caller's tree to survive a reduction intact. Where the list under
+    // construction must be updated in place, the expr rule's close hook
+    // does that itself — mutating its own tree is the parser's business,
+    // not this function's.
+    else if (Array.isArray(node)) {
+      out = frame.vals
+    }
+
+    // A plain object is passed through unchanged by default, as the
+    // reference documents; with `objects` on it is reduced member by
+    // member into a NEW object of the same prototype, which is what the
+    // eager `evaluate` option already does for an expression inside a
+    // map.
+    else {
+      out = newRecord(node)
+      frame.keys.forEach((k: string, i: number) => define(out, k, frame.vals[i]))
+    }
+
+    // Only a value this fold PRODUCED is marked: a node passed through
+    // unchanged (a plain object, by default) is not, so a later fold with
+    // `objects` on still reaches the operators inside it.
+    if (null != out && 'object' === typeof out && out !== node) {
+      EVALUATED.add(out)
+    }
     return out
   }
 
-  if (isOp(expr)) {
-    out = evaluate(
-      rule,
-      ctx,
-      expr[0],
-      expr.slice(1).map((term: any) => evaluation(rule, ctx, term, evaluate, opts)),
-    )
+  if (leaf(expr)) {
+    return reduced(expr)
   }
 
-  // An implicit list — `f(1+2, 3+4)`, `1+2, 3+4` — is a plain array, not
-  // an op-array, so the branch above does not reach its members. Reduce
-  // them, into a NEW array: this is a documented public entry point
-  // (`ts/doc/reference.md`) and the parse-once/evaluate-many workflow in
-  // `ts/doc/guide.md` needs a caller's tree to survive a reduction
-  // intact. Where the list under construction must be updated in place,
-  // the expr rule's close hook does that itself — mutating its own tree
-  // is the parser's business, not this function's.
-  else if (Array.isArray(expr)) {
-    out = expr.map((term: any) => evaluation(rule, ctx, term, evaluate, opts))
+  const stack: Frame[] = [{ node: expr, keys: members(expr), vals: [] }]
+  let result: any = undefined
+  while (0 < stack.length) {
+    const top = stack[stack.length - 1]
+    if (top.vals.length < top.keys.length) {
+      const child = top.node[top.keys[top.vals.length]]
+      if (leaf(child)) {
+        top.vals.push(reduced(child))
+      }
+      else {
+        stack.push({ node: child, keys: members(child), vals: [] })
+      }
+      continue
+    }
+    const out = finish(top)
+    stack.pop()
+    if (0 < stack.length) {
+      stack[stack.length - 1].vals.push(out)
+    }
+    else {
+      result = out
+    }
   }
 
-  // A plain object is passed through unchanged by default, as the
-  // reference documents; with `objects` on it is reduced member by member
-  // into a NEW object of the same prototype, which is what the eager
-  // `evaluate` option already does for an expression inside a map.
-  else if (opts && opts.objects && isRecord(expr)) {
-    const o = newRecord(expr)
-    for (const k of Object.keys(expr)) define(o, k, evaluation(rule, ctx, expr[k], evaluate, opts))
-    out = o
-  }
-
-  // Only a value this fold PRODUCED is marked: a node passed through
-  // unchanged (a plain object, by default) is not, so a later fold with
-  // `objects` on still reaches the operators inside it.
-  if (null != out && 'object' === typeof out && out !== expr) {
-    EVALUATED.add(out)
-  }
-
-  // console.log('EXPR-EVAL', expr, '->', out)
-
-  return out
+  return result
 }
 
 
@@ -2992,21 +3252,62 @@ function p(node: any, seen?: WeakSet<any>): any {
 // order-keeping `SimplifyOrdered`, give the same value, and the shared
 // fixtures hold them to it.
 function simplify(value: any): any {
+  // The walk is iterative, members before the node that holds them, so a
+  // tree as deep as a long chain of operators is reduced without the call
+  // stack growing with it. `open` holds the nodes on the path from the
+  // root, so a node that holds itself is written as a circle.
+  if (null == value || 'object' !== typeof value) return value
+  type Frame = { node: any, keys: any[], vals: any[] }
   const open = new Set<any>()
-  const reduce = (node: any): any => {
-    if (null == node || 'object' !== typeof node) return node
-    if (open.has(node)) return '[CIRCLE]'
+  const frame = (node: any): Frame => {
     open.add(node)
-    const out = Array.isArray(node)
-      ? (0 === node.length ? [] : [
-        null != node[0] && node[0].src ? node[0].src : reduce(node[0]),
-        ...node.slice(1).map(reduce),
-      ].filter((term: any) => undefined !== term))
-      : omap(node, ([name, member]: [any, any]) => [name, reduce(member)])
-    open.delete(node)
-    return out
+    return {
+      node,
+      keys: Array.isArray(node) ? node.map((_: any, i: number) => i) : Object.keys(node),
+      vals: [],
+    }
   }
-  return reduce(value)
+  const finish = (f: Frame): any => {
+    const node = f.node
+    open.delete(node)
+    if (Array.isArray(node)) {
+      return f.vals.filter((term: any) => undefined !== term)
+    }
+    let i = 0
+    return omap(node, ([name]: [any, any]) => [name, f.vals[i++]])
+  }
+  const stack: Frame[] = [frame(value)]
+  let result: any = undefined
+  while (0 < stack.length) {
+    const top = stack[stack.length - 1]
+    if (top.vals.length < top.keys.length) {
+      const key = top.keys[top.vals.length]
+      const member = top.node[key]
+      // An operation's head is its operator's source text.
+      if (Array.isArray(top.node) && 0 === key && null != member && member.src) {
+        top.vals.push(member.src)
+      }
+      else if (null == member || 'object' !== typeof member) {
+        top.vals.push(member)
+      }
+      else if (open.has(member)) {
+        top.vals.push('[CIRCLE]')
+      }
+      else {
+        stack.push(frame(member))
+      }
+      continue
+    }
+    const out = finish(top)
+    stack.pop()
+    if (0 < stack.length) {
+      stack[stack.length - 1].vals.push(out)
+    }
+    else {
+      result = out
+    }
+  }
+  return result
 }
 
 

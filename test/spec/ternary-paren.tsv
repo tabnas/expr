@@ -1,0 +1,15 @@
+input	expected
+# A ternary inside a paren: a prefix operator before it, and an
+# operator in its middle term. The table: `ternary` `?` `:` and the
+# defaults.
+(-a?b:c)	["(",["?",["-","a"],"b","c"]]
+(-a ? -b : -c)	["(",["?",["-","a"],["-","b"],["-","c"]]]
+(a?-b:c)	["(",["?","a",["-","b"],"c"]]
+(a?b+c:d)	["(",["?","a",["+","b","c"],"d"]]
+(a?b:c+d)	["(",["?","a","b",["+","c","d"]]]
+(a?b*c:d)	["(",["?","a",["*","b","c"],"d"]]
+(-a+b?c:d)	["(",["?",["+",["-","a"],"b"],"c","d"]]
+(a ? b ? c+1 : d : e)	["(",["?","a",["?","b",["+","c",1],"d"],"e"]]
+(a ? b : c ? d+1 : e)	["(",["?","a","b",["?","c",["+","d",1],"e"]]]
+[-a?b:c]	[["?",["-","a"],"b","c"]]
+[a?-b:c]	[["?","a",["-","b"],"c"]]
