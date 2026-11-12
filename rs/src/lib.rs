@@ -71,7 +71,7 @@ use tabnas::{
 /// orchestrator rewrites all of them, and `tests/version_test.rs` fails
 /// the build if they drift. Mirrors `VERSION` in `ts/src/expr.ts` and
 /// `const VERSION` in `go/expr.go`.
-pub const VERSION: &str = "0.6.0";
+pub const VERSION: &str = "0.6.1";
 
 /// The name this plugin registers under.
 pub const PLUGIN_NAME: &str = "Expr";
