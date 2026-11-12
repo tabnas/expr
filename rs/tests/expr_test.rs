@@ -14,7 +14,8 @@ use std::collections::HashMap;
 use serde_json::json;
 use tabnas::{Context, LexCheckResult, Rule, Tabnas, Value};
 use tabnas_expr::{
-    is_op, opify, prattify, simplify, EvalSite, ExprOptions, Op, OpDef, OpRef, PrevalDef,
+    is_op, opify, prattify, simplify, ContentDef, EvalSite, ExprOptions, Op, OpDef, OpRef,
+    PrevalDef, NODE_LIMIT,
 };
 
 use common::{norm, parse_simplified, parser_for, parser_with};
@@ -701,6 +702,9 @@ fn paren_default_plain_yields() {
 /// complete, and a suffix that drills into a prefix (`-1!`, which is
 /// `-(1!)`) is reduced before the prefix, not after it. The Rust half of
 /// the TypeScript suite's `evaluate-once-in-tree-order`.
+///
+/// (See also `options_repeat_by_replacement` and `options_cast_shape`
+/// below, the halves of the TypeScript suite's tests of the same names.)
 #[test]
 fn evaluate_once_in_tree_order() {
     let calls: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
@@ -1314,4 +1318,131 @@ fn simplify_reads_the_canonical_value() {
             "{src}"
         );
     }
+}
+
+/// A comma list or a chain of postfix operators adds no rule depth with its
+/// length: many items reach the deepest rule one item reaches. The Rust half
+/// of the TypeScript suite's `options-repeat-by-replacement`.
+///
+/// The arguments of a separated call are terms of one node however many
+/// there are, so they run at 10,000, as in TypeScript and Go. The other
+/// forms build a node per item, and an expression here holds at most
+/// [`NODE_LIMIT`] nodes, so they run at 100.
+#[test]
+fn options_repeat_by_replacement() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let preval = |active: bool| PrevalDef {
+        active,
+        required: false,
+        allow: None,
+    };
+    let deepest = |src: &str| -> usize {
+        let mut parser = parser_with(
+            ExprOptions::new()
+                .with_op(
+                    "comma",
+                    OpDef::infix(",", 1_000_000, 1_100_000).with_separator(),
+                )
+                .with_op("dot", OpDef::infix(".", 5_000_000, 5_100_000))
+                .with_op("paren", OpDef::paren("(", ")").with_preval(preval(false)))
+                .with_op(
+                    "call",
+                    OpDef::paren("(", ")")
+                        .with_preval(preval(true))
+                        .with_left(5_000_000)
+                        .with_content(ContentDef {
+                            required: false,
+                            separated: true,
+                        }),
+                ),
+        );
+        let deepest = Arc::new(AtomicUsize::new(0));
+        let seen = deepest.clone();
+        parser.subscribe_rules(move |rule: &mut Rule, _context: &mut Context| {
+            seen.fetch_max(rule.d, Ordering::Relaxed);
+        });
+        if let Err(error) = tabnas_expr::parse_with(&parser, src) {
+            panic!("{:.40}...: {error}", src);
+        }
+        deepest.load(Ordering::Relaxed)
+    };
+    let many = |n: usize, sep: &str, item: &dyn Fn(usize) -> String| {
+        (0..n).map(item).collect::<Vec<_>>().join(sep)
+    };
+    let name = |i: usize| format!("a{i}");
+    let call = |i: usize| format!("({i})");
+    const _: () = assert!(100 < NODE_LIMIT);
+
+    for (what, long, short) in [
+        // The arguments of a separated call.
+        (
+            "arguments",
+            format!("f({})", many(10_000, ", ", &name)),
+            "f(a0)".to_string(),
+        ),
+        // The comma operator in a group.
+        (
+            "comma operator",
+            format!("({})", many(100, ", ", &name)),
+            "(a0, a1)".to_string(),
+        ),
+        // Calls chained on a value, and after an operator they bind looser
+        // than, which places them as postfix operators.
+        (
+            "chained calls",
+            format!("f{}", many(100, "", &call)),
+            "f(0)".to_string(),
+        ),
+        (
+            "postfix calls",
+            format!("x.f{}", many(100, "", &call)),
+            "x.f(0)".to_string(),
+        ),
+    ] {
+        assert_eq!(deepest(&long), deepest(&short), "{what}");
+    }
+}
+
+/// `simplify` writes a cast by its `src`, the group's opener and closer
+/// together, so it reads apart from a call; `accept` sees the group's
+/// content as the parse built it. The Rust half of the TypeScript suite's
+/// `options-cast-shape`.
+#[test]
+fn options_cast_shape() {
+    use std::sync::{Arc, Mutex};
+
+    let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let record = seen.clone();
+    let preval = |active: bool| PrevalDef {
+        active,
+        required: false,
+        allow: None,
+    };
+    let parser = parser_with(
+        ExprOptions::new()
+            .with_op("paren", OpDef::paren("(", ")").with_preval(preval(false)))
+            .with_op("call", OpDef::paren("(", ")").with_preval(preval(true)))
+            .with_op(
+                "cast",
+                OpDef::cast("(", ")", 4_000_000, move |term| {
+                    record.lock().unwrap().push(simplify(term).to_json());
+                    matches!(term, Value::String(name) if "int" == name)
+                }),
+            ),
+    );
+    for (src, want) in [
+        ("(int)a", json!(["()", "int", "a"])),
+        ("int(a)", json!(["(", "int", "a"])),
+        ("(1+2)(a)", json!(["(", ["(", ["+", 1, 2]], "a"])),
+    ] {
+        assert_eq!(
+            norm(parse_simplified(&parser, src).expect("parses")),
+            norm(want),
+            "{src}"
+        );
+    }
+    let seen = serde_json::Value::Array(seen.lock().unwrap().clone());
+    assert_eq!(norm(seen), norm(json!(["int", ["+", 1, 2]])));
 }

@@ -189,6 +189,57 @@ This plugin declares no parse error codes of its own: a malformed
 expression raises one of the base codes the engine and the jsonic grammar
 define. A fold has codes of its own, described next.
 
+## Calls, casts, and separated content
+
+Five options shape a table for a language like C, and each is off unless
+the table sets it. `OpDef::with_left` gives a preval paren a binding
+power, `OpDef::with_content` makes a paren's content required or
+separated, and `OpDef::with_separator` makes an infix operator on `,`
+give way to separators. `OpDef::cast` declares a cast, and
+`ExprOptions::with_juxtapose` refuses values side by side. The
+TypeScript reference, `ts/doc/reference.md`, describes each one.
+
+```rust
+use tabnas::Value;
+use tabnas_expr::{ContentDef, ExprOptions, OpDef, PrevalDef};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let preval = |active| PrevalDef {
+        active,
+        required: false,
+        allow: None,
+    };
+    let parser = tabnas_expr::make_with(
+        ExprOptions::new()
+            .with_op("comma", OpDef::infix(",", 1000000, 1100000).with_separator())
+            .with_op("dot", OpDef::infix(".", 5000000, 5100000))
+            .with_op("paren", OpDef::paren("(", ")").with_preval(preval(false)))
+            .with_op(
+                "call",
+                OpDef::paren("(", ")")
+                    .with_preval(preval(true))
+                    .with_left(5000000)
+                    .with_content(ContentDef {
+                        required: false,
+                        separated: true,
+                    }),
+            )
+            .with_op(
+                "cast",
+                OpDef::cast("(", ")", 4000000, |term| {
+                    matches!(term, Value::String(name) if "int" == name)
+                }),
+            )
+            .with_juxtapose(false),
+    );
+    let read = |src| tabnas_expr::parse_simplified(&parser, src).map(|value| value.to_string());
+    assert_eq!(read("a.b(1, 2)")?, r#"["(",[".","a","b"],1,2]"#);
+    assert_eq!(read("(int)a")?, r#"["()","int","a"]"#);
+    assert!(read("f(a b)").is_err());
+    Ok(())
+}
+```
+
 ## Folding a finished tree
 
 A key operator is an operation spelled as a map, a `$ref` say, rather

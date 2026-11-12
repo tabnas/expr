@@ -4,6 +4,7 @@ package tabnasexpr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	jsonic "github.com/tabnas/jsonic/go"
+	tabnas "github.com/tabnas/parser/go"
 	support "github.com/tabnas/support/go"
 )
 
@@ -54,6 +56,16 @@ func holdToCanonicalJSON(t *testing.T, path string, j *jsonic.Jsonic) {
 		t.Fatal(err)
 	}
 	for _, row := range spec.Rows {
+		// A refusal is held to its code, which is all its cell says.
+		if support.IsErrorExpect(row.Col(1)) {
+			want, _ := support.ErrorCode(row.Col(1))
+			_, err := j.Parse(row.Unesc(0))
+			var te *tabnas.TabnasError
+			if err == nil || !errors.As(err, &te) || te.Code != want {
+				t.Errorf("%s: not refused with %s: %v", row.Where(), want, err)
+			}
+			continue
+		}
 		value, err := j.Parse(row.Unesc(0))
 		if err != nil {
 			t.Errorf("%s: %v", row.Where(), err)
@@ -248,6 +260,98 @@ func TestSpecParenSharedOpener(t *testing.T) {
 		"evaluate": namedEvaluate,
 	})
 	runSpec(t, "paren-shared-opener.tsv", j)
+}
+
+// cOptions names the options of #105 a file switches on, over the small
+// C every options-*.tsv file shares: Left on the preval parens, a cast, a
+// separated call content beside a separator comma, juxtapose false, and a
+// required group content.
+type cOptions struct {
+	left, cast, separated, refuseJuxtaposed, required bool
+}
+
+func cLike(on cOptions) *jsonic.Jsonic {
+	comma := map[string]interface{}{
+		"src": ",", "infix": true, "left": 1000000, "right": 1100000,
+	}
+	if on.separated {
+		comma["separator"] = true
+	}
+	paren := map[string]interface{}{
+		"paren": true, "osrc": "(", "csrc": ")",
+		"preval": map[string]interface{}{"active": false},
+	}
+	if on.required {
+		paren["content"] = map[string]interface{}{"required": true}
+	}
+	call := map[string]interface{}{
+		"paren": true, "osrc": "(", "csrc": ")",
+		"preval": map[string]interface{}{"active": true},
+	}
+	subscript := map[string]interface{}{
+		"paren": true, "osrc": "[", "csrc": "]",
+		"preval": map[string]interface{}{"active": true, "required": true},
+	}
+	if on.left {
+		call["left"] = 5000000
+		subscript["left"] = 5000000
+	}
+	if on.separated {
+		call["content"] = map[string]interface{}{"separated": true}
+	}
+	op := map[string]interface{}{
+		"comma":     comma,
+		"deref":     map[string]interface{}{"src": "*", "prefix": true, "right": 4000000},
+		"post_inc":  map[string]interface{}{"src": "++", "suffix": true, "left": 5000000},
+		"dot":       map[string]interface{}{"src": ".", "infix": true, "left": 5000000, "right": 5100000},
+		"paren":     paren,
+		"call":      call,
+		"subscript": subscript,
+	}
+	if on.cast {
+		op["cast"] = map[string]interface{}{
+			"cast": true, "osrc": "(", "csrc": ")", "right": 4000000,
+			"accept": func(term interface{}) bool {
+				return term == "int" || term == "long" || term == "char"
+			},
+		}
+	}
+	opts := map[string]interface{}{"op": op, "evaluate": namedEvaluate}
+	if on.refuseJuxtaposed {
+		opts["juxtapose"] = false
+	}
+	return makeExprJsonic(opts)
+}
+
+// The options of #105, each off and on, over one small C.
+func TestSpecOptionsOff(t *testing.T) {
+	runSpec(t, "options-off.tsv", cLike(cOptions{}))
+}
+
+func TestSpecOptionsParenLeft(t *testing.T) {
+	runSpec(t, "options-paren-left.tsv", cLike(cOptions{left: true}))
+}
+
+func TestSpecOptionsCast(t *testing.T) {
+	runSpec(t, "options-cast.tsv", cLike(cOptions{cast: true}))
+}
+
+func TestSpecOptionsSeparated(t *testing.T) {
+	runSpec(t, "options-separated.tsv", cLike(cOptions{separated: true}))
+}
+
+func TestSpecOptionsJuxtapose(t *testing.T) {
+	runSpec(t, "options-juxtapose.tsv", cLike(cOptions{refuseJuxtaposed: true}))
+}
+
+func TestSpecOptionsContentRequired(t *testing.T) {
+	runSpec(t, "options-content-required.tsv", cLike(cOptions{required: true}))
+}
+
+func TestSpecOptionsAll(t *testing.T) {
+	runSpec(t, "options-all.tsv", cLike(cOptions{
+		left: true, cast: true, separated: true, refuseJuxtaposed: true, required: true,
+	}))
 }
 
 func TestSpecUnarySuffixEdge(t *testing.T) {
@@ -1374,6 +1478,114 @@ func TestParenDefaultPlainYields(t *testing.T) {
 	check(index, "f(1)", `["index-paren","f",1]`)
 	if _, err := index.Parse("(1)"); err == nil {
 		t.Errorf("(1) with only a required-preval paren on ( should fail")
+	}
+}
+
+// Mirror of the TypeScript suite's `options-repeat-by-replacement`.
+//
+// A comma list or a chain of postfix operators adds no rule depth with its
+// length: 10,000 items reach the deepest rule one item reaches.
+func TestOptionsRepeatByReplacement(t *testing.T) {
+	op := map[string]interface{}{
+		"comma": map[string]interface{}{
+			"src": ",", "infix": true, "left": 1000000, "right": 1100000, "separator": true,
+		},
+		"dot": map[string]interface{}{"src": ".", "infix": true, "left": 5000000, "right": 5100000},
+		"paren": map[string]interface{}{
+			"paren": true, "osrc": "(", "csrc": ")",
+			"preval": map[string]interface{}{"active": false},
+		},
+		"call": map[string]interface{}{
+			"paren": true, "osrc": "(", "csrc": ")",
+			"preval":  map[string]interface{}{"active": true},
+			"left":    5000000,
+			"content": map[string]interface{}{"separated": true},
+		},
+	}
+	deepest := func(src string) int {
+		t.Helper()
+		j := makeExprJsonic(map[string]interface{}{"op": op})
+		max := 0
+		j.Sub(nil, func(r *tabnas.Rule, _ *tabnas.Context) {
+			if r.D > max {
+				max = r.D
+			}
+		})
+		if _, err := j.Parse(src); err != nil {
+			t.Fatalf("%.40s...: %v", src, err)
+		}
+		return max
+	}
+	const n = 10000
+	many := func(sep string, item func(int) string) string {
+		items := make([]string, n)
+		for i := range items {
+			items[i] = item(i)
+		}
+		return strings.Join(items, sep)
+	}
+	name := func(i int) string { return fmt.Sprintf("a%d", i) }
+	call := func(i int) string { return fmt.Sprintf("(%d)", i) }
+
+	for _, c := range []struct{ what, long, short string }{
+		// The arguments of a separated call.
+		{"arguments", "f(" + many(", ", name) + ")", "f(a0)"},
+		// The comma operator in a group.
+		{"comma operator", "(" + many(", ", name) + ")", "(a0, a1)"},
+		// Calls chained on a value, and after an operator they bind looser
+		// than, which places them as postfix operators.
+		{"chained calls", "f" + many("", call), "f(0)"},
+		{"postfix calls", "x.f" + many("", call), "x.f(0)"},
+	} {
+		if long, short := deepest(c.long), deepest(c.short); long != short {
+			t.Errorf("%s: %d items reach rule depth %d, one reaches %d", c.what, n, long, short)
+		}
+	}
+}
+
+// Mirror of the TypeScript suite's `options-cast-shape`.
+//
+// Simplify writes a cast by its Src, the group's opener and closer
+// together, so it reads apart from a call; Accept sees the group's content
+// as the parse built it.
+func TestOptionsCastShape(t *testing.T) {
+	var seen []interface{}
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			"paren": map[string]interface{}{
+				"paren": true, "osrc": "(", "csrc": ")",
+				"preval": map[string]interface{}{"active": false},
+			},
+			"call": map[string]interface{}{
+				"paren": true, "osrc": "(", "csrc": ")",
+				"preval": map[string]interface{}{"active": true},
+			},
+			"cast": map[string]interface{}{
+				"cast": true, "osrc": "(", "csrc": ")", "right": 4000000,
+				"accept": func(term interface{}) bool {
+					seen = append(seen, Simplify(term))
+					return term == "int"
+				},
+			},
+		},
+	})
+	for _, c := range []struct{ src, want string }{
+		{"(int)a", `["()","int","a"]`},
+		{"int(a)", `["(","int","a"]`},
+		{"(1+2)(a)", `["(",["(",["+",1,2]],"a"]`},
+	} {
+		v, err := j.Parse(c.src)
+		if err != nil {
+			t.Fatalf("%s: %v", c.src, err)
+		}
+		b, _ := json.Marshal(Simplify(v))
+		if string(b) != c.want {
+			t.Errorf("%s: got %s, want %s", c.src, b, c.want)
+		}
+	}
+	b, _ := json.Marshal(seen)
+	if string(b) != `["int",["+",1,2]]` {
+		t.Errorf("accept saw %s", b)
 	}
 }
 

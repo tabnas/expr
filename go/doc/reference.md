@@ -205,13 +205,14 @@ carries the same powers as `i64`.
 ## Options map
 
 Both `Parse` and `MakeJsonic` (and `j.Use(Expr, …)`) take a
-`map[string]interface{}` with three recognised keys:
+`map[string]interface{}` with four recognised keys:
 
 | Key | Type | Description |
 |---|---|---|
 | `"op"` | `map[string]interface{}` | Operator definitions, keyed by a name you choose. Merged over the built-in defaults. Set an entry to `nil` to remove a default. |
 | `"evaluate"` | `func(*jsonic.Rule, *jsonic.Context, *Op, []interface{}) interface{}` | If set, each expression is reduced to a value during parsing, and `Parse` returns values instead of S-expression trees. |
 | `"fold"` | `FoldOptions` or `*FoldOptions` | If set, the finished document is folded before `Parse` returns: its key operators are resolved against the whole tree. See [Deferred mode](#deferred-mode). |
+| `"juxtapose"` | `bool` | Whether values side by side inside an expression or a paren group make an implicit list. The default, `true`, keeps the jsonic reading, where `f(a b)` calls `f` with `[a, b]`. With `false` the parser refuses the second value with `unexpected`. See [Values side by side](#values-side-by-side). |
 
 Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 
@@ -220,7 +221,7 @@ Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 | `"src"` | `string` or `[]interface{}` | infix/prefix/suffix; ternary; key | Operator text, for example `"+"`. For ternary, a two-element slice `[]interface{}{"?", ":"}`. For key, the member name that marks a site, for example `"$ref"`. |
 | `"osrc"` | `string` | paren | Opening token text, for example `"("`. |
 | `"csrc"` | `string` | paren | Closing token text, for example `")"`. |
-| `"left"` | `int64` (or `int`, or `float64`) | infix, suffix | Left binding power. Higher binds tighter. Defaults to `MinSafeInteger` (loosest); a declared `0` takes that default too. |
+| `"left"` | `int64` (or `int`, or `float64`) | infix, suffix, preval paren | Left binding power. Higher binds tighter. Defaults to `MinSafeInteger` (loosest); a declared `0` takes that default too. For a preval paren, see [Binding power of a preval paren](#binding-power-of-a-preval-paren). |
 | `"right"` | `int64` (or `int`, or `float64`) | infix, prefix | Right binding power. Higher binds tighter. Defaults to `MaxSafeInteger` (tightest); a declared `0` takes that default too. |
 | `"infix"` | `bool` | (none) | Binary infix operator (2 terms). |
 | `"prefix"` | `bool` | (none) | Unary prefix operator (1 term). |
@@ -228,6 +229,10 @@ Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 | `"ternary"` | `bool` | (none) | Ternary operator (3 terms). Requires `"src": []interface{}{open, close}`. |
 | `"paren"` | `bool` | (none) | Paren/grouping operator. Requires `"osrc"`/`"csrc"`. |
 | `"preval"` | `bool` or `map[string]interface{}` | paren | Allow a preceding value (call/index syntax). See [Preval](#preval). |
+| `"content"` | `map[string]interface{}` or `ContentDef` | paren | What the paren holds. `"required"` refuses an empty content, and `"separated"` reads the content as terms that commas separate. See [Paren content](#paren-content). |
+| `"separator"` | `bool` | infix on `,` | The comma gives way to separators. See [Paren content](#paren-content). |
+| `"cast"` | `bool` | cast | Mark as a cast, a prefix operator whose token is a group. Requires `"osrc"`, `"csrc"`, and `"accept"`. See [Casts](#casts). |
+| `"accept"` | `func(interface{}) bool` | cast | A function of the group's content that answers whether the group is a cast. |
 | `"key"` | `bool` | (none) | Key operator: a map that owns the member `"src"` names is an occurrence, recognised by shape when a tree is folded, never by a token. No binding power applies. See [Key operators](#key-operators). |
 | `"dynamic"` | `bool` | key | A key operator that a fold recognises and reports but never evaluates. |
 | `"use"` | `interface{}` | any | Arbitrary data carried onto the resolved `Op.Use`. |
@@ -261,6 +266,63 @@ The default `"plain"` gives way to the table's own paren operators: a
 table with another paren operator on `(` and `)` drops it. A `"plain"`
 that the options change stays.
 
+### Binding power of a preval paren
+
+A preval paren with a `"left"` binds as a suffix binds. Without one, the
+paren binds to the value just before it, so `a.b[1]` reads as
+`a.(b[1])`. With one, the parser compares the paren's `Left` with the
+`Right` of the operator whose operand that value is. Where the paren
+binds no tighter, it takes that operator's whole expression instead, as
+a suffix does. With `"left": 5000000` on `[` and `.` at `5000000` and
+`5100000`, `a.b[1]` reads as `(a.b)[1]`, as in C.
+
+### Casts
+
+A cast is a prefix operator whose token is a group, as `(int)` is in
+`(int)a`. Declare it with `"cast": true`, the group's `"osrc"` and
+`"csrc"`, a `"right"` binding power, and `"accept"`. A paren operator of
+the table on the same opener and closer parses the group, and `Accept`
+decides from the group's content whether the group is a cast. It gets
+the content as the parse built it: a string for `int`, and a
+`*tabnas.ListRef` for an expression. A cast without `Accept` accepts
+nothing. When `Accept` refuses the content, the group stays a group,
+and `(a)(b)` calls the group `(a)`.
+
+The operation has two terms, the group's content and the operand, and
+the cast binds its operand as a prefix with that `Right` binds it.
+`Simplify` writes the operation by `Src`, which defaults to `OSrc` and
+`CSrc` together, so `(int)a` simplifies to `["()", "int", "a"]` and
+reads apart from a call. The operator's name ends in `-cast`.
+
+### Paren content
+
+`"content"` configures what a paren operator holds between its opener
+and closer.
+
+- `"required": true` refuses an empty content. With a group that
+  requires one, `()` fails with `unexpected`, while a call that admits
+  none still reads `f()`.
+- `"separated": true` reads the content as terms that commas separate,
+  as a call's arguments. Each term becomes a term of the operation, so
+  `f(a, b)` gives `["(", "f", "a", "b"]`. The parser refuses an empty
+  term at the comma after it, as in `f(,a)`, with `unexpected`.
+
+An infix operator on `,` that sets `"separator": true` gives way to the
+separator. Wherever an enclosing list, map, or separated paren content
+separates on `,`, the comma separates, and only elsewhere does the
+operator apply. A group is such an elsewhere, even inside a call, so
+`f((a, b), c)` passes the call two terms, the first a group of the comma
+operator.
+
+### Values side by side
+
+The jsonic grammar reads values side by side, with nothing between
+them, as an implicit list. With `"juxtapose": false`, the parser refuses
+the second value inside an expression or a paren group, with
+`unexpected`, so `f(a b)`, `(a b)`, and `1+2 3` all fail. A document's
+own implicit list outside any expression, as in `a b`, and the items of
+a list or a map keep their reading.
+
 ## Exported types
 
 ### `OpDef`
@@ -279,6 +341,10 @@ type OpDef struct {
     Paren   bool
     Preval  interface{} // bool, map[string]interface{}, or PrevalDef
     Use     interface{}
+    Content interface{} // ContentDef, or a map with "required" and "separated"
+    Separator bool      // an infix on `,` that gives way to separators
+    Cast    bool        // a cast, whose token is a group
+    Accept  func(term interface{}) bool // a cast's test of the group's content
     Key     bool        // a key operator, recognised by a map's shape
     Dynamic bool        // a key operator a fold reports and never evaluates
 }
@@ -345,8 +411,15 @@ type Op struct {
     Use     interface{}
     Key     bool   // a key operator, recognised by a map's shape (see Fold)
     Dynamic bool   // a key operator a fold reports and never evaluates
+    Content   ContentDef // a paren operator's content
+    Separator bool       // an infix on `,` that gives way to separators
+    Cast      bool       // a cast, whose token is a group
+    Accept    func(term interface{}) bool `json:"-"` // a cast's test of the group's content
 }
 ```
+
+`Accept` carries no JSON encoding, so a raw tree that holds an operator
+marshals with its other fields only.
 
 ### `PrevalDef`
 
@@ -358,13 +431,25 @@ type PrevalDef struct {
 }
 ```
 
+### `ContentDef`
+
+```go
+type ContentDef struct {
+    Required  bool // the content may not be empty
+    Separated bool // terms that commas separate, each a term of the operation
+}
+```
+
+See [Paren content](#paren-content).
+
 ### `ExprOptions`
 
 ```go
 type ExprOptions struct {
-    Op       map[string]*OpDef
-    Evaluate func(rule *jsonic.Rule, ctx *jsonic.Context, op *Op, terms []interface{}) interface{}
-    Fold     *FoldOptions
+    Op        map[string]*OpDef
+    Evaluate  func(rule *jsonic.Rule, ctx *jsonic.Context, op *Op, terms []interface{}) interface{}
+    Fold      *FoldOptions
+    Juxtapose *bool // nil reads as true
 }
 ```
 
@@ -383,6 +468,7 @@ that way:
 | suffix | `-suffix` | `factorial` → `factorial-suffix` |
 | ternary | `-ternary` | `cond` → `cond-ternary` |
 | paren | `-paren` | `plain` → `plain-paren` |
+| cast | `-cast` | `cast` → `cast-cast` |
 | key | `-key` | `ref` → `ref-key` |
 
 Dispatch on `op.Name`, or on `op.Src` plus the kind booleans.

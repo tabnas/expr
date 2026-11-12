@@ -340,6 +340,68 @@ it, a table whose lone call served groups too would hand its groups to
 TypeScript and Rust runners also parse its rows with the two operators
 declared in the other order.
 
+## The options for a C-like table (#105)
+
+Five options shape a table for a language like C, and each is off
+unless a table sets it. `test/spec/options-*.tsv` pins each one off and
+on over one small C table (`cLike` in `ts/test/spec.test.ts` and
+`go/expr_test.go`, `c_like` in `rs/tests/parity_test.rs`), and
+`options-all.tsv` turns them all on, as tabnas/c sets them.
+
+- **A binding power on a preval paren** (`left`). `bindsHere`
+  (`binds_here`) compares the paren's `left` with the `right` of the
+  operator whose operand the value before the paren is: the operator
+  the parent expr rule's node heads in TypeScript and Rust, whose expr
+  rules hold the attachment point, and in Go, whose rules hold the
+  root, the operator of the node with the next unfilled slot
+  (`nextSlotOp`). Where the paren binds looser, the val ends (the
+  hand-off alternate, group `expr-postfix`), the expr rule replaces
+  itself with one marked `expr_postfix_next`, and that rule places the
+  paren as a suffix is placed (`prattifyPostfix`: TypeScript and Rust
+  drill through prefixes from the attachment point, Go through
+  prefixes and infixes from the root) and pushes the paren, whose close
+  extends the placed node in place (`u.expr_postfix`). After a postfix
+  that wrapped the whole root, Go's infix action writes the new root to
+  the first term's val, which a list, a map or a paren reads the value
+  from.
+- **A cast** (`cast`, `accept`). The group's expr rule closes on a
+  group the cast accepts (`castHere`) with `n.expr` kept, and replaces
+  itself; the next expr rule opens the cast, `[cast, type]`, with no
+  token, and pushes the operand's val. The val that pushed the group's
+  expr reads its node from that expr, so the cast writes its node there
+  too, and the after-close does the same with the evaluated value.
+  Casts are built apart from the prefix maps (`makeCastOps`,
+  `castByTin`, `make_cast_ops`), by the group's opener.
+- **A comma operator next to separators** (`content.separated`,
+  `separator`). `n.expr_sep` marks a context that separates on `,`: a
+  paren whose content is separated, and lists and maps once an infix
+  operator on `,` is a separator. Every rule that would read the comma
+  as the operator bails at a separator there. The paren's close loops
+  on it (`p: 'val'` from the close, so a long argument list adds no
+  rule depth), collecting each term, read as the closer reads the last
+  one, and refuses an empty term. The paren's after-close skips a
+  separator's pass (`expr_paren_more`). Rust collects the terms in an
+  arena node, pushed in place: a list in the rule's `u` was copied out
+  and back at every separator, since the rules pushed between share
+  `u`, and 10,000 arguments took 8 s.
+- **Refusing implicit lists** (`juxtapose: false`). The expr rule's
+  implicit-list alternates for values side by side stand aside, and so
+  does jsonic's own on `val` (group `imp,space,jsonic`) inside a paren
+  group and after a value an expression made. TypeScript and Rust wrap
+  that alternate's condition in place; Go replaces the alternate with a
+  wrapped copy. The parse then fails on the second value with
+  `unexpected`.
+- **Required paren content** (`content.required`). The paren's open
+  alternate on an opener and its closer raises `unexpected` at the
+  closer for an operator whose content is required.
+
+`options-repeat-by-replacement` (TypeScript), `TestOptionsRepeatByReplacement`
+(Go) and `options_repeat_by_replacement` (Rust) hold the separator loop
+and chained or postfix calls to constant rule depth; Rust runs the
+node-per-item forms at 100 items, under its `NODE_LIMIT`.
+`options-cast-shape` and its twins pin what `simplify` writes for a cast
+and what `accept` receives.
+
 ## The tree layer: key operators and `fold`
 
 The plugin has two kinds of operator. A **token** operator is what the
@@ -488,8 +550,10 @@ failure all the same. What each port settled:
 - **Shape pins.** Adding `key` and `dynamic` to `Op` does not fail the
   `DIVERGENCE.md` pins, which test for particular keys, not the whole set.
   Go has both (`Key`, `Dynamic`) and the record's prose says so. Rust's
-  `Op::to_value` carries `key` and `dynamic` after `preval` and before
-  `token`, as the TypeScript builders list them.
+  `Op::to_value` carries `content`, `separator` and `cast` after
+  `preval`, then `key` and `dynamic`, and `token` last, as the
+  TypeScript operator builder lists them. Go's `Op.Accept` is tagged
+  `json:"-"`, since a func has no JSON encoding.
 
 ## debug-model composition test (@tabnas/debug)
 
@@ -861,10 +925,14 @@ inherited from the engine and `@tabnas/jsonic`. The Rust port additionally
 raises the engine's `cancel` on an expression past its `NODE_LIMIT`, which
 `DIVERGENCE.md` records.
 
-Nothing pins a code today: the shared `test/spec/*.tsv` fixtures contain no
-error rows at all — every row asserts a successful parse. If you add
-rejection behaviour, pin it with an `ERROR:<code>` fixture row so every
-runtime agrees on the code, not merely on failing.
+The refusals the options for a C-like table add raise the base code
+`unexpected`, and the `options-*.tsv` fixtures pin them with
+`ERROR:unexpected` rows: an empty content an operator requires, an empty
+term of a separated content, and values side by side under
+`juxtapose: false`. They are the only error rows of `test/spec/`. If you
+add rejection behaviour, pin it with an `ERROR:<code>` fixture row so
+every runtime agrees on the code, not merely on failing. Each runner
+holds an error row to its code in the canonical pass too.
 
 The machine-readable list is [`tabnas.plugin.json`](tabnas.plugin.json)
 (`errorCodes`, correctly empty). Keep the two in step: the code is the

@@ -2948,6 +2948,66 @@ describe('expr', () => {
   })
 
 
+  test('options-repeat-by-replacement', () => {
+    // A comma list or a chain of postfix operators adds no rule depth with
+    // its length: 10,000 items reach the deepest rule one item reaches.
+    const deepest = (op: any, src: string) => {
+      let max = 0
+      const tn = new Tabnas().use(jsonic).use(Expr, { op })
+      tn.sub({ rule: (r: Rule) => { max = Math.max(max, r.d) } })
+      tn.parse(src)
+      return max
+    }
+    const N = 10000
+    const many = (sep: string, item: (i: number) => string) =>
+      Array.from({ length: N }, (_, i) => item(i)).join(sep)
+
+    const comma = { src: ',', infix: true, left: 1000000, right: 1100000, separator: true }
+    const dot = { src: '.', infix: true, left: 5000000, right: 5100000 }
+    const paren = { paren: true, osrc: '(', csrc: ')', preval: { active: false } }
+    const call = {
+      paren: true, osrc: '(', csrc: ')', preval: { active: true },
+      left: 5000000, content: { separated: true },
+    }
+    const op = { comma, dot, paren, call }
+
+    // The arguments of a separated call.
+    expect(deepest(op, 'f(' + many(', ', (i) => 'a' + i) + ')'))
+      .equal(deepest(op, 'f(a0)'))
+    // The comma operator in a group.
+    expect(deepest(op, '(' + many(', ', (i) => 'a' + i) + ')'))
+      .equal(deepest(op, '(a0, a1)'))
+    // Calls chained on a value, and after an operator they bind looser
+    // than, which places them as postfix operators.
+    expect(deepest(op, 'f' + many('', (i) => '(' + i + ')')))
+      .equal(deepest(op, 'f(0)'))
+    expect(deepest(op, 'x.f' + many('', (i) => '(' + i + ')')))
+      .equal(deepest(op, 'x.f(0)'))
+  })
+
+
+  test('options-cast-shape', () => {
+    // `simplify` writes a cast by its `src`, the group's opener and closer
+    // together, so it reads apart from a call; `accept` sees the group's
+    // content as the parse built it.
+    const seen: any[] = []
+    const tn = new Tabnas().use(jsonic).use(Expr, {
+      op: {
+        paren: { paren: true, osrc: '(', csrc: ')', preval: { active: false } },
+        call: { paren: true, osrc: '(', csrc: ')', preval: { active: true } },
+        cast: {
+          cast: true, osrc: '(', csrc: ')', right: 4000000,
+          accept: (term: any) => (seen.push(S(term)), 'int' === term),
+        },
+      },
+    })
+    expect(S(tn.parse('(int)a'))).equal(['()', 'int', 'a'])
+    expect(S(tn.parse('int(a)'))).equal(['(', 'int', 'a'])
+    expect(S(tn.parse('(1+2)(a)'))).equal(['(', ['(', ['+', 1, 2]], 'a'])
+    expect(seen).equal(['int', ['+', 1, 2]])
+  })
+
+
   test('evaluate-once-in-tree-order', () => {
     // Each operation of the tree is reduced once, after its terms, so the
     // calls follow the S-expression. A prefix inside an operand (`-2` in

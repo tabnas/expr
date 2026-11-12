@@ -95,6 +95,7 @@ type ExprOptions = {
   op?: { [name: string]: OpDef }
   evaluate?: Evaluate
   fold?: FoldOptions
+  juxtapose?: boolean
 }
 ```
 
@@ -103,6 +104,7 @@ type ExprOptions = {
 | `op` | `{ [name]: OpDef }` | Operator definitions, keyed by a name you choose. Merged over `Expr.defaults.op`. Set an entry to `null` to remove a default operator. |
 | `evaluate` | `Evaluate` | If set, each expression is reduced to a value during parsing, and `parse` returns values instead of S-expression trees. |
 | `fold` | `FoldOptions` | If set, the finished document is folded before `parse` returns: its key operators are resolved against the whole tree. See [`fold`](#fold). |
+| `juxtapose` | `boolean` | Whether values side by side inside an expression or a paren group make an implicit list. The default, `true`, keeps the jsonic reading, where `f(a b)` calls `f` with `[a, b]`. With `false` the parser refuses the second value with `unexpected`. See [Values side by side](#values-side-by-side). |
 
 Options are merged with the defaults; you only specify what differs. The
 operator name you pick is decorated by kind (see [Operator names](#operator-names)).
@@ -130,6 +132,13 @@ type OpDef = {
     required?: boolean
     allow?: string[]
   }
+  content?: {
+    required?: boolean
+    separated?: boolean
+  }
+  separator?: boolean
+  cast?: boolean
+  accept?: (term: any) => boolean
   key?: boolean
   dynamic?: boolean
 }
@@ -140,7 +149,7 @@ type OpDef = {
 | `src` | infix, prefix, suffix, key | The operator token text, for example `'+'`. For `ternary`, a two-element array `[open, close]`, for example `['?', ':']`. For `key`, the member name that marks a site, for example `'$ref'`. |
 | `osrc` | paren | The opening token text, for example `'('`, `'['`, `'<'`. |
 | `csrc` | paren | The closing token text, for example `')'`, `']'`, `'>'`. |
-| `left` | infix, suffix | Left binding power. Higher binds tighter. Defaults to `Number.MIN_SAFE_INTEGER` (loosest); a declared `0` takes that default too. |
+| `left` | infix, suffix, preval paren | Left binding power. Higher binds tighter. Defaults to `Number.MIN_SAFE_INTEGER` (loosest); a declared `0` takes that default too. For a preval paren, see [Binding power of a preval paren](#binding-power-of-a-preval-paren). |
 | `right` | infix, prefix | Right binding power. Higher binds tighter. Defaults to `Number.MAX_SAFE_INTEGER` (tightest); a declared `0` takes that default too. |
 | `infix` | (none) | Mark as a binary infix operator (2 terms). |
 | `prefix` | (none) | Mark as a unary prefix operator (1 term). |
@@ -148,6 +157,10 @@ type OpDef = {
 | `ternary` | (none) | Mark as a ternary operator (3 terms). Requires `src: [open, close]`. |
 | `paren` | (none) | Mark as a paren/grouping operator. Requires `osrc`/`csrc`. |
 | `preval` | paren | Allow a preceding value (function-call / index syntax). See [Preval](#preval). |
+| `content` | paren | What the paren holds. `required` refuses an empty content, and `separated` reads the content as terms that commas separate. See [Paren content](#paren-content). |
+| `separator` | infix on `,` | The comma gives way to separators. See [Paren content](#paren-content). |
+| `cast` | cast | Mark as a cast, a prefix operator whose token is a group. Requires `osrc`, `csrc`, and `accept`. See [Casts](#casts). |
+| `accept` | cast | A function of the group's content that answers whether the group is a cast. |
 | `key` | (none) | Mark as a key operator: a map that owns the member `src` is an occurrence, recognised by shape when a tree is folded, never by a token. No binding power applies. See [Key operators](#key-operators). |
 | `dynamic` | key | A key operator that a fold recognises and reports but never evaluates. |
 | `use` | any | Arbitrary data carried through onto the resolved `Op.use`. |
@@ -186,6 +199,61 @@ not required for both forms.
 The default `plain` gives way to the table's own paren operators: a
 table with another paren operator on `(` and `)` drops it. A `plain`
 that the options change stays.
+
+### Binding power of a preval paren
+
+A preval paren with a `left` binds as a suffix binds. Without one, the
+paren binds to the value just before it, so `a.b[1]` reads as
+`a.(b[1])`. With one, the parser compares the paren's `left` with the
+`right` of the operator whose operand that value is. Where the paren
+binds no tighter, it takes that operator's whole expression instead, as
+a suffix does. With `left: 5000000` on `[` and `.` at `5000000` and
+`5100000`, `a.b[1]` reads as `(a.b)[1]`, as in C.
+
+### Casts
+
+A cast is a prefix operator whose token is a group, as `(int)` is in
+`(int)a`. Declare it with `cast: true`, the group's `osrc` and `csrc`,
+a `right` binding power, and `accept`. A paren operator of the table on
+the same opener and closer parses the group, and `accept` decides from
+the group's content whether the group is a cast. A cast without
+`accept` accepts nothing. When `accept` refuses the content, the group
+stays a group, and `(a)(b)` calls the group `(a)`.
+
+The operation has two terms, the group's content and the operand, and
+the cast binds its operand as a prefix with that `right` binds it.
+`simplify` writes the operation by `src`, which defaults to `osrc` and
+`csrc` together, so `(int)a` simplifies to `['()', 'int', 'a']` and reads
+apart from a call. The operator's name ends in `-cast`.
+
+### Paren content
+
+`content` configures what a paren operator holds between its opener and
+closer.
+
+- `required: true` refuses an empty content. With a group that requires
+  one, `()` fails with `unexpected`, while a call that admits none still
+  reads `f()`.
+- `separated: true` reads the content as terms that commas separate, as
+  a call's arguments. Each term becomes a term of the operation, so
+  `f(a, b)` gives `['(', 'f', 'a', 'b']`. The parser refuses an empty
+  term at the comma after it, as in `f(,a)`, with `unexpected`.
+
+An infix operator on `,` that sets `separator: true` gives way to the
+separator. Wherever an enclosing list, map, or separated paren content
+separates on `,`, the comma separates, and only elsewhere does the
+operator apply. A group is such an elsewhere, even inside a call, so
+`f((a, b), c)` passes the call two terms, the first a group of the comma
+operator.
+
+### Values side by side
+
+The jsonic grammar reads values side by side, with nothing between
+them, as an implicit list. With `juxtapose: false`, the parser refuses
+the second value inside an expression or a paren group, with
+`unexpected`, so `f(a b)`, `(a b)`, and `1+2 3` all fail. A document's
+own implicit list outside any expression, as in `a b`, and the items of
+a list or a map keep their reading.
 
 ### Key operators
 
@@ -256,6 +324,10 @@ type Op = {
   otkn: string; otin: number   // paren open token
   ctkn: string; ctin: number   // paren close token
   preval: { active: boolean; required: boolean; allow?: string[] }
+  content: { required: boolean; separated: boolean }
+  separator: boolean // an infix on `,` that gives way to separators
+  cast: boolean      // a cast, whose token is a group
+  accept?: (term: any) => boolean // a cast's test of the group's content
   key: boolean       // a key operator, recognised by a map's shape
   dynamic: boolean   // reported by a fold, never evaluated
   token: Token       // the matched source Token (location info); for a key
@@ -280,6 +352,7 @@ that way:
 | suffix | `-suffix` | `factorial` → `factorial-suffix` |
 | ternary | `-ternary` | `cond` → `cond-ternary` |
 | paren | `-paren` | `plain` → `plain-paren` |
+| cast | `-cast` | `cast` → `cast-cast` |
 | key | `-key` | `ref` → `ref-key` |
 
 Dispatch on `op.name` (kind-precise) or `op.src` + kind booleans.

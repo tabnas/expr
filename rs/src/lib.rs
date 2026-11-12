@@ -62,8 +62,8 @@ use indexmap::IndexMap;
 
 use tabnas::{
     AltMatch, AltSpec, Context, ListRef, Plugin, PluginError, Rule, RuleSnapshot, RuleSpec, Tabnas,
-    TabnasError, Tin, Token, Value, TIN_CA, TIN_CB, TIN_CL, TIN_CS, TIN_NR, TIN_ST, TIN_TX, TIN_VL,
-    TIN_ZZ,
+    TabnasError, Tin, Token, Value, TIN_CA, TIN_CB, TIN_CL, TIN_CS, TIN_NR, TIN_OB, TIN_OS, TIN_ST,
+    TIN_TX, TIN_VL, TIN_ZZ,
 };
 
 /// VERSION is this crate's version. It MUST equal `ts/package.json`
@@ -118,6 +118,52 @@ pub struct PrevalDef {
     pub allow: Option<Vec<String>>,
 }
 
+/// A paren operator's content: whether it may be empty, and whether it is
+/// a list of terms separated by commas.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentDef {
+    /// The content may not be empty: `()` is refused, while a call that
+    /// admits none stays `f()`.
+    pub required: bool,
+    /// The content is a list of terms separated by commas, as a call's
+    /// arguments are, and each is a term of the operator (`f(a, b)` is
+    /// `[f, a, b]` under a call), so an infix operator on `,` does not
+    /// apply directly inside it.
+    pub separated: bool,
+}
+
+/// A cast's test of a group's content: whether the group before an
+/// operand, `(int)` in `(int)a`, is a cast. It sees the content as the
+/// parse built it, an expression node or a value. The Rust spelling of the
+/// canonical `accept`.
+#[derive(Clone)]
+pub struct Accept(Arc<dyn Fn(&Value) -> bool + Send + Sync>);
+
+impl Accept {
+    /// Wrap a test of a group's content.
+    pub fn new(test: impl Fn(&Value) -> bool + Send + Sync + 'static) -> Self {
+        Accept(Arc::new(test))
+    }
+
+    /// Whether the test accepts this content.
+    pub fn accepts(&self, term: &Value) -> bool {
+        (self.0)(term)
+    }
+}
+
+impl fmt::Debug for Accept {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Accept(<function>)")
+    }
+}
+
+/// Two tests are equal when they are the same function.
+impl PartialEq for Accept {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// One entry of the `op` option map: the definition of an operator.
 ///
 /// `src` carries one source string for a prefix, suffix or infix
@@ -150,6 +196,25 @@ pub struct OpDef {
     /// such as `$dynamicRef`, whose meaning depends on a scope the parser
     /// does not have. Its map folds as a plain map.
     pub dynamic: bool,
+    /// A paren operator's content: see [`ContentDef`].
+    pub content: ContentDef,
+    /// An infix operator on `,` that gives way to the separator: wherever
+    /// an enclosing context separates on `,` (a list, a map, or a paren
+    /// whose content is separated) the comma separates, and only elsewhere
+    /// is it this operator. A group is such an elsewhere, even inside a
+    /// call.
+    pub separator: bool,
+    /// A CAST: a prefix operator whose token is a group (`(int)` in
+    /// `(int)a`) that `accept` accepts. `osrc` and `csrc` name the group,
+    /// which a paren operator of the table on the same opener and closer
+    /// parses; `right` is the cast's binding power, as a prefix's; `src`,
+    /// by default `osrc` and `csrc` together, is what [`simplify`] writes.
+    /// The operation's terms are the group's content and the operand. A
+    /// group `accept` refuses stays a group, or a call, and a cast without
+    /// `accept` accepts nothing.
+    pub cast: bool,
+    /// A cast's test of the group's content: see [`Accept`].
+    pub accept: Option<Accept>,
 }
 
 impl Default for OpDef {
@@ -169,6 +234,10 @@ impl Default for OpDef {
             use_data: Value::Undefined,
             key: false,
             dynamic: false,
+            content: ContentDef::default(),
+            separator: false,
+            cast: false,
+            accept: None,
         }
     }
 }
@@ -253,9 +322,49 @@ impl OpDef {
         }
     }
 
+    /// A cast on the group `osrc` `csrc`, with the binding power `right`,
+    /// whose content `accept` tests: see [`OpDef::cast`](OpDef#structfield.cast).
+    pub fn cast(
+        osrc: impl Into<String>,
+        csrc: impl Into<String>,
+        right: i64,
+        accept: impl Fn(&Value) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        OpDef {
+            osrc: osrc.into(),
+            csrc: csrc.into(),
+            right: Some(right),
+            cast: true,
+            accept: Some(Accept::new(accept)),
+            ..Default::default()
+        }
+    }
+
     /// Give a paren operator a preval configuration.
     pub fn with_preval(mut self, preval: PrevalDef) -> Self {
         self.preval = Some(preval);
+        self
+    }
+
+    /// Give a preval paren a binding power, compared like a suffix's with
+    /// the operator whose operand precedes it: where the paren binds no
+    /// tighter, it takes that operator's expression (`a.b[1]` is
+    /// `(a.b)[1]`). Unset, the paren binds to the value just before it.
+    pub fn with_left(mut self, left: i64) -> Self {
+        self.left = Some(left);
+        self
+    }
+
+    /// Give a paren operator a content configuration: see [`ContentDef`].
+    pub fn with_content(mut self, content: ContentDef) -> Self {
+        self.content = content;
+        self
+    }
+
+    /// Make an infix operator on `,` give way to separators: see
+    /// [`OpDef::separator`](OpDef#structfield.separator).
+    pub fn with_separator(mut self) -> Self {
+        self.separator = true;
         self
     }
 
@@ -299,6 +408,16 @@ pub struct Op {
     /// A key operator a fold reports and never evaluates: see
     /// [`OpDef::dynamic`].
     pub dynamic: bool,
+    /// A paren operator's content: see [`ContentDef`].
+    pub content: ContentDef,
+    /// An infix operator on `,` that gives way to separators: see
+    /// [`OpDef::separator`](OpDef#structfield.separator).
+    pub separator: bool,
+    /// A cast, whose token is a group: see
+    /// [`OpDef::cast`](OpDef#structfield.cast).
+    pub cast: bool,
+    /// A cast's test of the group's content.
+    pub accept: Option<Accept>,
 }
 
 impl Default for Op {
@@ -327,6 +446,10 @@ impl Default for Op {
             ternary_index: None,
             key: false,
             dynamic: false,
+            content: ContentDef::default(),
+            separator: false,
+            cast: false,
+            accept: None,
         }
     }
 }
@@ -357,8 +480,16 @@ impl Op {
         map.insert("otin".into(), Value::Number(f64::from(self.otin)));
         map.insert("ctin".into(), Value::Number(f64::from(self.ctin)));
         map.insert("preval".into(), self.preval_value());
-        // In the canonical key order: TypeScript's operator builders list
-        // `key` and `dynamic` after `preval` and before `token`.
+        // In the canonical key order: TypeScript's operator builder lists
+        // `content`, `separator` and `cast` after `preval`, then `key` and
+        // `dynamic`, and `token` last. A cast's `accept` is a function,
+        // which JSON leaves out.
+        let mut content: IndexMap<String, Value> = IndexMap::new();
+        content.insert("required".into(), Value::Bool(self.content.required));
+        content.insert("separated".into(), Value::Bool(self.content.separated));
+        map.insert("content".into(), Value::object(content));
+        map.insert("separator".into(), Value::Bool(self.separator));
+        map.insert("cast".into(), Value::Bool(self.cast));
         map.insert("key".into(), Value::Bool(self.key));
         map.insert("dynamic".into(), Value::Bool(self.dynamic));
         map.insert("token".into(), token_value(token));
@@ -516,6 +647,13 @@ pub type Evaluate = Arc<dyn Fn(&mut EvalSite<'_>, &Op, &[Value]) -> Value + Send
 pub struct ExprOptions {
     pub op: IndexMap<String, Option<OpDef>>,
     pub evaluate: Option<Evaluate>,
+    /// Values side by side, with nothing between them, inside an
+    /// expression or a paren group make an implicit list, as jsonic makes
+    /// one (`f(a b)` is a call of `[a, b]`). With `Some(false)` they are
+    /// refused, with the engine's `unexpected`. A document's own implicit
+    /// list, outside any expression, and the items of a list or a map are
+    /// unchanged. `None` reads as `true`.
+    pub juxtapose: Option<bool>,
 }
 
 impl fmt::Debug for ExprOptions {
@@ -524,6 +662,7 @@ impl fmt::Debug for ExprOptions {
             .debug_struct("ExprOptions")
             .field("op", &self.op)
             .field("evaluate", &self.evaluate.as_ref().map(|_| "<function>"))
+            .field("juxtapose", &self.juxtapose)
             .finish()
     }
 }
@@ -547,6 +686,13 @@ impl ExprOptions {
         self
     }
 
+    /// Whether values side by side make an implicit list: see
+    /// [`ExprOptions::juxtapose`].
+    pub fn with_juxtapose(mut self, juxtapose: bool) -> Self {
+        self.juxtapose = Some(juxtapose);
+        self
+    }
+
     /// Set the evaluator that reduces each expression as it closes.
     pub fn with_evaluate(
         mut self,
@@ -556,11 +702,14 @@ impl ExprOptions {
         self
     }
 
-    /// Read the operator table out of a serialized option bag, as the
-    /// engine hands it to a plugin. Unreadable entries are ignored, the
-    /// way the canonical plugin ignores what it cannot use.
+    /// Read the operator table, and `juxtapose`, out of a serialized option
+    /// bag, as the engine hands it to a plugin. Unreadable entries are
+    /// ignored, the way the canonical plugin ignores what it cannot use.
     pub fn from_value(options: &Value) -> Self {
         let mut resolved = ExprOptions::new();
+        if let Some(Value::Bool(juxtapose)) = object_get(options, "juxtapose") {
+            resolved.juxtapose = Some(*juxtapose);
+        }
         let Some(op) = object_get(options, "op") else {
             return resolved;
         };
@@ -625,8 +774,18 @@ fn op_def_from_value(def: &Value) -> OpDef {
         use_data: object_get(def, "use").cloned().unwrap_or(Value::Undefined),
         key: value_bool(object_get(def, "key")),
         dynamic: value_bool(object_get(def, "dynamic")),
+        separator: value_bool(object_get(def, "separator")),
+        // A cast's `accept` is a function, which no serialized option bag
+        // carries: give one with `OpDef::cast`.
+        cast: value_bool(object_get(def, "cast")),
         ..Default::default()
     };
+    if let Some(content) = object_get(def, "content") {
+        out.content = ContentDef {
+            required: value_bool(object_get(content, "required")),
+            separated: value_bool(object_get(content, "separated")),
+        };
+    }
     match object_get(def, "src") {
         Some(Value::String(src)) => out.src = vec![src.clone()],
         Some(Value::Array(srcs)) => {
@@ -1792,6 +1951,7 @@ fn make_op_map(
             tin,
             terms: anyfix.terms(),
             use_data: def.use_data.clone(),
+            separator: Anyfix::Infix == anyfix && def.separator,
             ..Default::default()
         };
 
@@ -1844,11 +2004,64 @@ fn make_paren_ops(parser: &mut Tabnas, ops: &IndexMap<String, Option<OpDef>>) ->
             src: def.osrc.clone(),
             terms: 1,
             use_data: def.use_data.clone(),
+            // A binding power on a preval paren: compared like a suffix's
+            // with the operator whose operand precedes it (see
+            // `binds_here`). Unset, the paren binds to the value just
+            // before it.
+            left: binding_power(def.left, MIN_SAFE_INTEGER),
+            content: def.content,
             ..Default::default()
         };
         list.push(Arc::new(op));
     }
     list
+}
+
+/// The cast operators, by the opener of the group each is written with,
+/// the port of the canonical `makeCastOps`.
+fn make_cast_ops(
+    parser: &mut Tabnas,
+    ops: &IndexMap<String, Option<OpDef>>,
+) -> IndexMap<Tin, Arc<Op>> {
+    let mut map: IndexMap<Tin, Arc<Op>> = IndexMap::new();
+    for (name, def) in ops {
+        let Some(def) = def else { continue };
+        if !def.cast {
+            continue;
+        }
+        let (otin, otkn) = operator_tin(parser, &def.osrc);
+        let (ctin, ctkn) = operator_tin(parser, &def.csrc);
+        let op = Op {
+            name: if name.ends_with("-cast") {
+                name.clone()
+            } else {
+                format!("{name}-cast")
+            },
+            src: def
+                .src
+                .first()
+                .cloned()
+                .unwrap_or_else(|| format!("{}{}", def.osrc, def.csrc)),
+            left: MIN_SAFE_INTEGER,
+            right: binding_power(def.right, MAX_SAFE_INTEGER),
+            use_data: def.use_data.clone(),
+            // A prefix, whose first term, the group's content, is fixed
+            // when it opens: prattify reads it as one.
+            prefix: true,
+            terms: 2,
+            osrc: def.osrc.clone(),
+            csrc: def.csrc.clone(),
+            otkn,
+            otin,
+            ctkn,
+            ctin,
+            cast: true,
+            accept: def.accept.clone(),
+            ..Default::default()
+        };
+        map.insert(otin, Arc::new(op));
+    }
+    map
 }
 
 /// Everything the rule alternates read: the operator maps, the token
@@ -1872,6 +2085,23 @@ struct Grammar {
     tin_open: Vec<Tin>,
     tin_close: Vec<Tin>,
     evaluate: Option<Evaluate>,
+    /// Casts, by the opener of the group each is written with.
+    cast: IndexMap<Tin, Arc<Op>>,
+    /// The separators: jsonic's comma, and the token an infix operator on
+    /// `,` uses, which a host lexer may emit in its place.
+    tin_sep: Vec<Tin>,
+    /// Some paren content is separated, or some infix operator on `,` is a
+    /// separator, so some context separates on `,`.
+    separating: bool,
+    /// Some infix operator on `,` gives way to separators, so lists and
+    /// maps separate on `,` too.
+    has_separator: bool,
+    /// Some paren operator's content is required.
+    has_required: bool,
+    /// Some preval paren has a binding power.
+    has_bound: bool,
+    /// Values side by side are refused (`juxtapose: false`).
+    no_juxtapose: bool,
 }
 
 /// The value tokens an expression term can start with, the canonical
@@ -1897,6 +2127,25 @@ impl Grammar {
 
     fn has_paren(&self) -> bool {
         !self.tin_open.is_empty() && !self.tin_close.is_empty()
+    }
+
+    fn has_cast(&self) -> bool {
+        !self.cast.is_empty()
+    }
+
+    /// Whether a preval paren on this opener has a binding power, and so
+    /// may be placed as a postfix of the expression before it.
+    fn postfix_opener(&self, tin: Tin) -> bool {
+        self.paren_preval.get(&tin).is_some_and(|op| bound(op))
+    }
+
+    /// Whether a token starts a value, where the one before has ended.
+    fn starts_value(&self, tin: Tin) -> bool {
+        VAL_TINS.contains(&tin)
+            || TIN_OB == tin
+            || TIN_OS == tin
+            || self.tin_open.contains(&tin)
+            || self.tin_prefix.contains(&tin)
     }
 
     /// The operator occurrence a matched token introduces, the port of the
@@ -2066,6 +2315,175 @@ fn prepend_close_all(spec: &mut RuleSpec, alts: Vec<AltSpec>) {
 }
 
 // ---------------------------------------------------------------------------
+// The options of #105, every one off unless a table asks
+// ---------------------------------------------------------------------------
+
+/// The `u` key of an expr rule whose close found a group a cast accepts:
+/// the next expr rule opens the cast.
+const CAST_NEXT: &str = "expr_cast_next";
+
+/// The `u` key of an expr rule whose close found a bound preval paren: the
+/// next expr rule places it as a postfix.
+const POSTFIX_NEXT: &str = "expr_postfix_next";
+
+/// The `u` key under which a postfix's expr rule keeps the node the paren
+/// heads, `[op, target]`, which the paren's content extends.
+const POSTFIX: &str = "expr_postfix";
+
+/// The `u` key of a paren rule opened with no value before it, a group,
+/// which a cast may take as its token.
+const PAREN_GROUP: &str = "expr_paren_group";
+
+/// The `u` keys of a separated paren content: the terms collected at the
+/// separators, and the separator's pass, which goes on to the next term.
+const PAREN_ITEMS: &str = "expr_items";
+const PAREN_MORE: &str = "expr_paren_more";
+
+/// A preval paren with a binding power, `left`, binds like a suffix.
+fn bound(op: &Op) -> bool {
+    MIN_SAFE_INTEGER != op.left
+}
+
+fn flag(u: &HashMap<String, Value>, name: &str) -> bool {
+    matches!(u.get(name), Some(Value::Bool(true)))
+}
+
+/// The operator whose operand a val is, when its parent is an expr rule
+/// building one: the operator the expr's node, its attachment point,
+/// heads.
+fn enclosing(rule: &Rule) -> Option<Arc<Op>> {
+    let parent = rule.parent_rule.as_ref()?;
+    if "expr" != parent.name.as_ref() {
+        return None;
+    }
+    let node = linked_node(Some(parent));
+    if is_ternary_op(&node) || is_paren_op(&node) {
+        return None;
+    }
+    op_of(&node)
+}
+
+/// Whether a bound preval paren takes the value before it, compared as a
+/// suffix is with the operator it would drill into (`a.b[1]` is
+/// `(a.b)[1]` when `[` binds no tighter than `.`). A prefix built into an
+/// enclosing tree (`expr_inner`) leaves the val holding that tree, not its
+/// own value, so the enclosing expression places the paren instead.
+fn binds_here(rule: &Rule, op: &Op) -> bool {
+    if !bound(op) {
+        return true;
+    }
+    if rule
+        .child_rule
+        .as_ref()
+        .is_some_and(|child| flag(&child.u, INNER))
+    {
+        return false;
+    }
+    enclosing(rule).is_none_or(|encl| encl.right <= op.left)
+}
+
+/// Whether the paren this expr rule pushed closed the token of a cast: a
+/// group (no value before it) on a cast's opener and closer, holding a
+/// content the cast's `accept` accepts.
+fn cast_here(grammar: &Grammar, rule: &Rule) -> bool {
+    let Some(child) = rule.child_rule.as_ref() else {
+        return false;
+    };
+    if "paren" != child.name.as_ref() || !flag(&child.u, PAREN_GROUP) {
+        return false;
+    }
+    let Some(Value::String(name)) = child.u.get(PAREN_OP) else {
+        return false;
+    };
+    let Some(group) = grammar.parens.iter().find(|op| &op.name == name) else {
+        return false;
+    };
+    let Some(cast) = grammar.cast.get(&group.otin) else {
+        return false;
+    };
+    let Some(accept) = &cast.accept else {
+        return false;
+    };
+    let node = rule.child_value();
+    cast.ctin == group.ctin && is_op(&node) && 2 == node_length(&node) && {
+        let content = term_at(&node, 1);
+        accept.accepts(&content)
+    }
+}
+
+/// Whether this rule's context separates on `,`.
+fn separated_here(rule: &Rule) -> bool {
+    0 < counter(rule, "expr_sep")
+}
+
+/// Whether the paren this rule opened has a separated content.
+fn separated_paren(grammar: &Grammar, rule: &Rule) -> bool {
+    opened_paren(grammar, rule).is_some_and(|op| op.content.separated)
+}
+
+/// Collect a term of a separated paren content. The terms go into a node
+/// of the arena of their own, pushed in place, which the rule's `u` names:
+/// a list kept in `u` itself would be copied out and back at every
+/// separator, since the rules pushed in between share `u`, and an argument
+/// list would cost time quadratic in its length. The node is bookkeeping,
+/// not part of the expression, so it counts against no expression's size.
+fn collect_paren_item(rule: &mut Rule, term: Value) {
+    let items = match rule.u.get(PAREN_ITEMS) {
+        Some(items) if node_id(items).is_some() => items.clone(),
+        _ => {
+            let items = new_node(None, None, Vec::new());
+            rule.u_mut().insert(PAREN_ITEMS.to_string(), items.clone());
+            items
+        }
+    };
+    with_node_mut(&items, |entry| entry.terms.push(term));
+}
+
+/// The terms a separated paren content collected at its separators.
+fn paren_items(rule: &Rule) -> Vec<Value> {
+    rule.u
+        .get(PAREN_ITEMS)
+        .and_then(terms_of)
+        .unwrap_or_default()
+}
+
+/// The term a paren holds when it closes or meets a separator: its own
+/// node, or the child's when it has none yet (see `close_paren`).
+fn paren_term(rule: &Rule) -> Value {
+    let node = node_of(rule);
+    if node.is_undefined() {
+        rule.child_node.clone()
+    } else {
+        node
+    }
+}
+
+/// Place a bound preval paren after an expression, as [`prattify`] places
+/// a suffix: drilling into the last term while the operator heading it
+/// binds no tighter than the paren, and wrapping the rest, in place.
+/// Returns the node the paren heads, `[op, target]`, which the paren's
+/// content then extends.
+fn prattify_postfix(expr: &Value, op: &OpRef) -> Value {
+    let Some(expr_op) = op_of(expr) else {
+        return op.node(vec![expr.clone()]);
+    };
+    let new = &op.op;
+    if !expr_op.suffix && expr_op.right <= new.left {
+        let end = expr_op.terms;
+        let last = term_at(expr, end);
+        if op_of(&last).is_some_and(|last_op| last_op.prefix && last_op.right < new.left) {
+            return prattify_postfix(&last, op);
+        }
+        let node = op.node_under(vec![last], expr);
+        set_term(expr, end, node.clone());
+        return node;
+    }
+    let prior = dup_node(expr);
+    update_expr_node(expr, Some(new.clone()), op.token.clone(), vec![prior]);
+    expr.clone()
+}
+
+// ---------------------------------------------------------------------------
 // The plugin
 // ---------------------------------------------------------------------------
 
@@ -2135,6 +2553,20 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
             paren_plain.insert(op.otin, op.clone());
         }
     }
+    let cast = make_cast_ops(parser, &ops);
+    // Separators: a comma separates in a paren whose content is separated,
+    // and, once an infix operator on `,` is declared a separator, in lists
+    // and maps too.
+    let mut tin_sep: Vec<Tin> = vec![TIN_CA];
+    for op in infix.values() {
+        if "," == op.src && !tin_sep.contains(&op.tin) {
+            tin_sep.push(op.tin);
+        }
+    }
+    let has_separator = infix.values().any(|op| op.separator);
+    let separating = has_separator || parens.iter().any(|op| op.content.separated);
+    let has_required = parens.iter().any(|op| op.content.required);
+    let has_bound = paren_preval.values().any(|op| bound(op));
     let mut tin_open: Vec<Tin> = Vec::new();
     let mut tin_close: Vec<Tin> = Vec::new();
     for op in &parens {
@@ -2170,6 +2602,13 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
         paren_plain,
         paren_preval,
         evaluate: options.evaluate.clone(),
+        cast,
+        tin_sep,
+        separating,
+        has_separator,
+        has_required,
+        has_bound,
+        no_juxtapose: Some(false) == options.juxtapose,
     });
 
     comment_before_fixed(parser, &grammar);
@@ -2327,6 +2766,32 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             }
         }
 
+        // With `juxtapose: false`, the base grammar's implicit list of
+        // values side by side is refused inside a paren group, where the
+        // paren rule allows implicits again, and after a value an
+        // expression made (its val pushed an expr rule: `-a b`): no
+        // alternate takes the second value, and the parse fails on it with
+        // `unexpected`.
+        if grammar.no_juxtapose {
+            for alt in spec.close.iter_mut().filter(|alt| {
+                group_has(&alt.g, "imp")
+                    && group_has(&alt.g, "space")
+                    && group_has(&alt.g, "jsonic")
+            }) {
+                let previous = alt.c_fn.clone();
+                alt.c_fn = Some(Arc::new(move |rule: &mut Rule, context: &mut Context| {
+                    previous
+                        .as_ref()
+                        .is_none_or(|condition| condition(rule, context))
+                        && 0 == counter(rule, "expr_paren")
+                        && rule
+                            .child_rule
+                            .as_ref()
+                            .is_none_or(|child| "expr" != child.name.as_ref())
+                }));
+            }
+        }
+
         let mut open: Vec<AltSpec> = Vec::new();
 
         // The prefix operator of the first term of an expression.
@@ -2354,11 +2819,13 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 else {
                     return false;
                 };
-                let Some(allow) = &pdef.preval.allow else {
-                    return true;
-                };
-                let preval = rule.resolve_open_value(0, context);
-                allow.contains(&value_string(Some(&preval)))
+                if let Some(allow) = &pdef.preval.allow {
+                    let preval = rule.resolve_open_value(0, context);
+                    if !allow.contains(&value_string(Some(&preval))) {
+                        return false;
+                    }
+                }
+                binds_here(rule, &pdef)
             }));
             alt.u = locals(&[("paren_preval", Value::Bool(true))]);
             alt.g = "expr,expr-paren,expr-paren-preval".into();
@@ -2388,6 +2855,18 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         prepend_open_all(spec, open);
 
         let mut close: Vec<AltSpec> = Vec::new();
+
+        // A separator where the context separates (n.expr_sep): the value
+        // ends, and the rule that collects the terms takes the comma.
+        if grammar.separating {
+            let mut alt = on(&grammar.tin_sep);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                separated_here(rule)
+            }));
+            alt.b = 1;
+            alt.g = "expr,expr-sep".into();
+            close.push(alt);
+        }
 
         // Comma-op suppression. When a parent rule (an embedding
         // grammar's wrapper rule, say) sets n.no_comma_op, bail at `,`
@@ -2481,14 +2960,37 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 if node.is_undefined() {
                     return false;
                 }
-                let Some(allow) = &pdef.preval.allow else {
-                    return true;
-                };
-                allow.contains(&value_string(Some(&node)))
+                if let Some(allow) = &pdef.preval.allow {
+                    if !allow.contains(&value_string(Some(&node))) {
+                        return false;
+                    }
+                }
+                binds_here(rule, &pdef)
             }));
             alt.p = Some("expr".into());
             alt.u = locals(&[("paren_preval", Value::Bool(true))]);
             alt.g = "expr,expr-paren,expr-paren-preval-chain".into();
+            close.push(alt);
+        }
+
+        // A bound preval paren that binds looser than the operator whose
+        // operand this value is: the value ends, and the expression that
+        // operator heads takes the paren as its postfix.
+        if grammar.has_bound {
+            let mut alt = on(&grammar.tin_open);
+            alt.b = 1;
+            let condition = grammar.clone();
+            alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+                let Some(pdef) = rule
+                    .c0()
+                    .and_then(|token| condition.paren_preval.get(&token.tin))
+                    .cloned()
+                else {
+                    return false;
+                };
+                bound(&pdef) && !node_of(rule).is_undefined() && !binds_here(rule, &pdef)
+            }));
+            alt.g = "expr,expr-paren,expr-postfix".into();
             close.push(alt);
         }
 
@@ -2557,7 +3059,8 @@ fn clear_expr_counters(rule: &mut Rule) {
 fn install_list(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
     let grammar = grammar.clone();
     parser.define_rule("list", move |spec| {
-        spec.prepend_bo(|rule: &mut Rule, _context: &mut Context| {
+        let flags = grammar.clone();
+        spec.prepend_bo(move |rule: &mut Rule, _context: &mut Context| {
             // List elements are new expressions, unless this is an
             // implicit list.
             let implicit = rule
@@ -2566,8 +3069,17 @@ fn install_list(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 .is_some_and(|prev| matches!(prev.u.get("implist"), Some(Value::Bool(true))));
             if !implicit {
                 clear_expr_counters(rule);
+                // A list separates on `,` once an infix operator on `,`
+                // gives way to separators, and otherwise leaves the comma
+                // to that operator.
+                if flags.separating {
+                    let sep = i32::from(flags.has_separator);
+                    rule.n_mut().insert("expr_sep".into(), sep);
+                }
             }
         });
+
+        let mut close: Vec<AltSpec> = Vec::new();
 
         if grammar.has_paren() {
             let mut alt = on(&grammar.tin_close);
@@ -2582,8 +3094,28 @@ fn install_list(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 }
             }));
             alt.g = "expr".into();
-            prepend_close_all(spec, vec![alt]);
+            close.push(alt);
+        }
 
+        // An implicit list of values side by side ends at a separator of
+        // the paren content it is a term of.
+        if grammar.separating {
+            let mut alt = on(&grammar.tin_sep);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                separated_here(rule)
+                    && rule
+                        .prev_rule
+                        .as_ref()
+                        .is_some_and(|prev| flag(&prev.u, "implist"))
+            }));
+            alt.b = 1;
+            alt.g = "expr,expr-sep".into();
+            close.push(alt);
+        }
+
+        prepend_close_all(spec, close);
+
+        if grammar.has_paren() {
             spec.add_ac(|rule: &mut Rule, _context: &mut Context| {
                 propagate_to_paren(rule);
             });
@@ -2594,8 +3126,16 @@ fn install_list(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
 fn install_map(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
     let grammar = grammar.clone();
     parser.define_rule("map", move |spec| {
-        // Map values are new expressions.
-        spec.prepend_bo(|rule: &mut Rule, _context: &mut Context| clear_expr_counters(rule));
+        // Map values are new expressions, and a map separates on `,` as a
+        // list does.
+        let flags = grammar.clone();
+        spec.prepend_bo(move |rule: &mut Rule, _context: &mut Context| {
+            clear_expr_counters(rule);
+            if flags.separating {
+                let sep = i32::from(flags.has_separator);
+                rule.n_mut().insert("expr_sep".into(), sep);
+            }
+        });
 
         if grammar.has_paren() {
             let mut alt = on(&grammar.tin_close);
@@ -2618,10 +3158,29 @@ fn install_map(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
 fn install_elem(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
     let grammar = grammar.clone();
     parser.define_rule("elem", move |spec| {
+        let mut close: Vec<AltSpec> = Vec::new();
+
+        // An implicit list of values side by side ends at a separator of
+        // the paren content it is a term of: the list ends with it.
+        if grammar.separating {
+            let mut alt = on(&grammar.tin_sep);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                separated_here(rule)
+                    && rule
+                        .parent_rule
+                        .as_ref()
+                        .and_then(|parent| parent.prev_rule.clone())
+                        .is_some_and(|prev| flag(&prev.u, "implist"))
+            }));
+            alt.b = 1;
+            alt.g = "expr,expr-sep".into();
+            close.push(alt);
+        }
+
         if !grammar.has_paren() {
+            prepend_close_all(spec, close);
             return;
         }
-        let mut close: Vec<AltSpec> = Vec::new();
 
         // Close an implicit list within parens.
         let mut alt = on(&grammar.tin_close);
@@ -2871,6 +3430,81 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
     parser.define_rule("expr", move |spec| {
         let mut open: Vec<AltSpec> = Vec::new();
 
+        // A cast: the group just closed (the expr this one replaced holds
+        // it, `[group, type]`) heads a prefix expression, `[cast, type]`,
+        // whose operand follows. It takes no token: the group was the
+        // token.
+        if grammar.has_cast() {
+            let mut alt = always();
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                rule.prev_rule
+                    .as_ref()
+                    .is_some_and(|prev| flag(&prev.u, CAST_NEXT))
+            }));
+            alt.n = counters(&[
+                ("expr", 1),
+                ("expr_prefix", 1),
+                ("expr_suffix", 0),
+                ("dlist", 1),
+                ("dmap", 1),
+            ]);
+            alt.p = Some("val".into());
+            alt.g = "expr,expr-cast".into();
+            let ops = grammar.clone();
+            alt.add_action(move |rule: &mut Rule, _context: &mut Context| {
+                let group = linked_node(rule.prev_rule.as_ref());
+                let Some(cast) = op_of(&group).and_then(|gop| ops.cast.get(&gop.otin).cloned())
+                else {
+                    return;
+                };
+                let token = with_node(&group, |entry| entry.token.clone()).flatten();
+                let op = OpRef::at(&cast, token);
+                let prior = rule.parent_rule.clone();
+                let node = prior_expr(rule, prior.as_ref(), &op);
+                push_term(&node, term_at(&group, 1));
+                publish_expr(rule, node.clone());
+                // The val that pushed the group's expr reads its node from
+                // that expr, its child, when it closes: that expr holds the
+                // cast too.
+                write_linked_node(rule.prev_rule.as_ref(), node);
+            });
+            open.push(alt);
+        }
+
+        // A bound preval paren after an expression: a postfix operator
+        // that takes the expression, or as much of it as it binds tighter
+        // than, as its first term, placed as a suffix is
+        // (`prattify_postfix`). The paren then parses the content into the
+        // same node.
+        if grammar.has_bound {
+            let mut alt = on(&grammar.tin_open);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                rule.prev_rule
+                    .as_ref()
+                    .is_some_and(|prev| flag(&prev.u, POSTFIX_NEXT))
+            }));
+            alt.n = counters(&[("expr", 1), ("expr_prefix", 0), ("dlist", 1), ("dmap", 1)]);
+            alt.p = Some("paren".into());
+            alt.b = 1;
+            alt.g = "expr,expr-paren,expr-postfix".into();
+            let ops = grammar.clone();
+            alt.add_action(move |rule: &mut Rule, _context: &mut Context| {
+                let Some(op) = Grammar::op_use(&ops.paren_preval, rule.o0()) else {
+                    return;
+                };
+                let previous = linked_node(rule.prev_rule.as_ref());
+                let node = if is_op(&previous) {
+                    prattify_postfix(&previous, &op)
+                } else {
+                    let prior = rule.prev_rule.clone();
+                    prior_expr(rule, prior.as_ref(), &op)
+                };
+                publish_expr(rule, node.clone());
+                rule.u_mut().insert(POSTFIX.to_string(), node);
+            });
+            open.push(alt);
+        }
+
         // An opening parenthesis of an expression.
         if grammar.has_paren() {
             let mut alt = on(&grammar.tin_open);
@@ -3005,11 +3639,32 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
 
         let mut close: Vec<AltSpec> = Vec::new();
 
+        // A group the table's cast accepts: the expression goes on as a
+        // cast whose operand follows (the open alternate above), so this
+        // close keeps n.expr and nothing evaluates the group yet. Inside a
+        // list, a map or a paren, n.expr is zero by descent, and the
+        // after-close would evaluate the group.
+        if grammar.has_cast() {
+            let mut alt = always();
+            let condition = grammar.clone();
+            alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+                cast_here(&condition, rule)
+            }));
+            alt.n = counters(&[("expr", 1)]);
+            alt.r = Some("expr".into());
+            alt.u = locals(&[(CAST_NEXT, Value::Bool(true))]);
+            alt.g = "expr,expr-cast".into();
+            close.push(alt);
+        }
+
+        // A postfix paren's expression goes on after the paren, as a
+        // suffix's does, so it takes the alternates below.
         let mut alt = always();
         alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
             rule.child_rule
                 .as_ref()
                 .is_some_and(|child| "paren" == child.name.as_ref())
+                && !rule.u.contains_key(POSTFIX)
         }));
         alt.n = counters(&[("expr", 0)]);
         alt.g = "expr,expr-end,expr-paren-end".into();
@@ -3029,6 +3684,19 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             alt.b = 1;
             alt.n = counters(&[("expr", 0)]);
             alt.g = "expr,no-comma-op-bail".into();
+            close.push(alt);
+        }
+
+        // A separator where the context separates: the expression ends,
+        // and the rule that collects the terms takes the comma.
+        if grammar.separating {
+            let mut alt = on(&grammar.tin_sep);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                separated_here(rule)
+            }));
+            alt.b = 1;
+            alt.n = counters(&[("expr", 0)]);
+            alt.g = "expr,expr-sep".into();
             close.push(alt);
         }
 
@@ -3079,6 +3747,36 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             close.push(alt);
         }
 
+        // A bound preval paren after this expression: a postfix that the
+        // next expr rule places, as the suffix alternate above does. After
+        // a prefix expression the prefix completes first, as for a suffix,
+        // and the paren is left to the expression the prefix belongs to.
+        if grammar.has_bound {
+            let mut alt = on(&grammar.tin_open);
+            let condition = grammar.clone();
+            alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+                rule.c0()
+                    .is_some_and(|token| condition.postfix_opener(token.tin))
+                    && 0 == counter(rule, "expr_prefix")
+            }));
+            alt.b = 1;
+            alt.r = Some("expr".into());
+            alt.u = locals(&[(POSTFIX_NEXT, Value::Bool(true))]);
+            alt.g = "expr,expr-paren,expr-postfix".into();
+            close.push(alt);
+
+            let mut alt = on(&grammar.tin_open);
+            let condition = grammar.clone();
+            alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+                rule.c0()
+                    .is_some_and(|token| condition.postfix_opener(token.tin))
+                    && 0 != counter(rule, "expr_prefix")
+            }));
+            alt.b = 1;
+            alt.g = "expr,expr-paren,expr-postfix,expr-prefix".into();
+            close.push(alt);
+        }
+
         if grammar.has_paren() {
             let mut alt = on(&grammar.tin_close);
             alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
@@ -3114,10 +3812,12 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         alt.g = "expr,comma,list,top".into();
         close.push(alt);
 
-        // Implicit list at the top level, space separated.
+        // Implicit list at the top level, space separated, unless values
+        // side by side are refused.
         let mut alt = on(&VAL_TINS);
-        alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
-            0 == rule.d
+        let no_juxtapose = grammar.no_juxtapose;
+        alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+            0 == rule.d && !no_juxtapose
         }));
         alt.n = counters(&[("expr", 0)]);
         alt.b = 1;
@@ -3153,13 +3853,13 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         // alone lets the val-close suffix alternate take it, which is how
         // the same expression already parses at the top level.
         let mut alt = always();
-        let suffix_tins = grammar.tin_suffix.clone();
+        let condition = grammar.clone();
         alt.c_fn = Some(Arc::new(move |rule: &mut Rule, context: &mut Context| {
+            let next = context.t0().map(|token| token.tin);
             rule.lte("pk", 0)
                 && rule.lte("expr_suffix", 0)
-                && !context
-                    .t0()
-                    .is_some_and(|token| suffix_tins.contains(&token.tin))
+                && !next.is_some_and(|tin| condition.tin_suffix.contains(&tin))
+                && !(condition.no_juxtapose && next.is_some_and(|tin| condition.starts_value(tin)))
         }));
         alt.n = counters(&[("expr", 0)]);
         alt.h_match = Some(Arc::new(|matched, rule, context, _next| {
@@ -3245,6 +3945,16 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 };
                 *parent.node.borrow_mut() = out.clone();
 
+                // A cast took over its group's expr rule, which the val that
+                // pushed it reads its node from when it closes.
+                if rule
+                    .prev_rule
+                    .as_ref()
+                    .is_some_and(|prev| flag(&prev.u, CAST_NEXT))
+                {
+                    write_linked_node(rule.prev_rule.as_ref(), out.clone());
+                }
+
                 // Also write the evaluated result onto this rule's own
                 // node. When the expr rule was PUSHED from a still-open
                 // val (the prefix and paren forms, `+1`, `(a)`), that
@@ -3277,6 +3987,23 @@ fn install_paren(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         });
 
         let mut open: Vec<AltSpec> = Vec::new();
+
+        // A paren whose content is required may not be empty: `()` is
+        // refused at its closer, where a content was due.
+        if grammar.has_required {
+            let mut alt = on2(&grammar.tin_open, &grammar.tin_close);
+            let condition = grammar.clone();
+            alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+                let close = rule.o1().map(|token| token.tin);
+                paren_op_for(&condition, rule)
+                    .is_some_and(|op| Some(op.ctin) == close && op.content.required)
+            }));
+            alt.e = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                rule.o1().cloned()
+            }));
+            alt.g = "expr,expr-paren,empty,required".into();
+            open.push(alt);
+        }
 
         // Empty parens: `()`.
         let mut alt = on2(&grammar.tin_open, &grammar.tin_close);
@@ -3311,6 +4038,43 @@ fn install_paren(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
 
         prepend_open_all(spec, open);
 
+        let mut close: Vec<AltSpec> = Vec::new();
+
+        // A separator in a separated content: the term before it is done,
+        // and the next one follows. The loop is this rule's own close, so a
+        // long argument list adds no rule depth. A term that is empty
+        // (`f(,a)`, `f(a,,b)`) is refused at the separator after it.
+        if grammar.separating {
+            let mut alt = on(&grammar.tin_sep);
+            let condition = grammar.clone();
+            alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+                separated_paren(&condition, rule) && paren_term(rule).is_undefined()
+            }));
+            alt.e = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                rule.c0().cloned()
+            }));
+            alt.g = "expr,expr-paren,expr-sep,empty".into();
+            close.push(alt);
+
+            let mut alt = on(&grammar.tin_sep);
+            let condition = grammar.clone();
+            alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+                separated_paren(&condition, rule)
+            }));
+            alt.p = Some("val".into());
+            alt.n = counters(&[("expr", 0), ("expr_prefix", 0), ("expr_suffix", 0)]);
+            alt.add_action(|rule: &mut Rule, _context: &mut Context| {
+                let term = paren_term(rule);
+                collect_paren_item(rule, term);
+                rule.u_mut()
+                    .insert(PAREN_MORE.to_string(), Value::Bool(true));
+                // The next term starts empty, as the first did.
+                set_node(rule, Value::Undefined);
+            });
+            alt.g = "expr,expr-paren,expr-sep".into();
+            close.push(alt);
+        }
+
         let mut alt = on(&grammar.tin_close);
         let condition = grammar.clone();
         // The closer of the operator this paren opened.
@@ -3323,9 +4087,29 @@ fn install_paren(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             close_paren(&ops, rule);
         });
         alt.g = "expr,expr-paren,close".into();
-        prepend_close_all(spec, vec![alt]);
+        close.push(alt);
+
+        prepend_close_all(spec, close);
 
         spec.add_ac(|rule: &mut Rule, _context: &mut Context| {
+            // A separator's pass goes on to the next term: the paren is
+            // not done.
+            if flag(&rule.u, PAREN_MORE) {
+                rule.u_mut()
+                    .insert(PAREN_MORE.to_string(), Value::Bool(false));
+                return;
+            }
+            // A postfix paren extended the node of the expression it
+            // applies to, in place, and its expr rule holds that node
+            // already: the rules above hold the expression's root, which
+            // stays.
+            if rule
+                .parent_rule
+                .as_ref()
+                .is_some_and(|parent| parent.u.contains_key(POSTFIX))
+            {
+                return;
+            }
             let node = node_of(rule);
             let parent = rule.parent_rule.clone();
             write_linked_node(parent.as_ref(), node.clone());
@@ -3340,18 +4124,25 @@ fn install_paren(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
 /// as `u.paren_preval`, and the group otherwise.
 fn paren_op_for(grammar: &Grammar, rule: &Rule) -> Option<Arc<Op>> {
     let tin = rule.o0()?.tin;
-    let preval = rule
-        .parent_rule
-        .as_ref()
-        .and_then(|parent| parent.parent_rule.clone())
-        .is_some_and(|grandparent| {
-            matches!(grandparent.u.get("paren_preval"), Some(Value::Bool(true)))
-        });
-    if preval {
+    if paren_has_preval(rule) {
         grammar.paren_preval.get(&tin).cloned()
     } else {
         grammar.paren_plain.get(&tin).cloned()
     }
+}
+
+/// Whether a value precedes this paren's opener: the val that pushed its
+/// expr recorded `paren_preval`, or the paren is a postfix of the
+/// expression its expr extends.
+fn paren_has_preval(rule: &Rule) -> bool {
+    let Some(parent) = rule.parent_rule.as_ref() else {
+        return false;
+    };
+    parent.u.contains_key(POSTFIX)
+        || parent
+            .parent_rule
+            .as_ref()
+            .is_some_and(|grandparent| flag(&grandparent.u, "paren_preval"))
 }
 
 /// The `u` key a paren rule records the operator it opened under, by name:
@@ -3373,6 +4164,17 @@ fn open_paren(grammar: &Grammar, rule: &mut Rule) {
     };
     rule.u_mut()
         .insert(PAREN_OP.to_string(), Value::String(op.name.clone()));
+    // A group, opened with no value before it, which a cast may take as
+    // its token.
+    let group = !paren_has_preval(rule);
+    rule.u_mut()
+        .insert(PAREN_GROUP.to_string(), Value::Bool(group));
+    // The content separates on commas only in a paren whose content is
+    // separated: a group inside a call takes the comma operator again.
+    if grammar.separating {
+        rule.n_mut()
+            .insert("expr_sep".into(), i32::from(op.content.separated));
+    }
     let depth = paren_depth(&op.name);
     rule.u_mut().insert(depth.clone(), Value::Number(1.0));
     rule.n_mut().insert(depth, 1);
@@ -3412,6 +4214,7 @@ fn close_paren(grammar: &Grammar, rule: &mut Rule) {
         let grandparent = rule
             .parent_rule
             .as_ref()
+            .filter(|parent| !parent.u.contains_key(POSTFIX))
             .and_then(|parent| parent.parent_rule.clone());
         if let Some(grandparent) = &grandparent {
             let preval = grandparent.node.borrow().clone();
@@ -3422,10 +4225,32 @@ fn close_paren(grammar: &Grammar, rule: &mut Rule) {
             }
         }
 
+        // The content's terms: the one term, or each term of a separated
+        // content, the earlier ones collected at their separators.
+        let mut content: Vec<Value> = paren_items(rule);
         if !node.is_undefined() {
-            terms.push(node);
+            content.push(node);
         }
 
+        // A postfix paren extends the node its expr rule placed in the
+        // tree, `[op, target]`, in place.
+        let postfix = rule
+            .parent_rule
+            .as_ref()
+            .and_then(|parent| parent.u.get(POSTFIX).cloned());
+        if let Some(postfix) = postfix {
+            with_node_mut(&postfix, |entry| {
+                entry.op = Some(op.op.clone());
+                entry.token = op.token.clone();
+            });
+            for term in content {
+                push_term(&postfix, term);
+            }
+            set_node(rule, postfix);
+            return;
+        }
+
+        terms.extend(content);
         set_node(rule, op.node(terms));
     } else {
         set_node(rule, node);
@@ -3547,7 +4372,15 @@ fn install_ternary(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         let mut tins = vec![TIN_CA];
         tins.extend(grammar.tin_close.iter().copied());
         let mut alt = on(&tins);
-        alt.c_fn = Some(Arc::new(implicit_ternary_cond));
+        // Not at a separator of a separated content, which ends the
+        // ternary as one of that content's terms.
+        let condition = grammar.clone();
+        alt.c_fn = Some(Arc::new(move |rule: &mut Rule, context: &mut Context| {
+            let at_sep = rule
+                .c0()
+                .is_some_and(|token| condition.tin_sep.contains(&token.tin));
+            implicit_ternary_cond(rule, context) && !(separated_here(rule) && at_sep)
+        }));
         let closers = grammar.tin_close.clone();
         alt.b_fn = Some(Arc::new(move |_rule: &mut Rule, context: &mut Context| {
             usize::from(next_is_close(context, &closers))
@@ -3573,7 +4406,16 @@ fn install_ternary(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         // End of ternary at the top level, implicit list indicated by a
         // space separated value.
         let mut alt = always();
-        alt.c_fn = Some(Arc::new(implicit_ternary_cond));
+        // Neither at a separator of a separated content, nor, with
+        // `juxtapose: false`, at a value beside the ternary.
+        let condition = grammar.clone();
+        alt.c_fn = Some(Arc::new(move |rule: &mut Rule, context: &mut Context| {
+            let next = context.t0().map(|token| token.tin);
+            implicit_ternary_cond(rule, context)
+                && !(separated_here(rule)
+                    && next.is_some_and(|tin| condition.tin_sep.contains(&tin)))
+                && !(condition.no_juxtapose && next.is_some_and(|tin| condition.starts_value(tin)))
+        }));
         let closers = grammar.tin_close.clone();
         alt.r_fn = Some(Arc::new(move |rule: &mut Rule, context: &mut Context| {
             let ended = context.t0().is_some_and(|token| TIN_ZZ == token.tin);
