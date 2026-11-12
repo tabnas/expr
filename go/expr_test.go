@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	jsonic "github.com/tabnas/jsonic/go"
 	tabnas "github.com/tabnas/parser/go"
@@ -352,6 +353,117 @@ func TestSpecOptionsAll(t *testing.T) {
 	runSpec(t, "options-all.tsv", cLike(cOptions{
 		left: true, cast: true, separated: true, refuseJuxtaposed: true, required: true,
 	}))
+}
+
+// cTernary is the small C of tabnas/c's reading through expr: cLike with
+// every option of #105 on, and assign `=` infix (left 1500000, right
+// 1400000, right-associative) and tern `?` `:`, a ternary, with Left
+// 1700000 and Right 1600000 when its binding powers are on. With values,
+// the host grammar's value `@` (a token of its own, #AT, which jsonic's
+// lexer does not cut as a value) is declared.
+func cTernary(bound, values bool) *jsonic.Jsonic {
+	tern := map[string]interface{}{"src": []interface{}{"?", ":"}, "ternary": true}
+	if bound {
+		tern["left"] = 1700000
+		tern["right"] = 1600000
+	}
+	op := map[string]interface{}{
+		"comma": map[string]interface{}{
+			"src": ",", "infix": true, "left": 1000000, "right": 1100000, "separator": true,
+		},
+		"assign":   map[string]interface{}{"src": "=", "infix": true, "left": 1500000, "right": 1400000},
+		"tern":     tern,
+		"deref":    map[string]interface{}{"src": "*", "prefix": true, "right": 4000000},
+		"post_inc": map[string]interface{}{"src": "++", "suffix": true, "left": 5000000},
+		"dot":      map[string]interface{}{"src": ".", "infix": true, "left": 5000000, "right": 5100000},
+		"paren": map[string]interface{}{
+			"paren": true, "osrc": "(", "csrc": ")",
+			"preval":  map[string]interface{}{"active": false},
+			"content": map[string]interface{}{"required": true},
+		},
+		"call": map[string]interface{}{
+			"paren": true, "osrc": "(", "csrc": ")", "left": 5000000,
+			"preval":  map[string]interface{}{"active": true},
+			"content": map[string]interface{}{"separated": true},
+		},
+		"subscript": map[string]interface{}{
+			"paren": true, "osrc": "[", "csrc": "]", "left": 5000000,
+			"preval": map[string]interface{}{"active": true, "required": true},
+		},
+		"cast": map[string]interface{}{
+			"cast": true, "osrc": "(", "csrc": ")", "right": 4000000,
+			"accept": func(term interface{}) bool {
+				return term == "int" || term == "long" || term == "char"
+			},
+		},
+	}
+	j := jsonic.Make()
+	j.SetOptions(tabnas.Options{Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#AT": strPtr("@")}}})
+	at := int(j.Token("#AT"))
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.PrependOpen(&tabnas.AltSpec{
+			S: [][]int{{at}},
+			A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "@" },
+			G: "host-value",
+		})
+	})
+	opts := map[string]interface{}{"op": op, "evaluate": namedEvaluate, "juxtapose": false}
+	if values {
+		opts["values"] = []interface{}{"#AT"}
+	}
+	_ = j.Use(Expr, opts)
+	return j
+}
+
+func strPtr(s string) *string { return &s }
+
+// tabnas/c's reading through expr: a ternary placed by its binding powers,
+// and a host grammar's values refused side by side.
+func TestSpecOptionsTernaryOff(t *testing.T) {
+	runSpec(t, "options-ternary-off.tsv", cTernary(false, false))
+}
+
+func TestSpecOptionsTernary(t *testing.T) {
+	runSpec(t, "options-ternary.tsv", cTernary(true, false))
+}
+
+func TestSpecOptionsValuesOff(t *testing.T) {
+	runSpec(t, "options-values-off.tsv", cTernary(true, false))
+}
+
+func TestSpecOptionsValues(t *testing.T) {
+	runSpec(t, "options-values.tsv", cTernary(true, true))
+}
+
+// A ternary's value under an evaluator, wherever it stands: call `(` `)`
+// is a preval paren whose content is separated, beside a comma separator.
+func TestSpecTernaryEvaluate(t *testing.T) {
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			"ternary": map[string]interface{}{"ternary": true, "src": []interface{}{"?", ":"}},
+			"comma": map[string]interface{}{
+				"src": ",", "infix": true, "left": 1000000, "right": 1100000, "separator": true,
+			},
+			"call": map[string]interface{}{
+				"paren": true, "osrc": "(", "csrc": ")",
+				"preval":  map[string]interface{}{"active": true},
+				"content": map[string]interface{}{"separated": true},
+			},
+		},
+		"evaluate": namedEvaluate,
+	})
+	runSpec(t, "ternary-evaluate.tsv", j)
+}
+
+// A prefix operator before a ternary, and an operator in its middle term,
+// inside a paren.
+func TestSpecTernaryParen(t *testing.T) {
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			"ternary": map[string]interface{}{"ternary": true, "src": []interface{}{"?", ":"}},
+		},
+	})
+	runSpec(t, "ternary-paren.tsv", j)
 }
 
 func TestSpecUnarySuffixEdge(t *testing.T) {
@@ -1539,6 +1651,68 @@ func TestOptionsRepeatByReplacement(t *testing.T) {
 	} {
 		if long, short := deepest(c.long), deepest(c.short); long != short {
 			t.Errorf("%s: %d items reach rule depth %d, one reaches %d", c.what, n, long, short)
+		}
+	}
+
+	// Ternaries with a binding power, chained through their last terms,
+	// each after an operator.
+	op["tern"] = map[string]interface{}{
+		"src": []interface{}{"?", ":"}, "ternary": true, "left": 1700000, "right": 1600000,
+	}
+	tern := func(i int) string { return fmt.Sprintf("a%d ? b%d :", i, i) }
+	if long, short := deepest("x = "+many(" ", tern)+" z"), deepest("x = a0 ? b0 : z"); long != short {
+		t.Errorf("chained ternaries: %d items reach rule depth %d, one reaches %d", n, long, short)
+	}
+}
+
+// A tree as deep as a long chain of operators is built and evaluated:
+// ten thousand terms of a left-associative chain, which each new operator
+// is placed above, in time linear in its length (each operand fills the
+// slot its operator was placed at, where a walk of the whole tree for the
+// deepest open slot made the chain cost n squared, tabnas/expr#110), and
+// of a right-associative one, which each new operator is placed down to.
+// (TypeScript's `deep-trees`.)
+func TestDeepTrees(t *testing.T) {
+	const n = 10000
+	op := map[string]interface{}{
+		"assign": map[string]interface{}{"src": "=", "infix": true, "left": 1500000, "right": 1400000},
+	}
+	evaluated := makeExprJsonic(map[string]interface{}{"op": op, "evaluate": namedEvaluate})
+	plain := makeExprJsonic(map[string]interface{}{"op": op})
+	depth := func(v interface{}) int {
+		d := 0
+		for {
+			sl, ok := v.([]interface{})
+			if !ok || len(sl) < 2 {
+				return d
+			}
+			d++
+			if sl[1] == "a" {
+				v = sl[2]
+			} else {
+				v = sl[1]
+			}
+		}
+	}
+	for _, sep := range []string{"+", "="} {
+		src := strings.TrimSuffix(strings.Repeat("a"+sep, n), sep)
+		start := time.Now()
+		v, err := evaluated.Parse(src)
+		if err != nil {
+			t.Fatalf("%s: %v", sep, err)
+		}
+		if d := depth(v); d != n-1 {
+			t.Errorf("%s evaluated: depth %d, not %d", sep, d, n-1)
+		}
+		p, err := plain.Parse(src)
+		if err != nil {
+			t.Fatalf("%s: %v", sep, err)
+		}
+		if d := depth(SimplifyOrdered(p)); d != n-1 {
+			t.Errorf("%s simplified: depth %d, not %d", sep, d, n-1)
+		}
+		if took := time.Since(start); sep == "+" && took > 2*time.Second {
+			t.Errorf("%s: %d terms took %v", sep, n, took)
 		}
 	}
 }

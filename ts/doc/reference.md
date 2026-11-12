@@ -96,6 +96,7 @@ type ExprOptions = {
   evaluate?: Evaluate
   fold?: FoldOptions
   juxtapose?: boolean
+  values?: string[]
 }
 ```
 
@@ -105,6 +106,7 @@ type ExprOptions = {
 | `evaluate` | `Evaluate` | If set, each expression is reduced to a value during parsing, and `parse` returns values instead of S-expression trees. |
 | `fold` | `FoldOptions` | If set, the finished document is folded before `parse` returns: its key operators are resolved against the whole tree. See [`fold`](#fold). |
 | `juxtapose` | `boolean` | Whether values side by side inside an expression or a paren group make an implicit list. The default, `true`, keeps the jsonic reading, where `f(a b)` calls `f` with `[a, b]`. With `false` the parser refuses the second value with `unexpected`. See [Values side by side](#values-side-by-side). |
+| `values` | `string[]` | The names of a host grammar's own value tokens, such as an identifier or a number its own lexer reads. With `juxtapose: false`, the parser refuses one after a value wherever it stands. See [Values side by side](#values-side-by-side). |
 
 Options are merged with the defaults; you only specify what differs. The
 operator name you pick is decorated by kind (see [Operator names](#operator-names)).
@@ -149,8 +151,8 @@ type OpDef = {
 | `src` | infix, prefix, suffix, key | The operator token text, for example `'+'`. For `ternary`, a two-element array `[open, close]`, for example `['?', ':']`. For `key`, the member name that marks a site, for example `'$ref'`. |
 | `osrc` | paren | The opening token text, for example `'('`, `'['`, `'<'`. |
 | `csrc` | paren | The closing token text, for example `')'`, `']'`, `'>'`. |
-| `left` | infix, suffix, preval paren | Left binding power. Higher binds tighter. Defaults to `Number.MIN_SAFE_INTEGER` (loosest); a declared `0` takes that default too. For a preval paren, see [Binding power of a preval paren](#binding-power-of-a-preval-paren). |
-| `right` | infix, prefix | Right binding power. Higher binds tighter. Defaults to `Number.MAX_SAFE_INTEGER` (tightest); a declared `0` takes that default too. |
+| `left` | infix, suffix, preval paren, ternary | Left binding power. Higher binds tighter. Defaults to `Number.MIN_SAFE_INTEGER` (loosest); a declared `0` takes that default too. For a preval paren, see [Binding power of a preval paren](#binding-power-of-a-preval-paren). For a ternary, see [A ternary with a binding power](#a-ternary-with-a-binding-power). |
+| `right` | infix, prefix, ternary | Right binding power. Higher binds tighter. Defaults to `Number.MAX_SAFE_INTEGER` (tightest); a declared `0` takes that default too. |
 | `infix` | (none) | Mark as a binary infix operator (2 terms). |
 | `prefix` | (none) | Mark as a unary prefix operator (1 term). |
 | `suffix` | (none) | Mark as a unary suffix/postfix operator (1 term). |
@@ -210,6 +212,26 @@ binds no tighter, it takes that operator's whole expression instead, as
 a suffix does. With `left: 5000000` on `[` and `.` at `5000000` and
 `5100000`, `a.b[1]` reads as `(a.b)[1]`, as in C.
 
+### A ternary with a binding power
+
+A ternary with no `left` is looser than every operator around it: it
+takes the whole expression before it as its first term, and the whole
+one after it as its last, so with `=` declared, `x = a ? b : c` is
+`(x = a) ? b : c`.
+
+The parser places a ternary with a `left` as it places an infix operator. Its first
+term is as much of the expression before it as binds tighter than its
+`left`, and its last term is an operand on its right, which an operator
+after it binds into, or takes the whole ternary, by the same comparison
+with its `right`. With `left: 1700000` and `right: 1600000`, between an
+`=` at `1500000` and `1400000` and the default additive operators,
+`x = a ? b : c` is `x = (a ? b : c)`, and `a ? b : c + d` is
+`a ? b : (c + d)`, as in C. The middle term, between the two tokens, is
+an expression of its own, in which a comma is the comma operator even
+where the context separates on commas: `f(a ? b, c : d)` passes `f` one
+term. A ternary with no middle term's end, as in `a ? b`, fails with
+`unexpected`.
+
 ### Casts
 
 A cast is a prefix operator whose token is a group, as `(int)` is in
@@ -254,6 +276,13 @@ the second value inside an expression or a paren group, with
 `unexpected`, so `f(a b)`, `(a b)`, and `1+2 3` all fail. A document's
 own implicit list outside any expression, as in `a b`, and the items of
 a list or a map keep their reading.
+
+A host grammar whose own lexer reads values, such as identifiers,
+names their tokens in `values`. With `juxtapose: false`, one of them
+after a value or an expression is a value side by side wherever it
+stands, the items of a list or a map included, and the parser refuses it
+there: an expression never ends at one, and one never reaches the rule
+the expression is in.
 
 ### Key operators
 

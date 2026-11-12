@@ -72,6 +72,74 @@ const cLike = (on: COptions) => {
 }
 
 
+// The small C of tabnas/c's reading through expr: `cLike` with every
+// option of #105 on, and `assign` `=` infix (left 1500000, right 1400000,
+// right-associative) and `tern` `?` `:`, a ternary, with `left` 1700000
+// and `right` 1600000 when its binding powers are on. With `values`, the
+// host grammar's value `@` (a token of its own, `#AT`, which jsonic's
+// lexer does not cut as a value) is declared.
+const cTernary = (on: { bound?: boolean, values?: boolean }) => {
+  const op: any = {
+    comma: { src: ',', infix: true, left: 1000000, right: 1100000, separator: true },
+    assign: { src: '=', infix: true, left: 1500000, right: 1400000 },
+    tern: {
+      src: ['?', ':'], ternary: true,
+      ...(on.bound ? { left: 1700000, right: 1600000 } : {}),
+    },
+    deref: { src: '*', prefix: true, right: 4000000 },
+    post_inc: { src: '++', suffix: true, left: 5000000 },
+    dot: { src: '.', infix: true, left: 5000000, right: 5100000 },
+    paren: {
+      paren: true, osrc: '(', csrc: ')', preval: { active: false },
+      content: { required: true },
+    },
+    call: {
+      paren: true, osrc: '(', csrc: ')', preval: { active: true },
+      left: 5000000, content: { separated: true },
+    },
+    subscript: {
+      paren: true, osrc: '[', csrc: ']', preval: { active: true, required: true },
+      left: 5000000,
+    },
+    cast: {
+      cast: true, osrc: '(', csrc: ')', right: 4000000,
+      accept: (term: any) => 'int' === term || 'long' === term || 'char' === term,
+    },
+  }
+  const je = new Tabnas()
+  je.use(jsonic)
+  je.options({ fixed: { token: { '#AT': '@' } } } as any)
+  je.rule('val', (rs: any) => {
+    rs.open([{ s: '#AT', a: (r: any) => { r.node = '@' }, g: 'host-value' }])
+  })
+  je.use(Expr, {
+    op, evaluate: named, juxtapose: false,
+    ...(on.values ? { values: ['#AT'] } : {}),
+  })
+  return (s: string) => C(je.parse(s))
+}
+
+
+// A ternary, read with the default operators, evaluated: the evaluator
+// writes each operation as [op.name, ...terms]. `call` `(` `)` is a
+// preval paren whose content is separated, beside a `comma` `,` that is a
+// separator.
+const ternaryEvaluated = () => {
+  const je = new Tabnas().use(jsonic).use(Expr, {
+    op: {
+      ternary: { ternary: true, src: ['?', ':'] },
+      comma: { src: ',', infix: true, left: 1000000, right: 1100000, separator: true },
+      call: {
+        paren: true, osrc: '(', csrc: ')', preval: { active: true },
+        content: { separated: true },
+      },
+    },
+    evaluate: named,
+  })
+  return (s: string) => C(je.parse(s))
+}
+
+
 // The fixtures live at the repo root in `test/spec/*.tsv` and are read by
 // @tabnas/support, whose Go half `go/expr_test.go` and Rust half
 // `rs/tests/parity_test.rs` use to run the SAME files — so the three
@@ -422,6 +490,32 @@ describe('spec', () => {
   })
 
 
+  // tabnas/c's reading through expr: a ternary placed by its binding
+  // powers, and a host grammar's values refused side by side.
+  describe('options for tabnas/c', () => {
+    runSpec('options-ternary-off.tsv', cTernary({}))
+    runSpec('options-ternary.tsv', cTernary({ bound: true }))
+    runSpec('options-values-off.tsv', cTernary({ bound: true }))
+    runSpec('options-values.tsv', cTernary({ bound: true, values: true }))
+  })
+
+
+  // A ternary's value under an evaluator, wherever it stands.
+  describe('ternary-evaluate', () => {
+    runSpec('ternary-evaluate.tsv', ternaryEvaluated())
+  })
+
+
+  // A prefix operator before a ternary, and an operator in its middle term,
+  // inside a paren.
+  describe('ternary-paren', () => {
+    const je = new Tabnas().use(jsonic).use(Expr, {
+      op: { ternary: { ternary: true, src: ['?', ':'] } },
+    })
+    runSpec('ternary-paren.tsv', mj(je))
+  })
+
+
   describe('json-base', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('json-base.tsv', j)
@@ -614,6 +708,6 @@ test('every fixture row is held to its canonical JSON', () => {
     (total, name) => total + loadSpec(Path.join(SPEC, name)).rows.length, 0)
   assert.equal(canonicalRows, onDisk,
     `${canonicalRows} rows were held to their canonical JSON, of ${onDisk} on disk`)
-  assert.equal(onDisk, 1314,
-    `the shared fixtures hold ${onDisk} rows, not the 1314 measured`)
+  assert.equal(onDisk, 1462,
+    `the shared fixtures hold ${onDisk} rows, not the 1462 measured`)
 })

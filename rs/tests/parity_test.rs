@@ -425,6 +425,143 @@ fn spec_options_all() {
     );
 }
 
+/// The small C of tabnas/c's reading through expr: `c_like` with every
+/// option of #105 on, and `assign` `=` infix (left 1500000, right 1400000,
+/// right-associative) and `tern` `?` `:`, a ternary, with `left` 1700000
+/// and `right` 1600000 when its binding powers are on. With `values`, the
+/// host grammar's value `@` (a token of its own, `#AT`, which jsonic's
+/// lexer does not cut as a value) is declared.
+fn c_ternary(bound: bool, values: bool) -> Tabnas {
+    let preval = |active: bool, required: bool| PrevalDef {
+        active,
+        required,
+        allow: None,
+    };
+    let mut tern = OpDef::ternary("?", ":");
+    if bound {
+        tern = tern.with_left(1_700_000).with_right(1_600_000);
+    }
+    let mut options = ExprOptions::new()
+        .with_op("comma", OpDef::infix(",", 1_000_000, 1_100_000).with_separator())
+        .with_op("assign", OpDef::infix("=", 1_500_000, 1_400_000))
+        .with_op("tern", tern)
+        .with_op("deref", OpDef::prefix("*", 4_000_000))
+        .with_op("post_inc", OpDef::suffix("++", 5_000_000))
+        .with_op("dot", OpDef::infix(".", 5_000_000, 5_100_000))
+        .with_op(
+            "paren",
+            OpDef::paren("(", ")")
+                .with_preval(preval(false, false))
+                .with_content(ContentDef {
+                    required: true,
+                    separated: false,
+                }),
+        )
+        .with_op(
+            "call",
+            OpDef::paren("(", ")")
+                .with_preval(preval(true, false))
+                .with_left(5_000_000)
+                .with_content(ContentDef {
+                    required: false,
+                    separated: true,
+                }),
+        )
+        .with_op(
+            "subscript",
+            OpDef::paren("[", "]")
+                .with_preval(preval(true, true))
+                .with_left(5_000_000),
+        )
+        .with_op(
+            "cast",
+            OpDef::cast("(", ")", 4_000_000, |term| {
+                matches!(term, EngineValue::String(name) if "int" == name || "long" == name || "char" == name)
+            }),
+        )
+        .with_juxtapose(false);
+    if values {
+        options = options.with_values(["#AT"]);
+    }
+    let options = named(options);
+    let mut parser = tabnas_jsonic::make();
+    let at = parser.token_with_source("#AT", "@");
+    parser.define_rule("val", move |spec| {
+        let mut alt = tabnas::AltSpec {
+            s: vec![vec![at]],
+            g: "host-value".to_string(),
+            ..Default::default()
+        };
+        alt.add_action(|rule: &mut tabnas::Rule, _context: &mut tabnas::Context| {
+            rule.node = std::rc::Rc::new(std::cell::RefCell::new(EngineValue::String("@".into())));
+        });
+        spec.open.insert(0, alt);
+    });
+    parser
+        .use_plugin(tabnas_expr::plugin_with(options), None)
+        .expect("the expression grammar installs on the jsonic base");
+    parser
+}
+
+/// tabnas/c's reading through expr: a ternary placed by its binding
+/// powers, and a host grammar's values refused side by side.
+#[test]
+fn spec_options_ternary_off() {
+    run_spec("options-ternary-off.tsv", c_ternary(false, false));
+}
+
+#[test]
+fn spec_options_ternary() {
+    run_spec("options-ternary.tsv", c_ternary(true, false));
+}
+
+#[test]
+fn spec_options_values_off() {
+    run_spec("options-values-off.tsv", c_ternary(true, false));
+}
+
+#[test]
+fn spec_options_values() {
+    run_spec("options-values.tsv", c_ternary(true, true));
+}
+
+/// A ternary's value under an evaluator, wherever it stands: `call` `(`
+/// `)` is a preval paren whose content is separated, beside a `comma`
+/// separator.
+#[test]
+fn spec_ternary_evaluate() {
+    let options = ExprOptions::new()
+        .with_op("ternary", OpDef::ternary("?", ":"))
+        .with_op(
+            "comma",
+            OpDef::infix(",", 1_000_000, 1_100_000).with_separator(),
+        )
+        .with_op(
+            "call",
+            OpDef::paren("(", ")")
+                .with_preval(PrevalDef {
+                    active: true,
+                    required: false,
+                    allow: None,
+                })
+                .with_content(ContentDef {
+                    required: false,
+                    separated: true,
+                }),
+        );
+    run_spec("ternary-evaluate.tsv", parser_with(named(options)));
+}
+
+/// A prefix operator before a ternary, and an operator in its middle term,
+/// inside a paren.
+#[test]
+fn spec_ternary_paren() {
+    run_spec(
+        "ternary-paren.tsv",
+        parser_with(ExprOptions::new().with_op("ternary", OpDef::ternary("?", ":"))),
+    );
+}
+
 /// Evaluation follows the tree: every cell is the S-expression the
 /// unary-suffix-*.tsv rows show, with operator names for sources.
 #[test]
@@ -786,8 +923,8 @@ fn every_fixture_row_is_held_to_its_canonical_json() {
         })
         .sum();
     assert_eq!(
-        rows, 1314,
-        "the shared fixtures hold {rows} rows, not the 1314 measured"
+        rows, 1462,
+        "the shared fixtures hold {rows} rows, not the 1462 measured"
     );
 }
 

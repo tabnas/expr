@@ -95,11 +95,17 @@ Consequences to keep in mind:
   sum of a few thousand terms builds a tree as deep as it is long: the
   process ABORTS rather than failing, and no caller can catch that. An
   expression past 127 nodes is refused with `cancel`, which is a recorded
-  divergence (`../DIVERGENCE.md`, with the measurements: TypeScript
-  raises its own `RangeError` a few thousand terms later, Go keeps
-  going). The size is maintained in O(1): every node records the
+  divergence (`../DIVERGENCE.md`, with the measurements: TypeScript and
+  Go read it). The size is maintained in O(1): every node records the
   expression it belongs to, and a term taken in from another expression
-  brings its size with it.
+  brings its size with it, and the largest size of the parse is checked
+  by a parse guard at every step (`LARGEST`, `bound_expression_size`).
+  A host raises the limit with `ExprOptions::node_limit` when its
+  evaluator reduces every expression into values of its own and bounds
+  their depth itself, as tabnas/c does: nothing but `realize` and
+  `simplify` walks a tree with the call stack, since evaluation
+  (`EvalFrame`), the placing (`place_infix`, `prattify_postfix`) and the
+  drilling of a suffix are loops.
 
 ## The root and the attachment point
 

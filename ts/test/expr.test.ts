@@ -2983,6 +2983,43 @@ describe('expr', () => {
       .equal(deepest(op, 'f(0)'))
     expect(deepest(op, 'x.f' + many('', (i) => '(' + i + ')')))
       .equal(deepest(op, 'x.f(0)'))
+
+    // Ternaries with a binding power, chained through their last terms,
+    // and through their middle terms' own ternaries, each after an
+    // operator.
+    const tern = { src: ['?', ':'], ternary: true, left: 1700000, right: 1600000 }
+    const top = { comma, dot, paren, call, tern }
+    expect(deepest(top, 'x = ' + many(' ', (i) => 'a' + i + ' ? b' + i + ' :') + ' z'))
+      .equal(deepest(top, 'x = a0 ? b0 : z'))
+  })
+
+
+  test('deep-trees', () => {
+    // A tree as deep as a long chain of operators is built, evaluated and
+    // simplified without the call stack growing with its depth: ten
+    // thousand terms of a left-associative chain, which evaluation walks
+    // to the bottom, and of a right-associative one, which each new
+    // operator is placed down to.
+    const N = 10000
+    const op = {
+      assign: { src: '=', infix: true, left: 1500000, right: 1400000 },
+    }
+    const named = (_r: any, _ctx: any, o: any, terms: any) => [o.name, ...terms]
+    const evaluated = new Tabnas().use(jsonic).use(Expr, { op, evaluate: named })
+    const plain = new Tabnas().use(jsonic).use(Expr, { op })
+    const depth = (v: any) => {
+      let d = 0
+      for (; Array.isArray(v); d++) v = v[1] === 'a' ? v[2] : v[1]
+      return d
+    }
+
+    const left = Array.from({ length: N }, () => 'a').join('+')
+    expect(depth(evaluated.parse(left))).equal(N - 1)
+    expect(depth(S(plain.parse(left)))).equal(N - 1)
+
+    const right = Array.from({ length: N }, () => 'a').join('=')
+    expect(depth(evaluated.parse(right))).equal(N - 1)
+    expect(depth(S(plain.parse(right)))).equal(N - 1)
   })
 
 

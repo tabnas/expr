@@ -239,13 +239,14 @@ Measured on `0+1+2+…`, at the sizes that separate the three:
 | 128 | the expression | the expression | the expression |
 | 129 | the expression | the expression | `ERROR:cancel` |
 | 3200 | the expression | the expression | `ERROR:cancel` |
-| 5000 | `RangeError: Maximum call stack size exceeded` | the expression | `ERROR:cancel` |
+| 10000 | the expression | the expression | `ERROR:cancel` |
 
-None of the three is unbounded, and only one of them fails cleanly.
-TypeScript raises a JavaScript `RangeError` rather than a tabnas error,
-somewhere between 3200 and 5000 terms on the measuring machine, because
-the value walk is recursive there too; Go grows its stacks and keeps
-going.
+Up to 0.6.0 TypeScript read the expression and then raised a JavaScript
+`RangeError` when it evaluated or simplified it, past about 3,200 terms
+on the measuring machine (Node 22, 2026-11-12), because those walks were
+recursive. They are loops from 0.6.1, and so are the placing of an
+operator and evaluation in Go and Rust: TypeScript evaluates and
+simplifies 50,000 terms on the same machine. Go grows its stacks.
 
 The Rust engine walks a value with the CALL STACK to display it, convert
 it to JSON or drop it, and a fixed-size thread stack turns that into an
@@ -253,7 +254,14 @@ ABORT rather than an error: the process ends, and no caller can catch it.
 Refusing early is what turns the abort back into a parse error. The limit
 is the one [`tabnas-jsonic`](https://github.com/tabnas/jsonic) already
 applies to nested containers for the same reason, so a document parsed by
-this plugin cannot nest deeper than this anyway.
+this plugin cannot nest deeper than this anyway. A host raises it with
+`ExprOptions::node_limit` when its evaluator reduces every expression
+into values of its own, whose depth it bounds itself: nothing but
+`realize` and `simplify` walks an expression with the call stack. The
+check is a parse guard, run at every step, where up to 0.6.0 it rode on
+the parse budget, checked every 32 steps, which let an expression that
+outgrew the limit in its last steps through, and which a caller's own
+budget replaced.
 
 `tabnas_expr::RULE_LIMIT` is the second half of the same fix. An
 UNTERMINATED nesting, `(((((` with no closer, builds no expression at

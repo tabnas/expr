@@ -1324,85 +1324,159 @@ fn simplify_reads_the_canonical_value() {
 /// length: many items reach the deepest rule one item reaches. The Rust half
 /// of the TypeScript suite's `options-repeat-by-replacement`.
 ///
-/// The arguments of a separated call are terms of one node however many
-/// there are, so they run at 10,000, as in TypeScript and Go. The other
-/// forms build a node per item, and an expression here holds at most
-/// [`NODE_LIMIT`] nodes, so they run at 100.
+/// Every form runs at 10,000 items, as in TypeScript and Go. The forms that
+/// build a node per item make an expression past [`NODE_LIMIT`], so the
+/// parser raises its limit (`ExprOptions::node_limit`), and the tree is
+/// never realized: the depth is the rules', measured as they run.
 #[test]
 fn options_repeat_by_replacement() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    const N: usize = 10_000;
     let preval = |active: bool| PrevalDef {
         active,
         required: false,
         allow: None,
     };
-    let deepest = |src: &str| -> usize {
-        let mut parser = parser_with(
-            ExprOptions::new()
-                .with_op(
-                    "comma",
-                    OpDef::infix(",", 1_000_000, 1_100_000).with_separator(),
-                )
-                .with_op("dot", OpDef::infix(".", 5_000_000, 5_100_000))
-                .with_op("paren", OpDef::paren("(", ")").with_preval(preval(false)))
-                .with_op(
-                    "call",
-                    OpDef::paren("(", ")")
-                        .with_preval(preval(true))
-                        .with_left(5_000_000)
-                        .with_content(ContentDef {
-                            required: false,
-                            separated: true,
-                        }),
-                ),
-        );
+    let table = |tern: bool| {
+        let options = ExprOptions::new()
+            .with_op(
+                "comma",
+                OpDef::infix(",", 1_000_000, 1_100_000).with_separator(),
+            )
+            .with_op("dot", OpDef::infix(".", 5_000_000, 5_100_000))
+            .with_op("paren", OpDef::paren("(", ")").with_preval(preval(false)))
+            .with_op(
+                "call",
+                OpDef::paren("(", ")")
+                    .with_preval(preval(true))
+                    .with_left(5_000_000)
+                    .with_content(ContentDef {
+                        required: false,
+                        separated: true,
+                    }),
+            )
+            .with_node_limit(usize::MAX);
+        if tern {
+            options.with_op(
+                "tern",
+                OpDef::ternary("?", ":")
+                    .with_left(1_700_000)
+                    .with_right(1_600_000),
+            )
+        } else {
+            options
+        }
+    };
+    let deepest = |options: ExprOptions, src: &str| -> usize {
+        let mut parser = parser_with(options);
         let deepest = Arc::new(AtomicUsize::new(0));
         let seen = deepest.clone();
         parser.subscribe_rules(move |rule: &mut Rule, _context: &mut Context| {
             seen.fetch_max(rule.d, Ordering::Relaxed);
         });
-        if let Err(error) = tabnas_expr::parse_with(&parser, src) {
+        if let Err(error) = tabnas_expr::parse_scope(&parser, src, |_| ()) {
             panic!("{:.40}...: {error}", src);
         }
         deepest.load(Ordering::Relaxed)
     };
-    let many = |n: usize, sep: &str, item: &dyn Fn(usize) -> String| {
-        (0..n).map(item).collect::<Vec<_>>().join(sep)
-    };
+    let many =
+        |sep: &str, item: &dyn Fn(usize) -> String| (0..N).map(item).collect::<Vec<_>>().join(sep);
     let name = |i: usize| format!("a{i}");
     let call = |i: usize| format!("({i})");
-    const _: () = assert!(100 < NODE_LIMIT);
+    let tern = |i: usize| format!("a{i} ? b{i} :");
 
-    for (what, long, short) in [
+    for (what, with_tern, long, short) in [
         // The arguments of a separated call.
         (
             "arguments",
-            format!("f({})", many(10_000, ", ", &name)),
+            false,
+            format!("f({})", many(", ", &name)),
             "f(a0)".to_string(),
         ),
         // The comma operator in a group.
         (
             "comma operator",
-            format!("({})", many(100, ", ", &name)),
+            false,
+            format!("({})", many(", ", &name)),
             "(a0, a1)".to_string(),
         ),
         // Calls chained on a value, and after an operator they bind looser
         // than, which places them as postfix operators.
         (
             "chained calls",
-            format!("f{}", many(100, "", &call)),
+            false,
+            format!("f{}", many("", &call)),
             "f(0)".to_string(),
         ),
         (
             "postfix calls",
-            format!("x.f{}", many(100, "", &call)),
+            false,
+            format!("x.f{}", many("", &call)),
             "x.f(0)".to_string(),
         ),
+        // Ternaries with a binding power, chained through their last terms.
+        (
+            "bound ternaries",
+            true,
+            format!("x = {} z", many(" ", &tern)),
+            "x = a0 ? b0 : z".to_string(),
+        ),
     ] {
-        assert_eq!(deepest(&long), deepest(&short), "{what}");
+        assert_eq!(
+            deepest(table(with_tern), &long),
+            deepest(table(with_tern), &short),
+            "{what}"
+        );
     }
+}
+
+/// A tree as deep as a long chain of operators is built and evaluated
+/// without the call stack growing with its depth: ten thousand terms of a
+/// left-associative chain, which evaluation walks to the bottom, and of a
+/// right-associative one, which each new operator is placed down to. The
+/// Rust half of the TypeScript suite's `deep-trees`. The evaluator gives
+/// each operation its depth, so no value as deep as the tree is built:
+/// this port realizes and simplifies no tree past [`NODE_LIMIT`].
+#[test]
+fn deep_trees() {
+    const N: usize = 10_000;
+    let depth = |term: &Value| match term {
+        Value::Number(depth) => *depth,
+        _ => 0.0,
+    };
+    let parser = parser_with(
+        ExprOptions::new()
+            .with_op("assign", OpDef::infix("=", 1_500_000, 1_400_000))
+            .with_node_limit(usize::MAX)
+            .with_evaluate(move |_site, _op, terms| {
+                Value::Number(1.0 + terms.iter().map(depth).fold(0.0, f64::max))
+            }),
+    );
+    for sep in ["+", "="] {
+        let src = vec!["a"; N].join(sep);
+        let value = tabnas_expr::parse_with(&parser, &src)
+            .unwrap_or_else(|error| panic!("a chain of {sep}: {error}"));
+        assert_eq!(Value::Number((N - 1) as f64), value, "a chain of {sep}");
+    }
+}
+
+/// The limit on an expression's nodes is the parser's to raise: a sum past
+/// [`NODE_LIMIT`] is refused by default and read under a higher limit,
+/// which refuses a sum past it in turn.
+#[test]
+fn the_node_limit_is_the_parsers_to_raise() {
+    let sum = |terms: usize| vec!["1"; terms].join("+");
+    let default = parser_with(ExprOptions::new());
+    let raised = parser_with(ExprOptions::new().with_node_limit(200));
+    let read = |parser: &Tabnas, terms: usize| {
+        tabnas_expr::parse_scope(parser, &sum(terms), |_| ()).map_err(|error| error.code)
+    };
+    assert_eq!(Err("cancel".to_string()), read(&default, NODE_LIMIT + 2));
+    assert_eq!(Ok(()), read(&raised, NODE_LIMIT + 2));
+    assert_eq!(Ok(()), read(&raised, 201));
+    assert_eq!(Err("cancel".to_string()), read(&raised, 202));
 }
 
 /// `simplify` writes a cast by its `src`, the group's opener and closer

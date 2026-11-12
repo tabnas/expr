@@ -191,13 +191,16 @@ define. A fold has codes of its own, described next.
 
 ## Calls, casts, and separated content
 
-Five options shape a table for a language like C, and each is off unless
-the table sets it. `OpDef::with_left` gives a preval paren a binding
-power, `OpDef::with_content` makes a paren's content required or
+Seven options shape a table for a language like C, and each is off
+unless the table sets it. `OpDef::with_left` gives a preval paren a
+binding power, `OpDef::with_content` makes a paren's content required or
 separated, and `OpDef::with_separator` makes an infix operator on `,`
 give way to separators. `OpDef::cast` declares a cast, and
-`ExprOptions::with_juxtapose` refuses values side by side. The
-TypeScript reference, `ts/doc/reference.md`, describes each one.
+`ExprOptions::with_juxtapose` refuses values side by side.
+`OpDef::with_left` and `OpDef::with_right` on a ternary place it as an
+infix operator is, and `ExprOptions::with_values` names a host grammar's
+own value tokens, which the parser refuses side by side too. The TypeScript
+reference, `ts/doc/reference.md`, describes each one.
 
 ```rust
 use tabnas::Value;
@@ -425,13 +428,18 @@ points where the host language has no way to say what JavaScript says:
   `cancel` code, so a flat sum of at most 128 terms. The engine walks a
   value with the call stack to display, convert or drop it, and a flat
   sum builds a tree as deep as it is long, which ends the process rather
-  than failing. TypeScript raises a JavaScript `RangeError` of its own a
-  few thousand terms later and Go keeps going, both measured in
+  than failing. TypeScript and Go read it, both measured in
   [`../DIVERGENCE.md`](../DIVERGENCE.md); the number is the one the
   jsonic base grammar already applies to nested containers. An
   UNTERMINATED nesting builds no expression, so a second limit bounds the
   rule stack at 1024 frames, which is more than twice the deepest
-  document the base grammar accepts.
+  document the base grammar accepts. Both are a parse guard, checked at
+  every step. A host whose evaluator reduces every expression into
+  values of its own, with a depth it bounds itself, raises the first
+  with `ExprOptions::with_node_limit`: the parse, the placing of an
+  operator and the evaluation are loops, so they reach no deeper on the
+  call stack however large an expression grows, and only `realize` and
+  `simplify` build a value as deep as the tree.
 - **`parse` is a convenience the other runtimes lack.** It keeps one
   default instance behind a `OnceLock`, the reuse the TypeScript suite
   tells a caller to arrange by hand and the Go port keeps behind a
