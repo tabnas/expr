@@ -1676,8 +1676,10 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             let op = makeOp(r.o0, ternaryTM)
             r.u.expr_ternary_name = op.name
 
-            if (isOp(r.prev.node)) {
-              r.node = updateExprNode(r.prev.node, op, dupNode(r.prev.node))
+            // The first term is the whole expression before the ternary.
+            const first = ternaryFirst(r)
+            if (isOp(first)) {
+              r.node = updateExprNode(first, op, dupNode(first))
             } else {
               r.node = r.prev.node = updateExprNode([], op, r.prev.node)
             }
@@ -2092,6 +2094,25 @@ function implicitTernaryAction(r: Rule, _ctx: Context, a: AltMatch) {
 
 function isParenOp(node: any) {
   return isOpKind('paren', node)
+}
+
+// The first term of a ternary with no binding power: the whole expression
+// before it. An expr rule holds the node its last operator heads, which is
+// the expression's root only when that operator was looser than the ones
+// before it: in `a + b * c ? d : e` the rule before the ternary holds
+// `b * c`. The root is held by the rule the expression's first term
+// belongs to, the expr rule's parent, and the node the expr rule holds is
+// on the root's last terms.
+function ternaryFirst(r: Rule): any {
+  const prev = r.prev
+  const node = prev.node
+  if ('expr' !== prev.name || !isOp(node)) return node
+  const root = prev.parent?.node
+  if (!isOp(root) || root === node) return node
+  for (let cur = root; isOp(cur); cur = cur[cur[0].terms]) {
+    if (cur === node) return root
+  }
+  return node
 }
 
 // A ternary operator with a binding power (see OpDef.ternary).

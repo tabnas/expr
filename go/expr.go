@@ -938,11 +938,17 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			})
 		}
 
-		// Prevent implicit list inside expression (comma).
+		// Prevent implicit list inside expression (comma). Not at an infix
+		// operator's comma, which the infix alternate above takes, as TS
+		// orders them: a ternary's middle term starts an expression of its
+		// own there (`a ? b, c : d`).
 		rs.PrependClose(&tabnas.AltSpec{
 			S: mkS([]int{tabnas.TinCA}),
 			B: 1,
 			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				if infixByTin[r.C0.Tin] != nil && r.N["expr"] < 1 {
+					return false
+				}
 				return (r.D == 1 && (r.N["expr"] >= 1 || r.N["expr_ternary"] >= 1)) ||
 					(r.N["expr_ternary"] >= 1 && r.N["expr_paren"] >= 1)
 			},
@@ -2274,6 +2280,14 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			if tabnas.IsUndefined(childNode) {
 				childNode = nil
 			}
+			// A val opened for a missing term (`a ? b :` at the end)
+			// inherits the ternary's node and hands it back unchanged: the
+			// term is empty, as the canonical's null, and the ternary is
+			// never installed into its own slot, which made a node that
+			// holds itself and an evaluation that never ended.
+			if sameNode(r.Node, childNode) {
+				childNode = nil
+			}
 			if box, ok := r.Node.(*tabnas.ListRef); ok {
 				step, _ := r.U["ternary_step"].(int)
 				if step == 0 {
@@ -2673,7 +2687,7 @@ func prattifySuffix(node interface{}, op *Op) *tabnas.ListRef {
 			// through infix sub-ops.
 			if subBox := asListRef(lastTerm); subBox != nil && len(subBox.Val) > 0 {
 				if subOp, isSub := subBox.Val[0].(*Op); isSub &&
-					(subOp.Prefix || subOp.Infix) && subOp.Right < op.Left {
+					(subOp.Prefix || subOp.Infix || boundTernary(subOp)) && subOp.Right < op.Left {
 					prattifySuffix(subBox, op)
 					return box
 				}
@@ -2704,13 +2718,13 @@ func prattifyPostfix(node interface{}, op *Op) *tabnas.ListRef {
 	if !isOpV {
 		return makeExpr(op, node)
 	}
-	if !exprOp.Paren && !exprOp.Ternary && !exprOp.Suffix && exprOp.Right <= op.Left {
+	if !exprOp.Paren && !(exprOp.Ternary && !boundTernary(exprOp)) && !exprOp.Suffix && exprOp.Right <= op.Left {
 		end := exprOp.Terms
 		if end < len(box.Val) {
 			lastTerm := box.Val[end]
 			if subBox := asListRef(lastTerm); subBox != nil && len(subBox.Val) > 0 {
 				if subOp, isSub := subBox.Val[0].(*Op); isSub && !subOp.Paren &&
-					!subOp.Ternary && (subOp.Prefix || subOp.Infix) && subOp.Right < op.Left {
+					(subOp.Prefix || subOp.Infix || boundTernary(subOp)) && subOp.Right < op.Left {
 					box.Val[end] = subBox
 					return prattifyPostfix(subBox, op)
 				}

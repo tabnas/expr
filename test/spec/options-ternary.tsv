@@ -39,6 +39,20 @@ a ? b : c.d	["tern-ternary","a","b",["dot-infix","c","d"]]
 a ? b : c++	["tern-ternary","a","b",["post_inc-suffix","c"]]
 [a ? b : c, d]	[["tern-ternary","a","b","c"],"d"]
 x: a ? b : c	{"x":["tern-ternary","a","b","c"]}
+# A comma operator in the middle term at the top level, and a suffix or a
+# postfix after the last term of a ternary inside another operator's
+# tree, which binds into that term.
+a ? b, c : d	["tern-ternary","a",["comma-infix","b","c"],"d"]
+x = a ? b, c : d	["assign-infix","x",["tern-ternary","a",["comma-infix","b","c"],"d"]]
+a ? (b, c) : d	["tern-ternary","a",["paren-paren",["comma-infix","b","c"]],"d"]
+x = a ? b : c++	["assign-infix","x",["tern-ternary","a","b",["post_inc-suffix","c"]]]
+x = a ? b : c[1]	["assign-infix","x",["tern-ternary","a","b",["subscript-paren","c",1]]]
+x = a ? b : f(c)	["assign-infix","x",["tern-ternary","a","b",["call-paren","f","c"]]]
+x = a ? b : c.d(e)	["assign-infix","x",["tern-ternary","a","b",["call-paren",["dot-infix","c","d"],"e"]]]
+a , b ? c : d++	["comma-infix","a",["tern-ternary","b","c",["post_inc-suffix","d"]]]
+a ? b : c ? d : e++	["tern-ternary","a","b",["tern-ternary","c","d",["post_inc-suffix","e"]]]
+a ? b : c ? d : e[1]	["tern-ternary","a","b",["tern-ternary","c","d",["subscript-paren","e",1]]]
+x = a ? b : c++[1]	["assign-infix","x",["tern-ternary","a","b",["subscript-paren",["post_inc-suffix","c"],1]]]
 a ? b	ERROR:unexpected
 (a ? b)	ERROR:unexpected
 f(a ? b)	ERROR:unexpected

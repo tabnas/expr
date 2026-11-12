@@ -53,7 +53,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
@@ -275,6 +275,16 @@ impl OpDef {
     }
 
     /// A ternary operator with its two source strings.
+    ///
+    /// A ternary with a binding power on its left (`with_left`) is placed
+    /// as an infix operator is, its middle term between its two tokens and
+    /// its last term an operand on its right (`with_right`): `x = a ? b : c`
+    /// is `x = (a ? b : c)` where the ternary binds tighter than `=`, and an
+    /// operator after the last term binds into it, or takes the whole
+    /// ternary, by the same comparison. The middle term is a whole
+    /// expression of its own, in which a comma is the comma operator even
+    /// where the context separates on commas. A ternary with no `left`
+    /// takes the whole expression before it, and the whole one after it.
     pub fn ternary(first: impl Into<String>, second: impl Into<String>) -> Self {
         OpDef {
             src: vec![first.into(), second.into()],
@@ -352,6 +362,14 @@ impl OpDef {
     /// `(a.b)[1]`). Unset, the paren binds to the value just before it.
     pub fn with_left(mut self, left: i64) -> Self {
         self.left = Some(left);
+        self
+    }
+
+    /// Give an operator its right binding power: a ternary's, which with a
+    /// left one (`with_left`) places it as an infix operator is (see
+    /// [`OpDef::ternary`]).
+    pub fn with_right(mut self, right: i64) -> Self {
+        self.right = Some(right);
         self
     }
 
@@ -654,6 +672,26 @@ pub struct ExprOptions {
     /// list, outside any expression, and the items of a list or a map are
     /// unchanged. `None` reads as `true`.
     pub juxtapose: Option<bool>,
+    /// The value tokens of a host grammar that lexes its own (an
+    /// identifier, a number), by name, beside jsonic's text, number, string
+    /// and keyword values. With `juxtapose` false, one of them after a
+    /// value or an expression is refused, with the engine's `unexpected`,
+    /// wherever it stands: an expression never ends at one, and the rule
+    /// the expression is in never sees it. The items of a list or a map
+    /// are not exempt.
+    pub values: Vec<String>,
+    /// The most nodes one expression may hold, [`NODE_LIMIT`] when `None`.
+    /// An expression past it is refused with the engine's `cancel` code.
+    ///
+    /// The limit keeps a realized tree shallow enough for the engine's
+    /// recursive walks of a value (display, JSON, drop), which abort the
+    /// process past the stack where TypeScript and Go fail or go on. A
+    /// host that raises it reduces every expression with an evaluator into
+    /// values of its own, whose depth it bounds itself, and never realizes
+    /// or simplifies a tree past [`NODE_LIMIT`]: the parse, the placing of
+    /// an operator and the evaluation walk no deeper on the call stack
+    /// however large an expression grows.
+    pub node_limit: Option<usize>,
 }
 
 impl fmt::Debug for ExprOptions {
@@ -663,6 +701,8 @@ impl fmt::Debug for ExprOptions {
             .field("op", &self.op)
             .field("evaluate", &self.evaluate.as_ref().map(|_| "<function>"))
             .field("juxtapose", &self.juxtapose)
+            .field("values", &self.values)
+            .field("node_limit", &self.node_limit)
             .finish()
     }
 }
@@ -693,6 +733,23 @@ impl ExprOptions {
         self
     }
 
+    /// Name a host grammar's own value tokens: see [`ExprOptions::values`].
+    pub fn with_values<I, S>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.values = values.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Set the most nodes one expression may hold: see
+    /// [`ExprOptions::node_limit`].
+    pub fn with_node_limit(mut self, limit: usize) -> Self {
+        self.node_limit = Some(limit);
+        self
+    }
+
     /// Set the evaluator that reduces each expression as it closes.
     pub fn with_evaluate(
         mut self,
@@ -709,6 +766,15 @@ impl ExprOptions {
         let mut resolved = ExprOptions::new();
         if let Some(Value::Bool(juxtapose)) = object_get(options, "juxtapose") {
             resolved.juxtapose = Some(*juxtapose);
+        }
+        if let Some(Value::Array(values)) = object_get(options, "values") {
+            resolved.values = values
+                .iter()
+                .filter_map(|value| match value {
+                    Value::String(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect();
         }
         let Some(op) = object_get(options, "op") else {
             return resolved;
@@ -999,9 +1065,10 @@ struct Arena {
 
 thread_local! {
     static ARENA: RefCell<Arena> = RefCell::new(Arena::default());
-    /// Set when an expression outgrows [`NODE_LIMIT`]. The parse budget
-    /// reads it and cancels the parse.
-    static OVER_LIMIT: Cell<bool> = const { Cell::new(false) };
+    /// The most nodes an expression of this parse has held. The parse
+    /// budget reads it and cancels the parse once it passes the limit (see
+    /// [`NODE_LIMIT`] and [`ExprOptions::node_limit`]).
+    static LARGEST: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The `meta` key a handle carries its node identity under.
@@ -1074,10 +1141,6 @@ fn is_paren_op(value: &Value) -> bool {
     is_op_kind(value, |op| op.paren)
 }
 
-fn is_ternary_op(value: &Value) -> bool {
-    is_op_kind(value, |op| op.ternary)
-}
-
 /// The operator heading an expression node.
 pub fn op_of(value: &Value) -> Option<Arc<Op>> {
     let id = node_id(value)?;
@@ -1135,24 +1198,26 @@ fn new_node(op: Option<Arc<Op>>, token: Option<Token>, terms: Vec<Value>) -> Val
 }
 
 /// Count `count` more nodes against the expression `node` belongs to, and
-/// record it when the expression has outgrown [`NODE_LIMIT`].
+/// record the size when it is the largest yet.
 fn grow(node: &Value, count: usize) {
     let Some(root) = root_id(node) else {
         return;
     };
-    let over = ARENA.with(|arena| {
+    let size = ARENA.with(|arena| {
         let mut arena = arena.borrow_mut();
         match arena.nodes.get_mut(&root) {
             Some(entry) => {
                 entry.size += count;
-                entry.size > NODE_LIMIT
+                entry.size
             }
-            None => false,
+            None => 0,
         }
     });
-    if over {
-        OVER_LIMIT.with(|flag| flag.set(true));
-    }
+    LARGEST.with(|largest| {
+        if size > largest.get() {
+            largest.set(size);
+        }
+    });
 }
 
 /// The size of the expression a node belongs to.
@@ -1319,7 +1384,7 @@ fn release_arena() {
         if 0 == arena.active {
             arena.nodes.clear();
             EVALUATED.with(|set| set.borrow_mut().clear());
-            OVER_LIMIT.with(|flag| flag.set(false));
+            LARGEST.with(|largest| largest.set(0));
         }
     });
 }
@@ -1331,7 +1396,7 @@ struct ArenaGuard;
 impl ArenaGuard {
     fn enter() -> Self {
         ARENA.with(|arena| arena.borrow_mut().active += 1);
-        OVER_LIMIT.with(|flag| flag.set(false));
+        LARGEST.with(|largest| largest.set(0));
         ArenaGuard
     }
 }
@@ -1344,7 +1409,7 @@ impl Drop for ArenaGuard {
             if 0 == arena.active {
                 arena.nodes.clear();
                 EVALUATED.with(|set| set.borrow_mut().clear());
-                OVER_LIMIT.with(|flag| flag.set(false));
+                LARGEST.with(|largest| largest.set(0));
             }
         });
     }
@@ -1583,6 +1648,43 @@ pub fn opify(mut op: Op) -> Op {
     op
 }
 
+/// Place an operator that follows an expression and takes a term on each
+/// side, by its binding powers: an infix operator, or a ternary with a
+/// binding power, whose first term is as much of the expression as binds
+/// tighter. Returns the node the operator heads, where its next term
+/// belongs.
+///
+/// The drilling is a loop, one level of the expression's last terms at a
+/// time, so a long right-leaning chain (`a=b=...=a`) does not grow the call
+/// stack with its length.
+fn place_infix(expr: &Value, op: &OpRef) -> Value {
+    let new = &op.op;
+    let mut expr = expr.clone();
+    loop {
+        let Some(expr_op) = op_of(&expr) else {
+            return expr;
+        };
+        if expr_op.suffix || new.left <= expr_op.right {
+            // The new operator is looser: it takes the whole expression
+            // built so far as its first term.
+            let prior = dup_node(&expr);
+            update_expr_node(&expr, Some(new.clone()), op.token.clone(), vec![prior]);
+            return expr;
+        }
+        // The new operator is tighter: it takes only the last term, or
+        // drills into it while the operator heading it binds looser.
+        let end = expr_op.terms;
+        let last = term_at(&expr, end);
+        if op_of(&last).is_some_and(|last_op| last_op.right < new.left) {
+            expr = last;
+            continue;
+        }
+        let out = op.node_under(vec![last], &expr);
+        set_term(&expr, end, out.clone());
+        return out;
+    }
+}
+
 /// Embed a new operator into an expression tree, in place, according to
 /// operator precedence.
 ///
@@ -1592,46 +1694,36 @@ pub fn opify(mut op: Op) -> Op {
 /// the sub-expression the new operator now heads, which is where its next
 /// term belongs.
 pub fn prattify(expr: &Value, op: &OpRef) -> Value {
-    let mut out = expr.clone();
+    let out = expr.clone();
     let Some(expr_op) = op_of(expr) else {
         return out;
     };
     let new = &op.op;
 
     if new.infix {
-        if expr_op.suffix || new.left <= expr_op.right {
-            // The new operator is looser: it takes the whole expression
-            // built so far as its first term.
-            let prior = dup_node(expr);
-            update_expr_node(expr, Some(new.clone()), op.token.clone(), vec![prior]);
-        } else {
-            // The new operator is tighter: it takes only the last term.
-            let end = expr_op.terms;
-            let last = term_at(expr, end);
-            let drill = op_of(&last).is_some_and(|last_op| last_op.right < new.left);
-            if drill {
-                out = prattify(&last, op);
-            } else {
-                out = op.node_under(vec![last], expr);
-                set_term(expr, end, out.clone());
-            }
-        }
-    } else if new.prefix {
-        out = op.node_under(Vec::new(), expr);
+        return place_infix(expr, op);
+    }
+    if new.prefix {
+        let out = op.node_under(Vec::new(), expr);
         set_term(expr, expr_op.terms, out.clone());
-    } else if new.suffix {
+        return out;
+    }
+    if new.suffix {
         if !expr_op.suffix && expr_op.right <= new.left {
-            let end = expr_op.terms;
-            let last = term_at(expr, end);
             // NOTE: special case: a higher precedence suffix "drills"
             // into lower precedence prefixes, so `@@1!` is `@(@(1!))`
-            // rather than `@((@1)!)`.
-            let drill =
-                op_of(&last).is_some_and(|last_op| last_op.prefix && last_op.right < new.left);
-            if drill {
-                prattify(&last, op);
-            } else {
-                set_term(expr, end, op.node_under(vec![last], expr));
+            // rather than `@((@1)!)`. The drilling is a loop, as
+            // `place_infix`'s is.
+            let mut at = expr.clone();
+            loop {
+                let end = op_of(&at).map_or(0, |at_op| at_op.terms);
+                let last = term_at(&at, end);
+                if op_of(&last).is_some_and(|last_op| last_op.prefix && last_op.right < new.left) {
+                    at = last;
+                    continue;
+                }
+                set_term(&at, end, op.node_under(vec![last], &at));
+                break;
             }
         } else {
             let prior = dup_node(expr);
@@ -1701,7 +1793,7 @@ enum EvalKey {
 }
 
 thread_local! {
-    static EVALUATED: RefCell<Vec<EvalKey>> = const { RefCell::new(Vec::new()) };
+    static EVALUATED: RefCell<HashSet<EvalKey>> = RefCell::new(HashSet::new());
 }
 
 fn eval_key(value: &Value) -> Option<EvalKey> {
@@ -1733,10 +1825,7 @@ fn evaluated_seen(value: &Value) -> bool {
 fn evaluated_mark(value: &Value) {
     if let Some(key) = eval_key(value) {
         EVALUATED.with(|set| {
-            let mut set = set.borrow_mut();
-            if !set.contains(&key) {
-                set.push(key);
-            }
+            set.borrow_mut().insert(key);
         });
     }
 }
@@ -1766,80 +1855,151 @@ pub fn evaluation(site: &mut EvalSite<'_>, value: &Value, evaluate: &Evaluate) -
 
 /// [`evaluation`] with options: the port of the canonical
 /// `evaluation(rule, ctx, expr, evaluate, { objects })`.
+///
+/// The walk is iterative, terms before the operation that holds them, so a
+/// tree as deep as a long chain of operators (`a+a+...+a`) is reduced
+/// without the call stack growing with it.
 pub fn evaluation_with(
     site: &mut EvalSite<'_>,
     value: &Value,
     evaluate: &Evaluate,
     options: EvaluationOptions,
 ) -> Value {
+    if let Some(out) = evaluation_leaf(value, options) {
+        return out;
+    }
+
+    let mut stack: Vec<EvalFrame> = vec![EvalFrame::of(value)];
+    loop {
+        let top = stack.len() - 1;
+        let next = {
+            let frame = &stack[top];
+            frame.members.get(frame.reduced.len()).cloned()
+        };
+        if let Some(member) = next {
+            match evaluation_leaf(&member, options) {
+                Some(out) => stack[top].reduced.push(out),
+                None => stack.push(EvalFrame::of(&member)),
+            }
+            continue;
+        }
+        let frame = stack.pop().unwrap_or_else(|| EvalFrame::of(value));
+        let out = frame.finish(site, evaluate);
+        match stack.last_mut() {
+            Some(parent) => parent.reduced.push(out),
+            None => return out,
+        }
+    }
+}
+
+/// A value [`evaluation_with`] needs no walk for, reduced: nothing, a value
+/// a reduction produced, or one that is neither an expression, an implicit
+/// list nor (with `objects`) a map. `None` for a value whose members are
+/// reduced first.
+fn evaluation_leaf(value: &Value, options: EvaluationOptions) -> Option<Value> {
     if value.is_undefined() || matches!(value, Value::Null) {
-        return Value::Null;
+        return Some(Value::Null);
     }
     if evaluated_seen(value) {
-        return value.clone();
+        return Some(value.clone());
     }
+    let walked = is_op(value)
+        || matches!(value, Value::Array(_))
+        || (options.objects && matches!(value, Value::Object(_) | Value::MapRef(_)));
+    (!walked).then(|| value.clone())
+}
 
-    let out = if is_op(value) {
-        let Some((Some(op), token, terms)) = with_node(value, |entry| {
+/// A node [`evaluation_with`] is reducing: its members, and their reduced
+/// values so far.
+struct EvalFrame {
+    node: Value,
+    /// The operator and its occurrence token, for an expression node.
+    op: Option<(Arc<Op>, Option<Token>)>,
+    /// A map's member names, in order, for a map.
+    names: Vec<String>,
+    members: Vec<Value>,
+    reduced: Vec<Value>,
+}
+
+impl EvalFrame {
+    fn of(node: &Value) -> Self {
+        let mut frame = EvalFrame {
+            node: node.clone(),
+            op: None,
+            names: Vec::new(),
+            members: Vec::new(),
+            reduced: Vec::new(),
+        };
+        if let Some((op, token, terms)) = with_node(node, |entry| {
             (entry.op.clone(), entry.token.clone(), entry.terms.clone())
-        }) else {
-            return value.clone();
-        };
-        let reduced: Vec<Value> = terms
-            .iter()
-            .map(|term| evaluation_with(&mut site.reborrow(), term, evaluate, options))
-            .collect();
-        // The occurrence token travels on the site, not on the shared
-        // description: `op` is one entry of the operator table and is the
-        // same object for every occurrence. Restoring the previous token
-        // keeps an outer reduction pointing at its own operator.
-        let previous = std::mem::replace(&mut site.token, token);
-        let reduction = evaluate(site, &op, &reduced);
-        site.token = previous;
-        reduction
-    } else if let Value::Array(entries) = value {
-        // An implicit list is a plain array, not an expression node, so
-        // the branch above does not reach its members. Reduce them into a
-        // NEW array: this is a documented entry point and the
-        // parse-once, evaluate-many workflow needs a caller's tree to
-        // survive a reduction intact.
-        Value::array(
-            entries
-                .iter()
-                .map(|entry| evaluation_with(&mut site.reborrow(), entry, evaluate, options))
-                .collect(),
-        )
-    } else if options.objects && matches!(value, Value::Object(_) | Value::MapRef(_)) {
-        // Into a NEW map of the same kind, members in their own order.
-        let mut reduce = |entries: &IndexMap<String, Value>| -> IndexMap<String, Value> {
-            entries
-                .iter()
-                .map(|(name, member)| {
-                    let member = evaluation_with(&mut site.reborrow(), member, evaluate, options);
-                    (name.clone(), member)
-                })
-                .collect()
-        };
-        match value {
-            Value::MapRef(map) => {
-                let mut out = (**map).clone();
-                out.value = reduce(&map.value);
-                Value::MapRef(Arc::new(out))
-            }
-            Value::Object(entries) => Value::object(reduce(entries)),
-            _ => value.clone(),
+        }) {
+            frame.op = op.map(|op| (op, token));
+            frame.members = terms;
+            return frame;
         }
-    } else {
-        value.clone()
-    };
-
-    // Only a value this reduction PRODUCED is marked. A node passed
-    // through unchanged (a map, by default) is not, so a later reduction
-    // with `objects` on still reaches the operators inside it.
-    if eval_key(&out) != eval_key(value) {
-        evaluated_mark(&out);
+        match node {
+            Value::Array(entries) => frame.members = entries.to_vec(),
+            Value::Object(entries) => {
+                frame.names = entries.keys().cloned().collect();
+                frame.members = entries.values().cloned().collect();
+            }
+            Value::MapRef(map) => {
+                frame.names = map.value.keys().cloned().collect();
+                frame.members = map.value.values().cloned().collect();
+            }
+            _ => {}
+        }
+        frame
     }
-    out
+
+    /// The node's reduced value, from its members' reduced values.
+    fn finish(self, site: &mut EvalSite<'_>, evaluate: &Evaluate) -> Value {
+        let EvalFrame {
+            node,
+            op,
+            names,
+            reduced,
+            ..
+        } = self;
+        let out = if let Some((op, token)) = op {
+            // The occurrence token travels on the site, not on the shared
+            // description: `op` is one entry of the operator table and is
+            // the same object for every occurrence. Restoring the previous
+            // token keeps an outer reduction pointing at its own operator.
+            let previous = std::mem::replace(&mut site.token, token);
+            let reduction = evaluate(site, &op, &reduced);
+            site.token = previous;
+            reduction
+        } else {
+            match &node {
+                // An implicit list is a plain array, not an expression node.
+                // Reduce its members into a NEW array: this is a documented
+                // entry point and the parse-once, evaluate-many workflow
+                // needs a caller's tree to survive a reduction intact.
+                Value::Array(_) => Value::array(reduced),
+                // Into a NEW map of the same kind, members in their own
+                // order.
+                Value::MapRef(map) => {
+                    let mut out = (**map).clone();
+                    out.value = names.into_iter().zip(reduced).collect();
+                    Value::MapRef(Arc::new(out))
+                }
+                Value::Object(_) => Value::object(names.into_iter().zip(reduced).collect()),
+                // A node rewritten into a plain list of its terms is passed
+                // through as it is.
+                _ => node.clone(),
+            }
+        };
+
+        // Only a value this reduction PRODUCED is marked. A node passed
+        // through unchanged (a map, by default) is not, so a later
+        // reduction with `objects` on still reaches the operators inside
+        // it.
+        if eval_key(&out) != eval_key(&node) {
+            evaluated_mark(&out);
+        }
+        out
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2102,6 +2262,12 @@ struct Grammar {
     has_bound: bool,
     /// Values side by side are refused (`juxtapose: false`).
     no_juxtapose: bool,
+    /// The ternaries with a binding power, placed as an infix operator is
+    /// (see [`OpDef::ternary`]), by their first and second tokens.
+    tin_tern0b: Vec<Tin>,
+    tin_tern1b: Vec<Tin>,
+    /// A host grammar's own value tokens (see [`ExprOptions::values`]).
+    host_values: Vec<Tin>,
 }
 
 /// The value tokens an expression term can start with, the canonical
@@ -2133,6 +2299,20 @@ impl Grammar {
         !self.cast.is_empty()
     }
 
+    fn has_bound_ternary(&self) -> bool {
+        !self.tin_tern0b.is_empty() && !self.tin_tern1b.is_empty()
+    }
+
+    /// Whether a host grammar's value is refused where it stands: values
+    /// side by side are refused, and the token is one of the host's.
+    fn refuse_host_values(&self) -> bool {
+        self.no_juxtapose && !self.host_values.is_empty()
+    }
+
+    fn host_value(&self, tin: Option<Tin>) -> bool {
+        self.refuse_host_values() && tin.is_some_and(|tin| self.host_values.contains(&tin))
+    }
+
     /// Whether a preval paren on this opener has a binding power, and so
     /// may be placed as a postfix of the expression before it.
     fn postfix_opener(&self, tin: Tin) -> bool {
@@ -2142,6 +2322,7 @@ impl Grammar {
     /// Whether a token starts a value, where the one before has ended.
     fn starts_value(&self, tin: Tin) -> bool {
         VAL_TINS.contains(&tin)
+            || self.host_values.contains(&tin)
             || TIN_OB == tin
             || TIN_OS == tin
             || self.tin_open.contains(&tin)
@@ -2339,9 +2520,74 @@ const PAREN_GROUP: &str = "expr_paren_group";
 const PAREN_ITEMS: &str = "expr_items";
 const PAREN_MORE: &str = "expr_paren_more";
 
+/// The `u` keys of an expr rule placing a ternary with a binding power: the
+/// operator's name, the step (1 while its middle term is read, 2 while its
+/// last term is, 3 once it is back), the counters its expression gets back
+/// for the last term, and the node its middle term was read without.
+const TERN_NAME: &str = "expr_tern_name";
+const TERN_STEP: &str = "expr_tern_step";
+const TERN_PAREN: &str = "expr_tern_paren";
+const TERN_SEP: &str = "expr_tern_sep";
+const TERN_TERNARY: &str = "expr_tern_ternary";
+const TERN_NODE: &str = "expr_tern_node";
+
+/// The `u` key of an expr rule that placed an infix operator, or a ternary
+/// with a binding power, from the root of its expression: the operator's
+/// `left`. Every node above the one the operator heads binds looser than
+/// it: the placing descended through each of them.
+const PLACED_LEFT: &str = "expr_placed_left";
+
+fn placed(rule: &mut Rule, op: &Op) {
+    rule.u_mut()
+        .insert(PLACED_LEFT.to_string(), Value::Number(op.left as f64));
+}
+
+/// Where [`place_infix`] starts for an operator after the expression's
+/// last term: the root of the expression, as the canonical port starts, or
+/// the node the previous operator heads, where the placing from the root
+/// arrives. It arrives there when the new operator binds at least as
+/// tightly as the previous one on its left, since every node above that
+/// node binds looser than the previous one, and the node itself binds
+/// looser than the new one and is not a suffix's. The tree is the same
+/// either way, node for node, and a chain of operators that each place
+/// into the last term of the one before (`a=b=...=a`, a ternary's last
+/// term holding the next ternary) is placed in time linear in its length,
+/// where descending from the root at every operator was quadratic.
+fn placing_start(rule: &Rule, root: &Value, op: &Op) -> Value {
+    let from_previous = || -> Option<Value> {
+        let prev = rule.prev_rule.as_ref()?;
+        if "expr" != prev.name.as_ref() {
+            return None;
+        }
+        let Some(Value::Number(left)) = prev.u.get(PLACED_LEFT) else {
+            return None;
+        };
+        let attach = prev.u.get(ATTACH)?;
+        let attach_op = op_of(attach)?;
+        let arrives = (*left as i64) <= op.left
+            && !attach_op.suffix
+            && attach_op.right < op.left
+            && root_id(attach).is_some()
+            && root_id(attach) == root_id(root);
+        arrives.then(|| attach.clone())
+    };
+    from_previous().unwrap_or_else(|| root.clone())
+}
+
 /// A preval paren with a binding power, `left`, binds like a suffix.
 fn bound(op: &Op) -> bool {
     MIN_SAFE_INTEGER != op.left
+}
+
+/// A ternary operator with a binding power (see [`OpDef::ternary`]).
+fn bound_ternary(op: &Op) -> bool {
+    op.ternary && MIN_SAFE_INTEGER != op.left
+}
+
+/// A ternary operator with no binding power, whose rule builds its node
+/// apart from the expression's own operators.
+fn is_unbound_ternary_op(value: &Value) -> bool {
+    is_op_kind(value, |op| op.ternary && !bound_ternary(op))
 }
 
 fn flag(u: &HashMap<String, Value>, name: &str) -> bool {
@@ -2357,7 +2603,7 @@ fn enclosing(rule: &Rule) -> Option<Arc<Op>> {
         return None;
     }
     let node = linked_node(Some(parent));
-    if is_ternary_op(&node) || is_paren_op(&node) {
+    if is_unbound_ternary_op(&node) || is_paren_op(&node) {
         return None;
     }
     op_of(&node)
@@ -2464,23 +2710,27 @@ fn paren_term(rule: &Rule) -> Value {
 /// Returns the node the paren heads, `[op, target]`, which the paren's
 /// content then extends.
 fn prattify_postfix(expr: &Value, op: &OpRef) -> Value {
-    let Some(expr_op) = op_of(expr) else {
-        return op.node(vec![expr.clone()]);
-    };
     let new = &op.op;
-    if !expr_op.suffix && expr_op.right <= new.left {
-        let end = expr_op.terms;
-        let last = term_at(expr, end);
-        if op_of(&last).is_some_and(|last_op| last_op.prefix && last_op.right < new.left) {
-            return prattify_postfix(&last, op);
+    let mut expr = expr.clone();
+    loop {
+        let Some(expr_op) = op_of(&expr) else {
+            return op.node(vec![expr]);
+        };
+        if !expr_op.suffix && expr_op.right <= new.left {
+            let end = expr_op.terms;
+            let last = term_at(&expr, end);
+            if op_of(&last).is_some_and(|last_op| last_op.prefix && last_op.right < new.left) {
+                expr = last;
+                continue;
+            }
+            let node = op.node_under(vec![last], &expr);
+            set_term(&expr, end, node.clone());
+            return node;
         }
-        let node = op.node_under(vec![last], expr);
-        set_term(expr, end, node.clone());
-        return node;
+        let prior = dup_node(&expr);
+        update_expr_node(&expr, Some(new.clone()), op.token.clone(), vec![prior]);
+        return expr;
     }
-    let prior = dup_node(expr);
-    update_expr_node(expr, Some(new.clone()), op.token.clone(), vec![prior]);
-    expr.clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -2578,6 +2828,21 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
         }
     }
 
+    let bound_tins = |index: usize| -> Vec<Tin> {
+        ternary
+            .values()
+            .filter(|op| Some(index) == op.ternary_index && bound_ternary(op))
+            .map(|op| op.tin)
+            .collect()
+    };
+    let tin_tern0b = bound_tins(0);
+    let tin_tern1b = bound_tins(1);
+    let host_values: Vec<Tin> = options
+        .values
+        .iter()
+        .map(|name| parser.token(name.clone()))
+        .collect();
+
     let grammar = Arc::new(Grammar {
         tin_prefix: prefix.keys().copied().collect(),
         tin_suffix: suffix.keys().copied().collect(),
@@ -2609,6 +2874,9 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
         has_required,
         has_bound,
         no_juxtapose: Some(false) == options.juxtapose,
+        tin_tern0b,
+        tin_tern1b,
+        host_values,
     });
 
     comment_before_fixed(parser, &grammar);
@@ -2619,7 +2887,7 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
     // thread, which is when to call `realize`.
     parser.parse_prepare(|_context: &mut Context| release_arena());
 
-    bound_expression_size(parser);
+    bound_expression_size(parser, options.node_limit.unwrap_or(NODE_LIMIT));
 
     install_val(parser, &grammar);
     install_list(parser, &grammar);
@@ -2717,29 +2985,23 @@ fn comment_before_fixed(parser: &mut Tabnas, grammar: &Grammar) {
     let _ = parser.grammar_json(COMMENT_FIRST_DOCUMENT);
 }
 
-/// Refuse an expression that has outgrown [`NODE_LIMIT`].
+/// Refuse an expression that has outgrown [`NODE_LIMIT`], or the limit the
+/// options set ([`ExprOptions::node_limit`]), and a rule stack past
+/// [`RULE_LIMIT`].
 ///
-/// The check rides on the engine's parse budget, and composes with a
-/// budget already in force rather than replacing it: the jsonic base
-/// grammar installs one to bound container nesting, and both limits exist
-/// for the same reason (see [`NODE_LIMIT`]).
-fn bound_expression_size(parser: &mut Tabnas) {
-    let budget = parser.config().parse.budget.clone();
-    let existing = budget.on_check.clone();
-    let every = match budget.check_every_n {
-        0 => 32,
-        set => set.min(32),
-    };
-    parser.parse_budget(every, move |context: &Context| {
-        if OVER_LIMIT.with(Cell::get) {
-            return false;
-        }
-        if context.rule_stack.len() > RULE_LIMIT {
-            return false;
-        }
-        existing.as_ref().is_none_or(|check| check(context))
+/// The check is a parse guard, which the engine runs at every step and
+/// keeps apart from the parse budget: a budget a caller sets after the
+/// grammar is installed replaces the one slot the budget has, and the limit
+/// went with it when the check rode there, and a check every few steps let
+/// an expression that outgrew the limit in its last steps through.
+fn bound_expression_size(parser: &mut Tabnas, limit: usize) {
+    parser.parse_guard(LIMIT_GUARD, move |context: &Context| {
+        LARGEST.with(Cell::get) <= limit && context.rule_stack.len() <= RULE_LIMIT
     });
 }
+
+/// The name of the parse guard [`bound_expression_size`] installs.
+const LIMIT_GUARD: &str = "expr-limits";
 
 const COMMENT_FIRST: &str = "@expr-comment-before-fixed";
 const COMMENT_FIRST_DOCUMENT: &str =
@@ -2885,6 +3147,20 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             close.push(alt);
         }
 
+        // A ternary with a binding power follows a term as an infix
+        // operator does: the first term's val becomes the expression, and a
+        // later term's ends for the expression it belongs to.
+        if grammar.has_bound_ternary() {
+            let mut alt = on(&grammar.tin_tern0b);
+            alt.b = 1;
+            alt.n = counters(&[("expr_prefix", 0), ("expr_suffix", 0)]);
+            alt.r_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                (0 == counter(rule, "expr")).then(|| "expr".to_string())
+            }));
+            alt.g = "expr,expr-ternary,expr-ternary-bound".into();
+            close.push(alt);
+        }
+
         if grammar.has_ternary() {
             let mut alt = on(&grammar.tin_tern0);
             alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
@@ -3019,6 +3295,17 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         space.b = 1;
         space.g = "expr,list,val,imp,space,top".into();
         close.push(space);
+
+        // A host grammar's value after this one, with `juxtapose: false`:
+        // values side by side, refused.
+        if grammar.refuse_host_values() {
+            let mut alt = on(&grammar.host_values);
+            alt.e = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                rule.c0().cloned()
+            }));
+            alt.g = "expr,expr-juxtaposed".into();
+            close.push(alt);
+        }
 
         prepend_close_all(spec, close);
     });
@@ -3535,7 +3822,7 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 // it would corrupt the wrapper with a stray hole and a
                 // duplicated operand. Start a fresh operand expression
                 // for those, mirroring the infix guard.
-                if is_op(&parent) && !is_ternary_op(&parent) && !is_paren_op(&parent) {
+                if is_op(&parent) && !is_unbound_ternary_op(&parent) && !is_paren_op(&parent) {
                     let attach = prattify(&parent, &op);
                     publish_expr(rule, attach);
                     // This prefix is a term of the expression the parent is
@@ -3566,13 +3853,14 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 let previous = linked_node(rule.prev_rule.as_ref());
 
                 // Second and further operators.
-                if is_op(&parent) && !is_ternary_op(&parent) {
-                    let attach = prattify(&parent, &op);
+                if is_op(&parent) && !is_unbound_ternary_op(&parent) {
+                    let start = placing_start(rule, &parent, &op.op);
+                    let attach = place_infix(&start, &op);
                     publish_expr(rule, attach);
                 }
                 // The first term was a unary expression.
                 else if is_op(&previous) {
-                    let attach = prattify(&previous, &op);
+                    let attach = place_infix(&previous, &op);
                     if let Some(prev) = rule.prev_rule.clone() {
                         rule.parent_node = Some(prev.node.clone());
                         rule.parent_rule = Some(prev);
@@ -3585,6 +3873,72 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                     let node = prior_expr(rule, prior.as_ref(), &op);
                     publish_expr(rule, node);
                 }
+                placed(rule, &op.op);
+            });
+            open.push(alt);
+        }
+
+        // A ternary with a binding power, placed as an infix operator is:
+        // its first term is as much of the expression before it as binds
+        // tighter than its `left`. Its middle term is a whole expression of
+        // its own, up to the second token, pushed here; the close below
+        // takes the second token and pushes its last term.
+        if grammar.has_bound_ternary() {
+            let mut alt = on(&grammar.tin_tern0b);
+            alt.p = Some("val".into());
+            alt.n = counters(&[("expr", 1), ("expr_prefix", 0), ("dlist", 1), ("dmap", 1)]);
+            alt.g = "expr,expr-ternary,expr-ternary-bound".into();
+            let ops = grammar.clone();
+            alt.add_action(move |rule: &mut Rule, _context: &mut Context| {
+                let Some(op) = Grammar::op_use(&ops.ternary, rule.o0()) else {
+                    return;
+                };
+                let parent = linked_node(rule.parent_rule.as_ref());
+                let previous = linked_node(rule.prev_rule.as_ref());
+
+                let attach = if is_op(&parent) && !is_unbound_ternary_op(&parent) {
+                    let start = placing_start(rule, &parent, &op.op);
+                    place_infix(&start, &op)
+                } else if is_op(&previous) {
+                    let attach = place_infix(&previous, &op);
+                    if let Some(prev) = rule.prev_rule.clone() {
+                        rule.parent_node = Some(prev.node.clone());
+                        rule.parent_rule = Some(prev);
+                    }
+                    attach
+                } else {
+                    let prior = rule.prev_rule.clone();
+                    prior_expr(rule, prior.as_ref(), &op)
+                };
+                placed(rule, &op.op);
+
+                // The middle term is a new expression, bounded by the two
+                // tokens as a group is by its parens: its counters start
+                // again (a comma there is the comma operator), and those of
+                // this expression come back for the last term.
+                let saved = [
+                    (TERN_PAREN, counter(rule, "expr_paren")),
+                    (TERN_SEP, counter(rule, "expr_sep")),
+                    (TERN_TERNARY, counter(rule, "expr_ternary")),
+                ];
+                let u = rule.u_mut();
+                u.insert(TERN_NAME.into(), Value::String(op.op.name.clone()));
+                u.insert(TERN_STEP.into(), Value::Number(1.0));
+                for (name, value) in saved {
+                    u.insert(name.into(), Value::Number(f64::from(value)));
+                }
+                // The middle term's val starts with no node, as a paren's
+                // content does: a rule is handed its parent's node, and this
+                // one's is the ternary, whose next term the middle term is
+                // not placed as. The before-close puts it back.
+                u.insert(TERN_NODE.into(), attach);
+                u.remove(ATTACH);
+                let n = rule.n_mut();
+                n.insert("expr".into(), 0);
+                n.insert("expr_paren".into(), 0);
+                n.insert("expr_sep".into(), 0);
+                n.insert("expr_ternary".into(), 1);
+                set_node(rule, Value::Undefined);
             });
             open.push(alt);
         }
@@ -3627,17 +3981,81 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
 
         // Append the final term to the expression.
         spec.add_bc(|rule: &mut Rule, _context: &mut Context| {
+            let mut child = rule.child_node.clone();
+
+            // A ternary with a binding power, back from its middle term,
+            // has its node back (see the open alternate above). The middle
+            // term's val was handed this rule's emptied cell, so its value
+            // is read before the node is put back.
+            match local_number(rule, TERN_STEP) {
+                1 => {
+                    child = rule.child_value();
+                    let node = rule.u.get(TERN_NODE).cloned().unwrap_or(Value::Undefined);
+                    rule.u_mut().insert(ATTACH.to_string(), node.clone());
+                    set_node(rule, node);
+                }
+                // Back from its last term: the ternary is whole.
+                2 => set_local_number(rule, TERN_STEP, 3),
+                _ => {}
+            }
+
             let node = node_of(rule);
             let Some(op) = op_of(&node) else {
                 return;
             };
-            let child = rule.child_node.clone();
             if term_count(&node) < op.terms && !same_node(&node, &child) {
                 push_term(&node, child);
             }
         });
 
         let mut close: Vec<AltSpec> = Vec::new();
+
+        if grammar.has_bound_ternary() {
+            // The second token of a ternary with a binding power, after its
+            // middle term: its last term follows, an operand of this
+            // expression, with this expression's counters back.
+            let mut alt = on(&grammar.tin_tern1b);
+            let condition = grammar.clone();
+            alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
+                1 == local_number(rule, TERN_STEP)
+                    && rule
+                        .c0()
+                        .and_then(|token| condition.ternary.get(&token.tin))
+                        .is_some_and(|op| {
+                            matches!(rule.u.get(TERN_NAME), Some(Value::String(name)) if name == &op.name)
+                        })
+            }));
+            alt.p = Some("val".into());
+            alt.g = "expr,expr-ternary,expr-ternary-bound".into();
+            alt.add_action(|rule: &mut Rule, _context: &mut Context| {
+                let saved = [
+                    ("expr_paren", local_number(rule, TERN_PAREN)),
+                    ("expr_sep", local_number(rule, TERN_SEP)),
+                    ("expr_ternary", local_number(rule, TERN_TERNARY)),
+                ];
+                let n = rule.n_mut();
+                for (name, value) in saved {
+                    n.insert(name.into(), value as i32);
+                }
+                n.insert("expr".into(), 1);
+                n.insert("expr_prefix".into(), 0);
+                n.insert("expr_suffix".into(), 0);
+                set_local_number(rule, TERN_STEP, 2);
+            });
+            close.push(alt);
+
+            // Anything else after its middle term: the ternary is
+            // unfinished, and refused there.
+            let mut alt = always();
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                1 == local_number(rule, TERN_STEP)
+            }));
+            alt.e = Some(Arc::new(|_rule: &mut Rule, context: &mut Context| {
+                context.t0().cloned()
+            }));
+            alt.g = "expr,expr-ternary,expr-ternary-bound,unfinished".into();
+            close.push(alt);
+        }
 
         // A group the table's cast accepts: the expression goes on as a
         // cast whose operand follows (the open alternate above), so this
@@ -3787,6 +4205,19 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             close.push(alt);
         }
 
+        // A ternary with a binding power after this expression, placed as
+        // an infix operator is.
+        if grammar.has_bound_ternary() {
+            let mut alt = on(&grammar.tin_tern0b);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                0 == counter(rule, "expr_prefix")
+            }));
+            alt.b = 1;
+            alt.r = Some("expr".into());
+            alt.g = "expr,expr-ternary,expr-ternary-bound".into();
+            close.push(alt);
+        }
+
         if grammar.has_ternary() {
             let mut alt = on(&grammar.tin_tern0);
             alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
@@ -3794,6 +4225,34 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             }));
             alt.b = 1;
             alt.r = Some("ternary".into());
+            alt.g = "expr,expr-ternary".into();
+            close.push(alt);
+
+            // A ternary after a prefix expression: complete the prefix
+            // first, as for an infix or a suffix, and leave the ternary to
+            // the expression the prefix belongs to, which takes it as a
+            // whole (`-a ? b : c` is `(-a) ? b : c`). The expression goes
+            // on, so this close keeps n.expr and nothing evaluates it here.
+            // Without it, inside a paren, `(-a ? b : c)`, the `?` reached
+            // the implicit list below and was refused.
+            let mut alt = on(&grammar.tin_tern0);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                0 != counter(rule, "expr_prefix")
+            }));
+            alt.b = 1;
+            alt.g = "expr,expr-ternary,expr-prefix".into();
+            close.push(alt);
+
+            // The `:` of a ternary whose middle term this expression is:
+            // the expression ends there, and the ternary takes the `:`.
+            // Without it, inside a paren, `(a ? b + c : d)` and
+            // `(a ? -b : c)`, the `:` reached the implicit list below and
+            // was refused.
+            let mut alt = on(&grammar.tin_tern1);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                0 != counter(rule, "expr_ternary")
+            }));
+            alt.b = 1;
             alt.g = "expr,expr-ternary".into();
             close.push(alt);
         }
@@ -3868,8 +4327,14 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         alt.g = "expr,list,val,imp,space".into();
         close.push(alt);
 
-        // The expression ends on a non-expression token.
+        // The expression ends on a non-expression token, but never at a
+        // host grammar's value with `juxtapose: false`, which is refused
+        // here.
         let mut alt = always();
+        let condition = grammar.clone();
+        alt.c_fn = Some(Arc::new(move |_rule: &mut Rule, context: &mut Context| {
+            !condition.host_value(context.t0().map(|token| token.tin))
+        }));
         alt.n = counters(&[("expr", 0)]);
         alt.g = "expr,expr-end".into();
         close.push(alt);
@@ -3883,6 +4348,12 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         // attachment point: a close alternate that produced an implicit
         // list has replaced it deliberately.
         spec.add_ac(|rule: &mut Rule, _context: &mut Context| {
+            // Not while a ternary with a binding power reads its last term:
+            // the close that pushed it keeps the ternary on the node, where
+            // the before-close appends the term when it is back.
+            if 2 == local_number(rule, TERN_STEP) {
+                return;
+            }
             if is_op(&node_of(rule)) {
                 let root = expression_root(rule);
                 set_node(rule, root);
@@ -4286,7 +4757,8 @@ fn install_ternary(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 Value::String(op.op.name.clone()),
             );
 
-            let previous = linked_node(rule.prev_rule.as_ref());
+            // The first term is the whole expression before the ternary.
+            let previous = ternary_first(rule);
             let node = if is_op(&previous) {
                 let duplicate = dup_node(&previous);
                 update_expr_node(
@@ -4436,10 +4908,14 @@ fn install_ternary(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         alt.g = "expr,expr-ternary,list,val,imp,space".into();
         close.push(alt);
 
-        // End of ternary.
+        // End of ternary, but never at a host grammar's value with
+        // `juxtapose: false`, which is refused here.
         let mut alt = always();
-        alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
-            0 < rule.d && 2 == local_number(rule, "expr_ternary_step")
+        let condition = grammar.clone();
+        alt.c_fn = Some(Arc::new(move |rule: &mut Rule, context: &mut Context| {
+            0 < rule.d
+                && 2 == local_number(rule, "expr_ternary_step")
+                && !condition.host_value(context.t0().map(|token| token.tin))
         }));
         alt.add_action(|rule: &mut Rule, _context: &mut Context| {
             let node = node_of(rule);
@@ -4484,16 +4960,62 @@ fn install_ternary(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                     let mut site = EvalSite::new(Some(site_rule), context);
                     evaluation(&mut site, &node, &evaluate)
                 };
+                // The rules of the ternary's own replacement chain hold its
+                // node, the val that started it among them, which the rule
+                // above reads its value from. That rule's own node (a
+                // list's elements, a map's members, a paren's terms) is its
+                // own, and is never written here.
                 publish(rule, out.clone());
                 let mut cursor = rule.prev_rule.clone();
                 while let Some(current) = cursor {
                     *current.node.borrow_mut() = out.clone();
                     cursor = current.prev_rule.clone();
                 }
-                write_linked_node(rule.parent_rule.as_ref(), out);
+                // The rule the expression's first term belongs to holds the
+                // ternary's node, its root, when the ternary followed an
+                // expression: the canonical port reaches it along the
+                // chain, which this engine keeps only three rules of.
+                if let Some(parent) = rule.parent_rule.as_ref() {
+                    let held = parent.node.borrow().clone();
+                    if node_id(&held).is_some() && node_id(&held) == node_id(&node) {
+                        *parent.node.borrow_mut() = out;
+                    }
+                }
             });
         }
     });
+}
+
+/// The first term of a ternary with no binding power: the whole expression
+/// before it. An expr rule holds the node its last operator heads, which is
+/// the expression's root only when that operator was looser than the ones
+/// before it: in `a + b * c ? d : e` the rule before the ternary holds
+/// `b * c`. The root is held by the rule the expression's first term
+/// belongs to, the expr rule's parent, and the node the expr rule holds is
+/// on the root's last terms.
+fn ternary_first(rule: &Rule) -> Value {
+    let previous = linked_node(rule.prev_rule.as_ref());
+    let Some(prev) = rule.prev_rule.as_ref() else {
+        return previous;
+    };
+    if "expr" != prev.name.as_ref() || !is_op(&previous) {
+        return previous;
+    }
+    let Some(holder) = prev.parent_rule.as_ref() else {
+        return previous;
+    };
+    let root = holder.node.borrow().clone();
+    if !is_op(&root) || same_node(&root, &previous) {
+        return previous;
+    }
+    let mut at = root.clone();
+    while let Some(op) = op_of(&at) {
+        if same_node(&at, &previous) {
+            return root;
+        }
+        at = term_at(&at, op.terms);
+    }
+    previous
 }
 
 fn snapshot_number(snapshot: &RuleSnapshot, name: &str) -> i64 {

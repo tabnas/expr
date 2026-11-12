@@ -35,6 +35,20 @@ a ? b : c.d	["tern-ternary","a","b",["dot-infix","c","d"]]
 a ? b : c++	["tern-ternary","a","b",["post_inc-suffix","c"]]
 [a ? b : c, d]	[["tern-ternary","a","b","c"],"d"]
 x: a ? b : c	{"x":["tern-ternary","a","b","c"]}
+# The first term is the whole expression before the ternary, where the
+# operator before it binds tighter than the ones before that, and a
+# missing last term is empty.
+a + b * c ? d : e	["tern-ternary",["addition-infix","a",["multiplication-infix","b","c"]],"d","e"]
+x = a + b * c ? d : e	["tern-ternary",["assign-infix","x",["addition-infix","a",["multiplication-infix","b","c"]]],"d","e"]
+(a + b * c ? d : e)	["paren-paren",["tern-ternary",["addition-infix","a",["multiplication-infix","b","c"]],"d","e"]]
+f(a + b * c ? d : e, g)	["call-paren","f",["tern-ternary",["addition-infix","a",["multiplication-infix","b","c"]],"d","e"],"g"]
+[a + b * c ? d : e]	[["tern-ternary",["addition-infix","a",["multiplication-infix","b","c"]],"d","e"]]
+x: a + b * c ? d : e	{"x":["tern-ternary",["addition-infix","a",["multiplication-infix","b","c"]],"d","e"]}
+a + -b * c ? d : e	["tern-ternary",["addition-infix","a",["multiplication-infix",["negative-prefix","b"],"c"]],"d","e"]
+(a) + (int)b.x ? c : d	["tern-ternary",["addition-infix",["paren-paren","a"],["cast-cast","int",["dot-infix","b","x"]]],"c","d"]
+a ? b + c * d ? e : f : g	["tern-ternary","a",["tern-ternary",["addition-infix","b",["multiplication-infix","c","d"]],"e","f"],"g"]
+a ? b : c + d * e ? f : g	["tern-ternary","a","b",["tern-ternary",["addition-infix","c",["multiplication-infix","d","e"]],"f","g"]]
+a ? b :	["tern-ternary","a","b",null]
 a ? b	ERROR:unexpected
 (a ? b)	ERROR:unexpected
 f(a ? b)	ERROR:unexpected
