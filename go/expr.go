@@ -276,8 +276,19 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	infixByTin := make(map[int]*Op)
 	prefixByTin := make(map[int]*Op)
 	suffixByTin := make(map[int]*Op)
-	parenOpenByTin := make(map[int]*Op)
-	parenCloseByTin := make(map[int]*Op)
+	// Several paren operators may share an opener: a group, whose preval
+	// is inactive, and a call or a subscript, whose preval is active. A
+	// value before the opener selects the preval one, and no value the
+	// group, so `(e)` and `e()` are different operators. Each map gives,
+	// for an opener, the operator of one of the two forms: the last of its
+	// kind in the table's (sorted) order, and for the group, failing an
+	// operator whose preval is inactive, the last whose preval is active
+	// and not required, which serves both forms as a lone operator always
+	// has (TS: parenPlainTM and parenPrevalTM).
+	parenPlainByTin := make(map[int]*Op)
+	parenPrevalByTin := make(map[int]*Op)
+	parenOpenTins := make(map[int]*Op)
+	parenCloseTins := make(map[int]*Op)
 	ternaryByTin := make(map[int]*Op)
 	ternaryCloseByTin := make(map[int]*Op)
 
@@ -292,8 +303,15 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			suffixByTin[op.Tin] = op
 		}
 		if op.Paren {
-			parenOpenByTin[op.OTin] = op
-			parenCloseByTin[op.CTin] = op
+			parenOpenTins[op.OTin] = op
+			parenCloseTins[op.CTin] = op
+			if op.Preval.Active {
+				parenPrevalByTin[op.OTin] = op
+			}
+			if group := parenPlainByTin[op.OTin]; !op.Preval.Active ||
+				(!op.Preval.Required && (group == nil || group.Preval.Active)) {
+				parenPlainByTin[op.OTin] = op
+			}
 		}
 		if op.Ternary {
 			ternaryByTin[op.Tin] = op
@@ -312,8 +330,20 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	PREFIX := collectTins(prefixByTin)
 	INFIX := collectTins(infixByTin)
 	SUFFIX := collectTins(suffixByTin)
-	OP := collectTins(parenOpenByTin)
-	CP := collectTins(parenCloseByTin)
+	OP := collectTins(parenOpenTins)
+	CP := collectTins(parenCloseTins)
+
+	// The paren operator a paren rule opens: the preval one when a value
+	// precedes the opener, which the val that pushed this rule's expr
+	// records as U["paren_preval"], and the group otherwise.
+	parenOpFor := func(r *tabnas.Rule, tin int) *Op {
+		if r.Parent != nil && r.Parent != tabnas.NoRule &&
+			r.Parent.Parent != nil && r.Parent.Parent != tabnas.NoRule &&
+			r.Parent.Parent.U["paren_preval"] == true {
+			return parenPrevalByTin[tin]
+		}
+		return parenPlainByTin[tin]
+	}
 	TERN0 := collectTins(ternaryByTin)
 	TERN1 := collectTins(ternaryCloseByTin)
 
@@ -409,8 +439,8 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				B: 1,
 				P: "expr",
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-					pdef := parenOpenByTin[r.O1.Tin]
-					if pdef == nil || !pdef.Preval.Active {
+					pdef := parenPrevalByTin[r.O1.Tin]
+					if pdef == nil {
 						return false
 					}
 					if len(pdef.Preval.Allow) > 0 {
@@ -467,8 +497,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				B: 1,
 				P: "expr",
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-					pdef := parenOpenByTin[r.O0.Tin]
-					return !pdef.Preval.Required
+					return parenPlainByTin[r.O0.Tin] != nil
 				},
 				G: "expr,paren",
 			})
@@ -578,8 +607,8 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				B: 1,
 				P: "expr",
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-					pdef := parenOpenByTin[r.C0.Tin]
-					if pdef == nil || !pdef.Preval.Active {
+					pdef := parenPrevalByTin[r.C0.Tin]
+					if pdef == nil {
 						return false
 					}
 					if r.Node == nil || tabnas.IsUndefined(r.Node) {
@@ -1240,6 +1269,17 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			rn["pk"] = 0
 		})
 
+		// openParen records the operator this paren opens, which its close
+		// builds the node with.
+		openParen := func(r *tabnas.Rule, ctx *tabnas.Context) {
+			pop := parenOpFor(r, r.O0.Tin)
+			r.EnsureU()["expr_paren_op"] = pop
+			pd := "expr_paren_depth_" + pop.Name
+			r.EnsureU()[pd] = 1
+			r.EnsureN()[pd] = 1
+			r.Node = tabnas.Undefined
+		}
+
 		parenSpec.AddOpen([]*tabnas.AltSpec{
 			// Empty parens: ()
 			{
@@ -1247,17 +1287,10 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				B: 1,
 				G: "expr,paren,empty",
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-					oOp := parenOpenByTin[r.O0.Tin]
-					cOp := parenCloseByTin[r.O1.Tin]
-					return oOp != nil && cOp != nil && oOp.Name == cOp.Name
+					pop := parenOpFor(r, r.O0.Tin)
+					return pop != nil && pop.CTin == r.O1.Tin
 				},
-				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-					pop := parenOpenByTin[r.O0.Tin]
-					pd := "expr_paren_depth_" + pop.Name
-					r.EnsureU()[pd] = 1
-					r.EnsureN()[pd] = 1
-					r.Node = tabnas.Undefined
-				},
+				A: openParen,
 			},
 			// Normal paren open: consumes '(' and pushes to val.
 			{
@@ -1270,41 +1303,23 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					"expr_suffix": 0,
 				},
 				G: "expr,paren,open",
-				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-					pop := parenOpenByTin[r.O0.Tin]
-					pd := "expr_paren_depth_" + pop.Name
-					r.EnsureU()[pd] = 1
-					r.EnsureN()[pd] = 1
-					r.Node = tabnas.Undefined
-				},
+				A: openParen,
 			},
 		}...)
 
 		parenSpec.AddClose([]*tabnas.AltSpec{
 			{
 				S: mkS(CP),
+				// The closer of the operator this paren opened.
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-					cop := parenCloseByTin[r.C0.Tin]
-					if cop == nil {
-						return false
-					}
-					pd := "expr_paren_depth_" + cop.Name
-					_, ok := r.N[pd]
-					return ok && r.N[pd] > 0
+					pop, _ := r.U["expr_paren_op"].(*Op)
+					return pop != nil && pop.CTin == r.C0.Tin
 				},
 				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-					// Construct completed paren expression.
-					cop := parenCloseByTin[r.C0.Tin]
-					pop := parenOpenByTin[cop.OTin]
-					if pop == nil {
-						// Lookup by matching name.
-						for _, op := range allOps {
-							if op.Paren && op.Name == cop.Name {
-								pop = op
-								break
-							}
-						}
-					}
+					// Construct completed paren expression, with the
+					// operator this paren opened: the closer alone cannot
+					// say which, since two operators may share one.
+					pop, _ := r.U["expr_paren_op"].(*Op)
 					if pop == nil {
 						return
 					}
@@ -2033,6 +2048,21 @@ func addDefaultOps(eopts *ExprOptions) {
 			}
 		}
 		eopts.Op[name] = def
+	}
+
+	// A `plain` the options give exactly as the default defines it gives
+	// way too: the canonical, whose options arrive merged over the
+	// defaults, cannot tell it from the default. One they change is
+	// theirs, and stays.
+	if plain := eopts.Op["plain"]; plain != nil &&
+		reflect.DeepEqual(*plain, *defaults["plain"]) {
+		for name, other := range eopts.Op {
+			if name != "plain" && other != nil && other.Paren &&
+				other.OSrc == plain.OSrc && other.CSrc == plain.CSrc {
+				delete(eopts.Op, "plain")
+				break
+			}
+		}
 	}
 }
 

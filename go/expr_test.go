@@ -229,6 +229,27 @@ func namedEvaluate(_ *jsonic.Rule, _ *jsonic.Context, op *Op, terms []interface{
 	return append([]interface{}{op.Name}, terms...)
 }
 
+// Two paren operators on one opener: the group without a value before
+// it, the call with one. Go's table is a map, so the operators have no
+// declaration order to differ in, which the TypeScript and Rust runners
+// check by parsing every row in both orders.
+func TestSpecParenSharedOpener(t *testing.T) {
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			"paren": map[string]interface{}{
+				"paren": true, "osrc": "(", "csrc": ")",
+				"preval": map[string]interface{}{"active": false},
+			},
+			"call": map[string]interface{}{
+				"paren": true, "osrc": "(", "csrc": ")",
+				"preval": map[string]interface{}{"active": true},
+			},
+		},
+		"evaluate": namedEvaluate,
+	})
+	runSpec(t, "paren-shared-opener.tsv", j)
+}
+
 func TestSpecUnarySuffixEdge(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
@@ -1298,6 +1319,61 @@ func TestEvaluateCalledOncePerOperator(t *testing.T) {
 				t.Errorf("%s: evaluate called %d times for %s", src, n, key)
 			}
 		}
+	}
+}
+
+// Mirror of the TypeScript suite's `paren-default-plain-yields`.
+//
+// The default group, `plain`, gives way to a paren operator of the table
+// on the same opener and closer, so a lone call whose preval is active and
+// not required serves both forms, as it always has.
+func TestParenDefaultPlainYields(t *testing.T) {
+	named := func(op map[string]interface{}) *jsonic.Jsonic {
+		return makeExprJsonic(map[string]interface{}{"op": op, "evaluate": namedEvaluate})
+	}
+	paren := func(preval map[string]interface{}) map[string]interface{} {
+		def := map[string]interface{}{"paren": true, "osrc": "(", "csrc": ")"}
+		if preval != nil {
+			def["preval"] = preval
+		}
+		return def
+	}
+	check := func(j *jsonic.Jsonic, src, want string) {
+		t.Helper()
+		v, err := j.Parse(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		b, _ := json.Marshal(v)
+		if string(b) != want {
+			t.Errorf("%s: got %s, want %s", src, b, want)
+		}
+	}
+
+	func1 := named(map[string]interface{}{"func": paren(map[string]interface{}{"active": true})})
+	check(func1, "(1)", `["func-paren",1]`)
+	check(func1, "f(1)", `["func-paren","f",1]`)
+
+	// A paren operator on another opener leaves it in place.
+	angle := named(map[string]interface{}{
+		"angle": map[string]interface{}{"paren": true, "osrc": "<", "csrc": ">"},
+	})
+	check(angle, "(1)", `["plain-paren",1]`)
+
+	// A `plain` the options change is theirs, and stays: here it is the
+	// group beside the call.
+	both := named(map[string]interface{}{
+		"plain": paren(map[string]interface{}{"active": false}),
+		"func":  paren(map[string]interface{}{"active": true}),
+	})
+	check(both, "(1)", `["plain-paren",1]`)
+	check(both, "f(1)", `["func-paren","f",1]`)
+
+	// A call whose preval is required serves only its own form.
+	index := named(map[string]interface{}{"index": paren(map[string]interface{}{"required": true})})
+	check(index, "f(1)", `["index-paren","f",1]`)
+	if _, err := index.Parse("(1)"); err == nil {
+		t.Errorf("(1) with only a required-preval paren on ( should fail")
 	}
 }
 

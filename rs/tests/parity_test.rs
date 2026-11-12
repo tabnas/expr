@@ -234,16 +234,56 @@ fn spec_unary_suffix_paren() {
 /// the shared fixtures' evaluator for rows that show which operator built
 /// each node.
 fn named_parser(options: serde_json::Value) -> Tabnas {
-    parser_with(
-        ExprOptions::from_value(&EngineValue::from_json(&options)).with_evaluate(
-            |_site, op, terms| {
-                let mut items = Vec::with_capacity(terms.len() + 1);
-                items.push(EngineValue::String(op.name.clone()));
-                items.extend(terms.iter().cloned());
-                EngineValue::array(items)
-            },
-        ),
-    )
+    parser_with(named(ExprOptions::from_value(&EngineValue::from_json(
+        &options,
+    ))))
+}
+
+/// Typed options with that evaluator.
+fn named(options: ExprOptions) -> ExprOptions {
+    options.with_evaluate(|_site, op, terms| {
+        let mut items = Vec::with_capacity(terms.len() + 1);
+        items.push(EngineValue::String(op.name.clone()));
+        items.extend(terms.iter().cloned());
+        EngineValue::array(items)
+    })
+}
+
+/// The group and the call on `(`, declared in one order or the other.
+/// Typed options keep their order, where a `serde_json` object sorts it.
+fn shared_opener(group_first: bool) -> Tabnas {
+    let paren = OpDef::paren("(", ")").with_preval(PrevalDef {
+        active: false,
+        required: false,
+        allow: None,
+    });
+    let call = OpDef::paren("(", ")").with_preval(PrevalDef {
+        active: true,
+        required: false,
+        allow: None,
+    });
+    let options = if group_first {
+        ExprOptions::new()
+            .with_op("paren", paren)
+            .with_op("call", call)
+    } else {
+        ExprOptions::new()
+            .with_op("call", call)
+            .with_op("paren", paren)
+    };
+    parser_with(named(options))
+}
+
+/// Two paren operators on one opener: the group without a value before
+/// it, the call with one. The rows hold the first declaration order; the
+/// other order must give every row too.
+#[test]
+fn spec_paren_shared_opener() {
+    run_spec("paren-shared-opener.tsv", shared_opener(true));
+    hold_to_canonical_json(
+        &spec_dir().join("paren-shared-opener.tsv"),
+        &shared_opener(false),
+    );
 }
 
 /// Evaluation follows the tree: every cell is the S-expression the
@@ -592,8 +632,8 @@ fn every_fixture_row_is_held_to_its_canonical_json() {
         })
         .sum();
     assert_eq!(
-        rows, 1163,
-        "the shared fixtures hold {rows} rows, not the 1163 measured"
+        rows, 1183,
+        "the shared fixtures hold {rows} rows, not the 1183 measured"
     );
 }
 

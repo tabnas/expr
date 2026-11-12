@@ -215,6 +215,16 @@ impl OpDef {
     }
 
     /// A paren operator with its opening and closing source strings.
+    ///
+    /// Two paren operators may share an opener: a group, whose preval is
+    /// inactive, and a call or a subscript, whose preval is active. A value
+    /// before the opener selects the preval operator and no value the
+    /// group, so `(e)` and `e()` reach an evaluator as different
+    /// operators. Of two of one kind on an opener the later declared
+    /// applies, and an opener with no group uses an operator whose preval
+    /// is active and not required for both forms. The default `plain` is
+    /// left out of a table that has another paren operator on `(` and
+    /// `)`, unless the options change it.
     pub fn paren(osrc: impl Into<String>, csrc: impl Into<String>) -> Self {
         OpDef {
             osrc: osrc.into(),
@@ -734,7 +744,8 @@ fn default_ops() -> IndexMap<String, Option<OpDef>> {
 /// name the defaults already carry is deep-merged and moves to the end of
 /// the table, a new name is appended, and a `None` entry deletes.
 fn resolve_options(options: &ExprOptions) -> IndexMap<String, Option<OpDef>> {
-    let mut resolved = default_ops();
+    let defaults = default_ops();
+    let mut resolved = defaults.clone();
     for (name, def) in &options.op {
         resolved.shift_remove(name);
         match def {
@@ -744,6 +755,26 @@ fn resolve_options(options: &ExprOptions) -> IndexMap<String, Option<OpDef>> {
             None => {
                 resolved.insert(name.clone(), None);
             }
+        }
+    }
+
+    // The default grouping paren yields to the table's own: `plain`, as
+    // the defaults define it, is left out when another paren operator
+    // opens with `(` and closes with `)`. Otherwise it would be that
+    // opener's group beside a call the table declares there, which a
+    // table that gave its call the group's job too (one paren operator
+    // whose preval is active and not required) never asked for. A `plain`
+    // the options change is theirs, and stays.
+    if let Some(Some(plain)) = resolved.get("plain") {
+        let claimed = Some(&Some(plain.clone())) == defaults.get("plain")
+            && resolved.iter().any(|(name, def)| {
+                "plain" != name
+                    && def.as_ref().is_some_and(|def| {
+                        def.paren && def.osrc == plain.osrc && def.csrc == plain.csrc
+                    })
+            });
+        if claimed {
+            resolved.shift_remove("plain");
         }
     }
     resolved
@@ -1789,11 +1820,10 @@ fn make_op_map(
 
 /// Build the paren operator map, the port of the canonical
 /// `makeParenMap`.
-fn make_paren_map(
-    parser: &mut Tabnas,
-    ops: &IndexMap<String, Option<OpDef>>,
-) -> IndexMap<Tin, Arc<Op>> {
-    let mut map: IndexMap<Tin, Arc<Op>> = IndexMap::new();
+/// The paren operators, in the table's order. Several may share an
+/// opener; the plugin picks, per opener, the group and the preval one.
+fn make_paren_ops(parser: &mut Tabnas, ops: &IndexMap<String, Option<OpDef>>) -> Vec<Arc<Op>> {
+    let mut list: Vec<Arc<Op>> = Vec::new();
     for (name, def) in ops {
         let Some(def) = def else { continue };
         if !def.paren {
@@ -1816,9 +1846,9 @@ fn make_paren_map(
             use_data: def.use_data.clone(),
             ..Default::default()
         };
-        map.insert(otin, Arc::new(op));
+        list.push(Arc::new(op));
     }
-    map
+    list
 }
 
 /// Everything the rule alternates read: the operator maps, the token
@@ -1828,8 +1858,12 @@ struct Grammar {
     suffix: IndexMap<Tin, Arc<Op>>,
     infix: IndexMap<Tin, Arc<Op>>,
     ternary: IndexMap<Tin, Arc<Op>>,
-    paren_open: IndexMap<Tin, Arc<Op>>,
-    paren_close: IndexMap<Tin, Arc<Op>>,
+    /// Every paren operator, in the table's order.
+    parens: Vec<Arc<Op>>,
+    /// Per opener, the operator a paren opens when no value precedes it.
+    paren_plain: IndexMap<Tin, Arc<Op>>,
+    /// Per opener, the operator a paren opens when a value precedes it.
+    paren_preval: IndexMap<Tin, Arc<Op>>,
     tin_prefix: Vec<Tin>,
     tin_suffix: Vec<Tin>,
     tin_infix: Vec<Tin>,
@@ -2079,11 +2113,38 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
     let suffix = make_op_map(parser, &ops, Anyfix::Suffix);
     let infix = make_op_map(parser, &ops, Anyfix::Infix);
     let ternary = make_op_map(parser, &ops, Anyfix::Ternary);
-    let paren_open = make_paren_map(parser, &ops);
-    let paren_close: IndexMap<Tin, Arc<Op>> = paren_open
-        .values()
-        .map(|op| (op.ctin, op.clone()))
-        .collect();
+    // Several paren operators may share an opener: a group, whose preval
+    // is inactive, and a call or a subscript, whose preval is active. A
+    // value before the opener selects the preval one, and no value the
+    // group, so `(e)` and `e()` are different operators. Each map gives,
+    // for an opener, the operator of one of the two forms: the last
+    // declared of its kind, and for the group, failing an operator whose
+    // preval is inactive, the last whose preval is active and not
+    // required, which serves both forms as a lone operator always has.
+    let parens = make_paren_ops(parser, &ops);
+    let mut paren_plain: IndexMap<Tin, Arc<Op>> = IndexMap::new();
+    let mut paren_preval: IndexMap<Tin, Arc<Op>> = IndexMap::new();
+    for op in &parens {
+        if op.preval.active {
+            paren_preval.insert(op.otin, op.clone());
+        }
+        let group = paren_plain.get(&op.otin);
+        if !op.preval.active
+            || (!op.preval.required && group.is_none_or(|group| group.preval.active))
+        {
+            paren_plain.insert(op.otin, op.clone());
+        }
+    }
+    let mut tin_open: Vec<Tin> = Vec::new();
+    let mut tin_close: Vec<Tin> = Vec::new();
+    for op in &parens {
+        if !tin_open.contains(&op.otin) {
+            tin_open.push(op.otin);
+        }
+        if !tin_close.contains(&op.ctin) {
+            tin_close.push(op.ctin);
+        }
+    }
 
     let grammar = Arc::new(Grammar {
         tin_prefix: prefix.keys().copied().collect(),
@@ -2099,14 +2160,15 @@ pub fn expr(parser: &mut Tabnas, options: &ExprOptions) -> Result<(), PluginErro
             .filter(|op| Some(1) == op.ternary_index)
             .map(|op| op.tin)
             .collect(),
-        tin_open: paren_open.values().map(|op| op.otin).collect(),
-        tin_close: paren_close.values().map(|op| op.ctin).collect(),
+        tin_open,
+        tin_close,
         prefix,
         suffix,
         infix,
         ternary,
-        paren_open,
-        paren_close,
+        parens,
+        paren_plain,
+        paren_preval,
         evaluate: options.evaluate.clone(),
     });
 
@@ -2184,8 +2246,8 @@ fn comment_before_fixed(parser: &mut Tabnas, grammar: &Grammar) {
         .map(|op| op.src.clone())
         .chain(
             grammar
-                .paren_open
-                .values()
+                .parens
+                .iter()
                 .flat_map(|op| [op.osrc.clone(), op.csrc.clone()]),
         )
         .filter(|src| !src.is_empty())
@@ -2287,14 +2349,11 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             alt.c_fn = Some(Arc::new(move |rule: &mut Rule, context: &mut Context| {
                 let Some(pdef) = rule
                     .o1()
-                    .and_then(|token| condition.paren_open.get(&token.tin))
+                    .and_then(|token| condition.paren_preval.get(&token.tin))
                     .cloned()
                 else {
                     return false;
                 };
-                if !pdef.preval.active {
-                    return false;
-                }
                 let Some(allow) = &pdef.preval.allow else {
                     return true;
                 };
@@ -2319,8 +2378,7 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             let condition = grammar.clone();
             alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
                 rule.o0()
-                    .and_then(|token| condition.paren_open.get(&token.tin))
-                    .is_some_and(|pdef| !pdef.preval.required)
+                    .is_some_and(|token| condition.paren_plain.contains_key(&token.tin))
             }));
             alt.g = "expr,expr-paren".into();
             alt.add_action(detach_node);
@@ -2414,13 +2472,13 @@ fn install_val(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
                 let Some(pdef) = rule
                     .c0()
-                    .and_then(|token| condition.paren_open.get(&token.tin))
+                    .and_then(|token| condition.paren_preval.get(&token.tin))
                     .cloned()
                 else {
                     return false;
                 };
                 let node = node_of(rule);
-                if !pdef.preval.active || node.is_undefined() {
+                if node.is_undefined() {
                     return false;
                 }
                 let Some(allow) = &pdef.preval.allow else {
@@ -3226,16 +3284,8 @@ fn install_paren(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         alt.g = "expr,expr-paren,empty".into();
         let condition = grammar.clone();
         alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
-            let open = rule
-                .o0()
-                .and_then(|token| condition.paren_open.get(&token.tin));
-            let close = rule
-                .o1()
-                .and_then(|token| condition.paren_close.get(&token.tin));
-            match (open, close) {
-                (Some(open), Some(close)) => open.name == close.name,
-                _ => false,
-            }
+            let close = rule.o1().map(|token| token.tin);
+            paren_op_for(&condition, rule).is_some_and(|op| Some(op.ctin) == close)
         }));
         let ops = grammar.clone();
         alt.add_action(move |rule: &mut Rule, _context: &mut Context| {
@@ -3263,15 +3313,10 @@ fn install_paren(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
 
         let mut alt = on(&grammar.tin_close);
         let condition = grammar.clone();
+        // The closer of the operator this paren opened.
         alt.c_fn = Some(Arc::new(move |rule: &mut Rule, _context: &mut Context| {
-            let Some(pdef) = rule
-                .c0()
-                .and_then(|token| condition.paren_close.get(&token.tin))
-                .cloned()
-            else {
-                return false;
-            };
-            0 != counter(rule, &paren_depth(&pdef.name))
+            let close = rule.c0().map(|token| token.tin);
+            opened_paren(&condition, rule).is_some_and(|op| Some(op.ctin) == close)
         }));
         let ops = grammar.clone();
         alt.add_action(move |rule: &mut Rule, _context: &mut Context| {
@@ -3290,11 +3335,45 @@ fn install_paren(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
     });
 }
 
+/// The paren operator a paren rule opens: the preval one when a value
+/// precedes the opener, which the val that pushed this rule's expr records
+/// as `u.paren_preval`, and the group otherwise.
+fn paren_op_for(grammar: &Grammar, rule: &Rule) -> Option<Arc<Op>> {
+    let tin = rule.o0()?.tin;
+    let preval = rule
+        .parent_rule
+        .as_ref()
+        .and_then(|parent| parent.parent_rule.clone())
+        .is_some_and(|grandparent| {
+            matches!(grandparent.u.get("paren_preval"), Some(Value::Bool(true)))
+        });
+    if preval {
+        grammar.paren_preval.get(&tin).cloned()
+    } else {
+        grammar.paren_plain.get(&tin).cloned()
+    }
+}
+
+/// The `u` key a paren rule records the operator it opened under, by name:
+/// its close builds the node with it, since two operators may share a
+/// closer.
+const PAREN_OP: &str = "expr_paren_op";
+
+/// The operator this paren rule opened.
+fn opened_paren(grammar: &Grammar, rule: &Rule) -> Option<Arc<Op>> {
+    let Some(Value::String(name)) = rule.u.get(PAREN_OP) else {
+        return None;
+    };
+    grammar.parens.iter().find(|op| &op.name == name).cloned()
+}
+
 fn open_paren(grammar: &Grammar, rule: &mut Rule) {
-    let Some(op) = Grammar::op_use(&grammar.paren_open, rule.o0()) else {
+    let Some(op) = paren_op_for(grammar, rule) else {
         return;
     };
-    let depth = paren_depth(&op.op.name);
+    rule.u_mut()
+        .insert(PAREN_OP.to_string(), Value::String(op.name.clone()));
+    let depth = paren_depth(&op.name);
     rule.u_mut().insert(depth.clone(), Value::Number(1.0));
     rule.n_mut().insert(depth, 1);
     set_node(rule, Value::Undefined);
@@ -3319,10 +3398,11 @@ fn close_paren(grammar: &Grammar, rule: &mut Rule) {
         node = child;
     }
 
-    let Some(op) = Grammar::op_use(&grammar.paren_close, rule.c0()) else {
+    let Some(op) = opened_paren(grammar, rule) else {
         set_node(rule, node);
         return;
     };
+    let op = OpRef::at(&op, rule.c0().cloned());
     let depth = paren_depth(&op.op.name);
 
     // Construct the completed paren expression.
