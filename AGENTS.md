@@ -395,10 +395,52 @@ on over one small C table (`cLike` in `ts/test/spec.test.ts` and
   alternate on an opener and its closer raises `unexpected` at the
   closer for an operator whose content is required.
 
+Two more came with tabnas/c reading its expressions through expr, each
+off unless a table sets it, pinned off and on by
+`options-ternary-off.tsv` and `options-ternary.tsv`, and by
+`options-values-off.tsv` and `options-values.tsv` (`cTernary` in
+`ts/test/spec.test.ts` and `go/expr_test.go`, `c_ternary` in
+`rs/tests/parity_test.rs`):
+
+- **A ternary with a binding power** (`left` and `right` on a
+  `ternary`). It is placed as an infix operator is, by `placeInfix`
+  (`place_infix`), the loop `prattify` places an infix with: the val and
+  expr close alternates on its first token (group
+  `expr-ternary-bound`) hand it to an expr rule, whose open alternate
+  places it and pushes the middle term's val. The middle term is an
+  expression of its own: the rule saves `expr_paren`, `expr_sep` and
+  `expr_ternary` in `u`, starts them again, with `expr_ternary` set, and
+  reads the middle term without its node (a pushed rule is handed its
+  parent's, and the ternary is not the place the middle term goes); its
+  before-close puts the node back. Its close alternate on the second
+  token puts the counters back and pushes the last term's val, an
+  operand of the expression as an infix operator's right term is, and
+  anything else after the middle term is refused there (`unfinished`).
+  `isUnboundTernaryOp` keeps a ternary with no binding power out of the
+  checks a bound one now passes. Rust's after-close leaves the ternary
+  on the node while the last term is read (step 2 of
+  `expr_tern_step`).
+- **A host grammar's values** (`values`, names of tokens). With
+  `juxtapose: false`, one after a value or an expression is refused
+  wherever it stands: a val close alternate raises `unexpected` on it,
+  and the expression's and the ternary's end alternates do not end
+  there.
+
 `options-repeat-by-replacement` (TypeScript), `TestOptionsRepeatByReplacement`
-(Go) and `options_repeat_by_replacement` (Rust) hold the separator loop
-and chained or postfix calls to constant rule depth; Rust runs the
-node-per-item forms at 100 items, under its `NODE_LIMIT`.
+(Go) and `options_repeat_by_replacement` (Rust) hold the separator loop,
+chained or postfix calls and a chain of ternaries with a binding power
+to constant rule depth, each at 10,000 items; Rust raises its
+`NODE_LIMIT` for the forms that build a node per item
+(`ExprOptions::node_limit`) and measures the rules without realizing the
+tree. `deep-trees` (TypeScript), `TestDeepTrees` (Go) and `deep_trees`
+(Rust) build and evaluate a chain of 10,000 terms each way: evaluation,
+`simplify` and the placing are loops, so the call stack does not grow
+with a tree's depth (TypeScript raised `RangeError` past a few thousand
+terms up to 0.6.0). A chain that places each operator in the last term
+of the one before (`a=b=...=a`) descends from the root at every operator
+in TypeScript and Go, which is quadratic in its length; Rust starts
+where the previous operator was placed when the placing from the root
+would arrive there (`placing_start`), which gives the same tree.
 `options-cast-shape` and its twins pin what `simplify` writes for a cast
 and what `accept` receives.
 
