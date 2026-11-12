@@ -281,9 +281,9 @@ invoked **bottom-up**: by the time it sees an `op`, each entry of `terms` is
 the already-evaluated value of the corresponding operand. Return the value
 this sub-expression reduces to.
 
-Each operation is reduced once, in the order of the tree the S-expression
-shows, and only once its expression has ended: `-1!` is `[-, [!, 1]]`, so
-`!` is reduced first and `-` second.
+The plugin calls it once per operation, in the order of the tree the
+S-expression shows, and only after the expression has ended: `-1!` is
+`[-, [!, 1]]`, so the call for `!` comes before the call for `-`.
 
 - `rule`, `ctx`. The current parse `Rule` and `Context` (often unused).
 - `op`. The resolved `Op` (above).
