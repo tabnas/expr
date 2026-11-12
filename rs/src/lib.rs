@@ -1914,6 +1914,11 @@ fn node_of(rule: &Rule) -> Value {
 /// `rule.node` even after the after-close has put the root back there.
 const ATTACH: &str = "expr_attach";
 
+/// The `u` key of a prefix built inside the tree of the expression its
+/// parent is building, whose after-close leaves the evaluation to that
+/// expression: evaluation follows the tree, from the root, once.
+const INNER: &str = "expr_inner";
+
 /// Publish an expression from an expr rule.
 ///
 /// `rule.node` takes the ATTACHMENT POINT, where the operator's next term
@@ -2841,6 +2846,11 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 if is_op(&parent) && !is_ternary_op(&parent) && !is_paren_op(&parent) {
                     let attach = prattify(&parent, &op);
                     publish_expr(rule, attach);
+                    // This prefix is a term of the expression the parent is
+                    // building, inside that expression's own tree, so this
+                    // rule does not evaluate it: the expression that holds
+                    // the root evaluates the whole tree once it ends.
+                    rule.u_mut().insert(INNER.to_string(), Value::Bool(true));
                 } else {
                     let prior = rule.parent_rule.clone();
                     let node = prior_expr(rule, prior.as_ref(), &op);
@@ -2899,6 +2909,18 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
                 let previous = linked_node(rule.prev_rule.as_ref());
                 if is_op(&previous) {
                     let attach = prattify(&previous, &op);
+                    // The suffix took over the val of the expression's
+                    // first term, whose node holds the root (`-1!`, `(1)!`):
+                    // the root is evaluated from there, as the infix after
+                    // a unary expression does. A suffix that took over an
+                    // expr rule already has the first term's val as its
+                    // parent.
+                    if let Some(prev) = rule.prev_rule.clone() {
+                        if "val" == prev.name.as_ref() {
+                            rule.parent_node = Some(prev.node.clone());
+                            rule.parent_rule = Some(prev);
+                        }
+                    }
                     publish_expr(rule, attach);
                 } else {
                     let prior = rule.prev_rule.clone();
@@ -2979,6 +3001,22 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
             }));
             alt.b = 1;
             alt.r = Some("expr".into());
+            alt.g = "expr,expr-suffix,expr-prefix".into();
+            close.push(alt);
+
+            // A suffix after a prefix expression: complete the prefix
+            // first, as the infix alternate above does, and leave the
+            // suffix to the expression the prefix belongs to, which drills
+            // it into the prefix (`-1!` is `-(1!)`). The expression goes
+            // on, so this close keeps n.expr, and nothing evaluates it
+            // here: the after-close below evaluates an expression only
+            // once it has ended, and the expression the suffix extends
+            // evaluates the whole tree.
+            let mut alt = on(&grammar.tin_suffix);
+            alt.c_fn = Some(Arc::new(|rule: &mut Rule, _context: &mut Context| {
+                0 != counter(rule, "expr_prefix")
+            }));
+            alt.b = 1;
             alt.g = "expr,expr-suffix,expr-prefix".into();
             close.push(alt);
         }
@@ -3097,6 +3135,16 @@ fn install_expr(parser: &mut Tabnas, grammar: &Arc<Grammar>) {
         if let Some(evaluate) = grammar.evaluate.clone() {
             spec.add_ac(move |rule: &mut Rule, context: &mut Context| {
                 if 0 != counter(rule, "expr") {
+                    return;
+                }
+                // Evaluation follows the tree the S-expression shows, so an
+                // expression is evaluated once, whole, from its root, once
+                // it has ended. A prefix inside an operand of an enclosing
+                // expression (`-2` in `1+-2`) was built into that
+                // expression's tree: evaluating here evaluated the
+                // enclosing tree too, before it was complete, and then
+                // again when it was.
+                if matches!(rule.u.get(INNER), Some(Value::Bool(true))) {
                     return;
                 }
                 let Some(parent) = rule.parent_rule.clone() else {

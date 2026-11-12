@@ -119,8 +119,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 An evaluator reduces each expression as it closes, so the parse returns
-values rather than trees. It is a typed callback, so it travels in the
-options struct rather than in the JSON bag:
+values rather than trees. Each operation is reduced once, in the order of
+the tree the S-expression shows: `-1!` is `[-, [!, 1]]`, so `!` is reduced
+first and `-` second. The evaluator is a typed callback, so it travels in
+the options struct rather than in the JSON bag:
 
 ```rust
 use tabnas::Value;

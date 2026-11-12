@@ -2917,4 +2917,46 @@ describe('expr', () => {
   })
 
 
+  test('evaluate-once-in-tree-order', () => {
+    // Each operation of the tree is reduced once, after its terms, so the
+    // calls follow the S-expression. A prefix inside an operand (`-2` in
+    // `1+-2`) is not reduced with the enclosing tree before that tree is
+    // complete, and a suffix that drills into a prefix (`-1!`, which is
+    // `-(1!)`) is reduced before the prefix, not after it.
+    const calls: string[] = []
+    const je = new Tabnas().use(jsonic).use(Expr, {
+      op: {
+        factorial: { suffix: true, left: 6000000, src: '!' },
+        question: { suffix: true, left: 3500000, src: '?' },
+      },
+      evaluate: (_r: Rule, _c: Context, op: Op, terms: any) => {
+        const out = op.name.replace(/-.*$/, '') + '(' + terms.join(',') + ')'
+        calls.push(out)
+        return out
+      },
+    })
+
+    const cases: [string, string[]][] = [
+      ['1+-2', ['negative(2)', 'addition(1,negative(2))']],
+      ['--1', ['negative(1)', 'negative(negative(1))']],
+      ['-1!', ['factorial(1)', 'negative(factorial(1))']],
+      ['--1!', ['factorial(1)', 'negative(factorial(1))',
+        'negative(negative(factorial(1)))']],
+      ['1+-2!', ['factorial(2)', 'negative(factorial(2))',
+        'addition(1,negative(factorial(2)))']],
+      ['-1?', ['negative(1)', 'question(negative(1))']],
+      ['-(1)!', ['plain(1)', 'factorial(plain(1))',
+        'negative(factorial(plain(1)))']],
+      ['[1+-2,3]', ['negative(2)', 'addition(1,negative(2))']],
+      ['x:-1!', ['factorial(1)', 'negative(factorial(1))']],
+    ]
+
+    for (const [src, want] of cases) {
+      calls.length = 0
+      je.parse(src)
+      expect([src, calls]).equal([src, want])
+    }
+  })
+
+
 })

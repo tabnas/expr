@@ -205,6 +205,30 @@ func TestSpecUnarySuffixArith(t *testing.T) {
 	runSpec(t, "unary-suffix-arith.tsv", j)
 }
 
+// Evaluation follows the tree: the evaluator writes each operation as
+// [op.Name, terms...], so every cell is the S-expression the
+// unary-suffix-*.tsv rows show, with operator names for sources.
+func TestSpecUnarySuffixEvaluate(t *testing.T) {
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			"factorial": map[string]interface{}{
+				"suffix": true, "left": 6000000, "src": "!",
+			},
+			"question": map[string]interface{}{
+				"suffix": true, "left": 3500000, "src": "?",
+			},
+		},
+		"evaluate": namedEvaluate,
+	})
+	runSpec(t, "unary-suffix-evaluate.tsv", j)
+}
+
+// namedEvaluate writes an operation as [op.Name, terms...], the shared
+// fixtures' evaluator for rows that show which operator built each node.
+func namedEvaluate(_ *jsonic.Rule, _ *jsonic.Context, op *Op, terms []interface{}) interface{} {
+	return append([]interface{}{op.Name}, terms...)
+}
+
 func TestSpecUnarySuffixEdge(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
@@ -1273,6 +1297,61 @@ func TestEvaluateCalledOncePerOperator(t *testing.T) {
 			if 1 < n {
 				t.Errorf("%s: evaluate called %d times for %s", src, n, key)
 			}
+		}
+	}
+}
+
+// Mirror of the TypeScript suite's `evaluate-once-in-tree-order`.
+//
+// Each operation of the tree is reduced once, after its terms, so the calls
+// follow the S-expression. A prefix inside an operand (`-2` in `1+-2`) is
+// not reduced with the enclosing tree before that tree is complete, and a
+// suffix that drills into a prefix (`-1!`, which is `-(1!)`) is reduced
+// before the prefix, not after it.
+func TestEvaluateOnceInTreeOrder(t *testing.T) {
+	var calls []string
+	j := jsonic.Make()
+	_ = j.Use(Expr, map[string]interface{}{
+		"op": map[string]interface{}{
+			"factorial": map[string]interface{}{"suffix": true, "left": 6000000, "src": "!"},
+			"question":  map[string]interface{}{"suffix": true, "left": 3500000, "src": "?"},
+		},
+		"evaluate": func(
+			_ *jsonic.Rule, _ *jsonic.Context, op *Op, terms []interface{},
+		) interface{} {
+			parts := make([]string, len(terms))
+			for i, term := range terms {
+				parts[i] = fmt.Sprintf("%v", term)
+			}
+			out := strings.SplitN(op.Name, "-", 2)[0] + "(" + strings.Join(parts, ",") + ")"
+			calls = append(calls, out)
+			return out
+		},
+	})
+
+	for _, c := range []struct {
+		src  string
+		want []string
+	}{
+		{"1+-2", []string{"negative(2)", "addition(1,negative(2))"}},
+		{"--1", []string{"negative(1)", "negative(negative(1))"}},
+		{"-1!", []string{"factorial(1)", "negative(factorial(1))"}},
+		{"--1!", []string{"factorial(1)", "negative(factorial(1))",
+			"negative(negative(factorial(1)))"}},
+		{"1+-2!", []string{"factorial(2)", "negative(factorial(2))",
+			"addition(1,negative(factorial(2)))"}},
+		{"-1?", []string{"negative(1)", "question(negative(1))"}},
+		{"-(1)!", []string{"plain(1)", "factorial(plain(1))",
+			"negative(factorial(plain(1)))"}},
+		{"[1+-2,3]", []string{"negative(2)", "addition(1,negative(2))"}},
+		{"x:-1!", []string{"factorial(1)", "negative(factorial(1))"}},
+	} {
+		calls = nil
+		if _, err := j.Parse(c.src); err != nil {
+			t.Fatalf("%s: %v", c.src, err)
+		}
+		if !reflect.DeepEqual(calls, c.want) {
+			t.Errorf("%s: evaluate calls\n  got  %q\n  want %q", c.src, calls, c.want)
 		}
 	}
 }

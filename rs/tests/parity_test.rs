@@ -230,6 +230,29 @@ fn spec_unary_suffix_paren() {
     run_spec("unary-suffix-paren.tsv", parser_for(suffix_ops()));
 }
 
+/// A parser whose evaluator writes each operation as `[op.name, ...terms]`,
+/// the shared fixtures' evaluator for rows that show which operator built
+/// each node.
+fn named_parser(options: serde_json::Value) -> Tabnas {
+    parser_with(
+        ExprOptions::from_value(&EngineValue::from_json(&options)).with_evaluate(
+            |_site, op, terms| {
+                let mut items = Vec::with_capacity(terms.len() + 1);
+                items.push(EngineValue::String(op.name.clone()));
+                items.extend(terms.iter().cloned());
+                EngineValue::array(items)
+            },
+        ),
+    )
+}
+
+/// Evaluation follows the tree: every cell is the S-expression the
+/// unary-suffix-*.tsv rows show, with operator names for sources.
+#[test]
+fn spec_unary_suffix_evaluate() {
+    run_spec("unary-suffix-evaluate.tsv", named_parser(suffix_ops()));
+}
+
 #[test]
 fn spec_unary_suffix_edge() {
     run_spec(
@@ -569,8 +592,8 @@ fn every_fixture_row_is_held_to_its_canonical_json() {
         })
         .sum();
     assert_eq!(
-        rows, 1136,
-        "the shared fixtures hold {rows} rows, not the 1136 measured"
+        rows, 1163,
+        "the shared fixtures hold {rows} rows, not the 1163 measured"
     );
 }
 
