@@ -273,6 +273,19 @@ way it does so the fixes are not "simplified" back into bugs.
    must also drill through infix sub-ops. Locked in by the
    `unary-suffix-arith.tsv` shared fixture.
 
+   Evaluation follows the same tree, in every runtime: an expression is
+   evaluated once, from its root, when it has ended. A prefix expression
+   that a suffix follows closes through its own suffix alternate
+   (`expr-prefix` in the group tags), which keeps `n.expr`, so its
+   after-close does not evaluate it before the suffix drills in; and a
+   prefix built into an enclosing expression's tree (`-2` in `1+-2`,
+   marked `u.expr_inner`) leaves the evaluation to that expression. The
+   decision rides on the close alternate, never on the token after it,
+   because the engines disagree on what `t0` holds in an after-close
+   once an alternate has consumed a token. `unary-suffix-evaluate.tsv`
+   pins it, with an evaluator that writes each operation as
+   `[name, ...terms]`.
+
 4. **A binding power of ZERO is an UNSET binding power.** The canonical
    builds an operator's powers with `opdef.left || Number.MIN_SAFE_INTEGER`
    and `opdef.right || Number.MAX_SAFE_INTEGER`, and `0` is falsy in

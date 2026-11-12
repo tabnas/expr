@@ -638,6 +638,74 @@ fn evaluate_called_once_per_operator() {
     }
 }
 
+/// Each operation of the tree is reduced once, after its terms, so the
+/// calls follow the S-expression. A prefix inside an operand (`-2` in
+/// `1+-2`) is not reduced with the enclosing tree before that tree is
+/// complete, and a suffix that drills into a prefix (`-1!`, which is
+/// `-(1!)`) is reduced before the prefix, not after it. The Rust half of
+/// the TypeScript suite's `evaluate-once-in-tree-order`.
+#[test]
+fn evaluate_once_in_tree_order() {
+    let calls: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = calls.clone();
+    let parser = parser_with(
+        ExprOptions::new()
+            .with_op("factorial", OpDef::suffix("!", 6000000))
+            .with_op("question", OpDef::suffix("?", 3500000))
+            .with_evaluate(move |_site, op, terms| {
+                let parts: Vec<String> = terms
+                    .iter()
+                    .map(|term| match term {
+                        Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect();
+                let name = op.name.split('-').next().unwrap_or_default();
+                let out = format!("{name}({})", parts.join(","));
+                seen.lock().unwrap().push(out.clone());
+                Value::String(out)
+            }),
+    );
+
+    for (src, want) in [
+        ("1+-2", vec!["negative(2)", "addition(1,negative(2))"]),
+        ("--1", vec!["negative(1)", "negative(negative(1))"]),
+        ("-1!", vec!["factorial(1)", "negative(factorial(1))"]),
+        (
+            "--1!",
+            vec![
+                "factorial(1)",
+                "negative(factorial(1))",
+                "negative(negative(factorial(1)))",
+            ],
+        ),
+        (
+            "1+-2!",
+            vec![
+                "factorial(2)",
+                "negative(factorial(2))",
+                "addition(1,negative(factorial(2)))",
+            ],
+        ),
+        ("-1?", vec!["negative(1)", "question(negative(1))"]),
+        (
+            "-(1)!",
+            vec![
+                "plain(1)",
+                "factorial(plain(1))",
+                "negative(factorial(plain(1)))",
+            ],
+        ),
+        ("[1+-2,3]", vec!["negative(2)", "addition(1,negative(2))"]),
+        ("x:-1!", vec!["factorial(1)", "negative(factorial(1))"]),
+    ] {
+        calls.lock().unwrap().clear();
+        tabnas_expr::parse_with(&parser, src).unwrap_or_else(|error| panic!("{src}: {error}"));
+        assert_eq!(*calls.lock().unwrap(), want, "{src}: the evaluator's calls");
+    }
+}
+
 /// Reducing a finished tree outside a parse, the exported entry point.
 #[test]
 fn evaluation_reduces_a_finished_tree() {

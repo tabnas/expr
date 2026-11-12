@@ -763,6 +763,12 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					prattify(box, op)
 					r.Node = box
 					r.Parent.Node = box
+					// This prefix is a term of the expression the parent is
+					// building, inside that expression's own tree, so this
+					// rule does not evaluate it: the expression that holds
+					// the root evaluates the whole tree once it ends (see the
+					// after-close below).
+					r.EnsureU()["expr_inner"] = true
 				} else {
 					r.Node = prior(r, r.Parent, op)
 				}
@@ -823,6 +829,14 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				prev := r.Prev
 				if isOp(prev.Node) {
 					r.Node = prattifySuffix(prev.Node, op)
+					// The suffix took over the val of the expression's first
+					// term, whose node holds the root (`-1!`, `(1)!`): the
+					// root is evaluated from there, as the infix after a
+					// unary expression does. A suffix that took over an expr
+					// rule already has the first term's val as its parent.
+					if prev.Name == "val" {
+						r.Parent = prev
+					}
 				} else {
 					r.Node = prior(r, prev, op)
 				}
@@ -924,6 +938,21 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			B: 1,
 			R: "expr",
 			G: "expr,suffix,more",
+		})
+		// A suffix after a prefix expression: complete the prefix first,
+		// as the infix prefix-end alternate does, and leave the suffix to
+		// the expression the prefix belongs to, which drills it into the
+		// prefix (`-1!` is `-(1!)`). The expression goes on, so this close
+		// keeps n.expr, and nothing evaluates it here: the after-close
+		// evaluates an expression only once it has ended, and the
+		// expression the suffix extends evaluates the whole tree.
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS(SUFFIX),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return r.N["expr_prefix"] > 0
+			},
+			B: 1,
+			G: "expr,suffix,prefix-end",
 		})
 	}
 
@@ -1114,6 +1143,15 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	//   }
 	exprSpec.AddAC(func(r *tabnas.Rule, ctx *tabnas.Context) {
 		if eopts.Evaluate != nil && r.N["expr"] < 1 {
+			// Evaluation follows the tree the S-expression shows, so an
+			// expression is evaluated once, whole, from its root, once it
+			// has ended. A prefix inside an operand of an enclosing
+			// expression (`-2` in `1+-2`) was built into that expression's
+			// tree: evaluating here evaluated the enclosing tree too,
+			// before it was complete, and then again when it was.
+			if r.U["expr_inner"] == true {
+				return
+			}
 			parent := r.Parent
 			if parent != nil && parent != tabnas.NoRule {
 				// The parent holds an implicit list (`f(1+2, 3)`,

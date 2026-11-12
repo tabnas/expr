@@ -181,6 +181,22 @@ describe('spec', () => {
   })
 
 
+  // Evaluation follows the tree: the evaluator writes each operation as
+  // [op.name, ...terms], so every cell is the S-expression the
+  // unary-suffix-*.tsv rows show, with operator names for sources.
+  describe('unary-suffix-evaluate', () => {
+    const je = new Tabnas().use(jsonic).use(Expr, {
+      op: {
+        factorial: { suffix: true, left: 6000000, src: '!' },
+        question: { suffix: true, left: 3500000, src: '?' },
+      },
+      evaluate: (_r: any, _ctx: any, op: any, terms: any) => [op.name, ...terms],
+    })
+    const j = (s: string) => C(je.parse(s))
+    runSpec('unary-suffix-evaluate.tsv', j)
+  })
+
+
   describe('unary-suffix-edge', () => {
     const je = new Tabnas().use(jsonic).use(Expr, {
       op: {
@@ -508,6 +524,6 @@ test('every fixture row is held to its canonical JSON', () => {
     (total, name) => total + loadSpec(Path.join(SPEC, name)).rows.length, 0)
   assert.equal(canonicalRows, onDisk,
     `${canonicalRows} rows were held to their canonical JSON, of ${onDisk} on disk`)
-  assert.equal(onDisk, 1136,
-    `the shared fixtures hold ${onDisk} rows, not the 1136 measured`)
+  assert.equal(onDisk, 1163,
+    `the shared fixtures hold ${onDisk} rows, not the 1163 measured`)
 })

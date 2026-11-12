@@ -403,6 +403,10 @@ unary, 2 infix, 3 ternary). For a preval paren call like `f(1,2)`, terms are
 `[funcName, argsSlice]`. Return the reduced value. Numbers from jsonic arrive
 as `float64`, so coerce accordingly.
 
+The plugin calls it once per operation, in the order of the tree the
+S-expression shows, and only after the expression has ended: `-1!` is
+`[-, [!, 1]]`, so the call for `!` comes before the call for `-`.
+
 ## The tree layer: `Fold`
 
 ```go

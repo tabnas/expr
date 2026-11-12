@@ -694,11 +694,21 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             // would splice the new prefix into the wrapper (corrupting it
             // with a stray hole + duplicated operand). Start a fresh
             // operand expression for those (mirrors the infix guard).
-            r.node = isOp(r.parent.node)
+            if (isOp(r.parent.node)
               && !isTernaryOp(r.parent.node)
-              && !isParenOp(r.parent.node)
-              ? prattify(r.parent.node, op, 'expr-prefix')
-              : prior(r, r.parent, op, 'expr-prefix')
+              && !isParenOp(r.parent.node)) {
+              r.node = prattify(r.parent.node, op, 'expr-prefix')
+
+              // This prefix is a term of the expression the parent is
+              // building, inside that expression's own tree, so this rule
+              // does not evaluate it: the expression that holds the root
+              // evaluates the whole tree once it ends (see the after-close
+              // below).
+              r.u.expr_inner = true
+            }
+            else {
+              r.node = prior(r, r.parent, op, 'expr-prefix')
+            }
           },
         }
         : NONE,
@@ -742,9 +752,21 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           a: (r: Rule) => {
             const prev = r.prev
             const op = makeOp(r.o0, suffixTM)
-            r.node = isOp(prev.node)
-              ? prattify(prev.node, op, 'expr-suffix')
-              : prior(r, prev, op, 'expr-suffix')
+            if (isOp(prev.node)) {
+              r.node = prattify(prev.node, op, 'expr-suffix')
+
+              // The suffix took over the val of the expression's first
+              // term, whose node holds the root (`-1!`, `(1)!`): the root
+              // is evaluated from there, as the infix after a unary
+              // expression does. A suffix that took over an expr rule
+              // already has the first term's val as its parent.
+              if ('val' === prev.name) {
+                r.parent = prev
+              }
+            }
+            else {
+              r.node = prior(r, prev, op, 'expr-suffix')
+            }
           },
           g: 'expr,expr-suffix',
         }
@@ -822,16 +844,21 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           }
           : NONE,
 
-        // TTT
-        // hasSuffix
-        //   ? {
-        //     s: [SUFFIX],
-        //     c: (r: Rule) => !!r.n.expr_prefix,
-        //     b: 1,
-        //     r: 'expr',
-        //     g: 'expr,expr-suffix',
-        //   }
-        //   : NONE,
+        // A suffix after a prefix expression: complete the prefix first,
+        // as the infix alternate above does, and leave the suffix to the
+        // expression the prefix belongs to, which drills it into the
+        // prefix (`-1!` is `-(1!)`). The expression goes on, so this close
+        // keeps n.expr, and nothing evaluates it here: the after-close
+        // below evaluates an expression only once it has ended, and the
+        // expression the suffix extends evaluates the whole tree.
+        hasSuffix
+          ? {
+            s: [SUFFIX],
+            c: (r: Rule) => !!r.n.expr_prefix,
+            b: 1,
+            g: 'expr,expr-suffix,expr-prefix',
+          }
+          : NONE,
 
         hasParen
           ? {
@@ -917,6 +944,16 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         //   'P', r.parent.name, r.parent.i, r.parent.n, p(r.parent.node))
 
         if (options.evaluate && 0 === r.n.expr) {
+          // Evaluation follows the tree the S-expression shows, so an
+          // expression is evaluated once, whole, from its root, once it
+          // has ended. A prefix inside an operand of an enclosing
+          // expression (`-2` in `1+-2`) was built into that expression's
+          // tree: evaluating here evaluated the enclosing tree too, before
+          // it was complete, and then again when it was.
+          if (r.u.expr_inner) {
+            return
+          }
+
           const parentNode: any = r.parent.node
 
           // The parent holds an implicit list (`f(1+2, 3)`, `1+2, 3`)
