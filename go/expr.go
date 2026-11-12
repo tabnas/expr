@@ -2974,6 +2974,25 @@ func foldOption(opts map[string]interface{}) (*FoldOptions, error) {
 	}
 }
 
+// userClaims reports whether an operator of the options shares a default
+// operator's kind, prefix, infix or suffix, on its source.
+func userClaims(eopts *ExprOptions, def *OpDef) bool {
+	src, _ := def.Src.(string)
+	for _, existing := range eopts.Op {
+		if existing == nil || existing.Paren || existing.Ternary {
+			continue
+		}
+		if !(existing.Prefix && def.Prefix) && !(existing.Infix && def.Infix) &&
+			!(existing.Suffix && def.Suffix) {
+			continue
+		}
+		if esrc, ok := existing.Src.(string); ok && esrc == src {
+			return true
+		}
+	}
+	return false
+}
+
 func addDefaultOps(eopts *ExprOptions) {
 	defaults := map[string]*OpDef{
 		"positive":       {Prefix: true, Right: 4000000, Src: "+"},
@@ -3009,6 +3028,15 @@ func addDefaultOps(eopts *ExprOptions) {
 			if conflict {
 				continue
 			}
+		}
+		// The same for a default prefix, infix or suffix operator whose
+		// source a user operator of its kind claims under another name:
+		// C's `minus` on `-`, or `pct` on `%`. The two share a token, and
+		// the canonical's later entry, the user's, takes it; sorted
+		// iteration let `subtraction` and `remainder` take it from `minus`
+		// and `pct`, which sort before them.
+		if !def.Paren && userClaims(eopts, def) {
+			continue
 		}
 		eopts.Op[name] = def
 	}

@@ -466,6 +466,20 @@ func TestSpecTernaryParen(t *testing.T) {
 	runSpec(t, "ternary-paren.tsv", j)
 }
 
+// An operator of the table takes a default operator's token, whatever the
+// two are named: sorted, `subtraction` and `remainder` came after `minus`
+// and `pct`, and took `-` and `%` from them.
+func TestSpecOpOverride(t *testing.T) {
+	j := makeExprJsonic(map[string]interface{}{
+		"op": map[string]interface{}{
+			"minus":   map[string]interface{}{"src": "-", "infix": true, "left": 12000, "right": 12001},
+			"unary_n": map[string]interface{}{"src": "-", "prefix": true, "right": 16000},
+			"pct":     map[string]interface{}{"src": "%", "infix": true, "left": 13000, "right": 13001},
+		},
+	})
+	runSpec(t, "op-override.tsv", j)
+}
+
 func TestSpecUnarySuffixEdge(t *testing.T) {
 	j := makeExprJsonic(map[string]interface{}{
 		"op": map[string]interface{}{
