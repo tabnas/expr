@@ -18,6 +18,9 @@ a[1].b	["dot-infix",["subscript-paren","a",1],"b"]
 (a)(b)	["call-paren",["paren-paren","a"],"b"]
 # Option 5 off: the comma operator applies wherever a comma is.
 f(a, b)	["call-paren","f",["comma-infix","a","b"]]
+# An empty operand of the comma operator is null to the evaluator.
+f(,a)	["call-paren","f",["comma-infix",null,"a"]]
+(,a)	["paren-paren",["comma-infix",null,"a"]]
 (a, b)	["paren-paren",["comma-infix","a","b"]]
 [-1, 2]	[["comma-infix",["negative-prefix",1],2]]
 {x: 1, y: 2}	{"x":["comma-infix",1,{"y":2}]}

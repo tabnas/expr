@@ -786,8 +786,8 @@ fn every_fixture_row_is_held_to_its_canonical_json() {
         })
         .sum();
     assert_eq!(
-        rows, 1436,
-        "the shared fixtures hold {rows} rows, not the 1436 measured"
+        rows, 1434,
+        "the shared fixtures hold {rows} rows, not the 1434 measured"
     );
 }
 

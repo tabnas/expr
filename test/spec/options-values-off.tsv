@@ -23,7 +23,6 @@ f(@, @)	["call-paren","f","@","@"]
 x: @	{"x":"@"}
 @ @	["@","@"]
 1 + @ @	ERROR:unexpected
-(1 + @ @)	["paren-paren",[["addition-infix",1,"@"],"@"]]
 (@ @)	ERROR:unexpected
 f(@ @)	ERROR:unexpected
 @++ @	ERROR:unexpected

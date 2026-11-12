@@ -106,6 +106,26 @@ type Op struct {
 	// encoding, so it is left out of one: a raw tree holding an operator
 	// marshals as it did before casts.
 	Accept func(term interface{}) bool `json:"-"`
+
+	// Token is the occurrence's token, as the TypeScript operator carries
+	// it (op.token), so an evaluator can reach where the operator was
+	// written: an infix's, a prefix's or a suffix's own token, a paren's
+	// closer, a ternary's first token, a cast's group's closer. An
+	// operator node holds a copy of the table's operator with it set
+	// (occurrence). Left out of JSON, so a raw tree marshals as before.
+	Token *tabnas.Token `json:"-"`
+}
+
+// occurrence is the operator as written at one place: a copy of the
+// table's, holding the token it was read from. Each operator node holds
+// its own, so two nodes of one operator are never the same node.
+func occurrence(op *Op, tkn *tabnas.Token) *Op {
+	if op == nil {
+		return nil
+	}
+	occ := *op
+	occ.Token = tkn
+	return &occ
 }
 
 // ContentDef configures a paren operator's content. Required: the content
@@ -145,6 +165,15 @@ type ExprOptions struct {
 	// own implicit list, outside any expression, and the items of a list
 	// or a map are unchanged. Nil reads as true.
 	Juxtapose *bool
+
+	// Values, given as "values": the value tokens of a host grammar that
+	// lexes its own (an identifier, a number), by name, beside jsonic's
+	// text, number, string and keyword values. With Juxtapose false, one
+	// of them after a value or an expression is refused, with the engine's
+	// `unexpected`, wherever it stands: an expression never ends at one,
+	// and the rule the expression is in never sees it. The items of a list
+	// or a map are not exempt.
+	Values []string
 }
 
 // _unfilled is a sentinel value for pre-allocated but unfilled expression slots.
@@ -214,9 +243,15 @@ func isExprOp(node interface{}) bool {
 		return false
 	}
 	if op, ok := sl[0].(*Op); ok {
-		return !op.Ternary && !op.Paren
+		return !(op.Ternary && !boundTernary(op)) && !op.Paren
 	}
 	return false
+}
+
+// boundTernary reports whether op is a ternary with a binding power, which
+// is placed as an infix operator is (see the TypeScript OpDef.ternary).
+func boundTernary(op *Op) bool {
+	return op != nil && op.Ternary && op.Left != MinSafeInteger
 }
 
 // fillNextSlot walks the expression tree depth-first and fills the deepest
@@ -263,6 +298,37 @@ func fillNextSlotSeen(node interface{}, val interface{}, seen map[*tabnas.ListRe
 		}
 	}
 	return false
+}
+
+// openSlot is the node an expr rule's operator heads, which it recorded
+// where it placed the operator (U["expr_slot"]), while a slot of it is
+// unfilled: the node the coming operand belongs to.
+func openSlot(r *tabnas.Rule) *tabnas.ListRef {
+	box, _ := r.U["expr_slot"].(*tabnas.ListRef)
+	if box == nil || len(box.Val) == 0 {
+		return nil
+	}
+	op, ok := box.Val[0].(*Op)
+	if !ok {
+		return nil
+	}
+	for i := 1; i <= op.Terms && i < len(box.Val); i++ {
+		if isUnfilled(box.Val[i]) {
+			return box
+		}
+	}
+	return nil
+}
+
+// fillSlot fills the first unfilled slot of one node.
+func fillSlot(box *tabnas.ListRef, val interface{}) {
+	op, _ := box.Val[0].(*Op)
+	for i := 1; op != nil && i <= op.Terms && i < len(box.Val); i++ {
+		if isUnfilled(box.Val[i]) {
+			box.Val[i] = val
+			return
+		}
+	}
 }
 
 // nextSlotOp is the operator of the node whose slot fillNextSlot fills
@@ -452,6 +518,17 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	hasParen := len(OP) > 0
 	hasTernary := len(TERN0) > 0
 
+	// The ternaries with a binding power, placed as an infix operator is,
+	// by their first and second tokens.
+	var TERN0B, TERN1B []int
+	for tin, op := range ternaryByTin {
+		if boundTernary(op) {
+			TERN0B = append(TERN0B, tin)
+			TERN1B = append(TERN1B, op.CTin)
+		}
+	}
+	hasBoundTernary := len(TERN0B) > 0
+
 	// --- The options of #105, every one off unless a table asks ----------
 	// (TS: the same helpers, by the same names.)
 
@@ -515,7 +592,14 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			!isExprOp(parent.Node) {
 			return true
 		}
-		encl := nextSlotOp(parent.Node)
+		var encl *Op
+		if _, recorded := parent.U["expr_slot"]; recorded {
+			if slot := openSlot(parent); slot != nil {
+				encl, _ = slot.Val[0].(*Op)
+			}
+		} else {
+			encl = nextSlotOp(parent.Node)
+		}
 		return encl == nil || encl.Right <= op.Left
 	}
 
@@ -569,8 +653,17 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		}
 		return false
 	}
+	// A host grammar's own value tokens (ExprOptions.Values).
+	var HOSTVAL []int
+	for _, name := range eopts.Values {
+		HOSTVAL = append(HOSTVAL, int(j.Token(name)))
+	}
+	refuseHostVal := noJuxtapose && len(HOSTVAL) > 0
+	hostValue := func(tin int) bool { return refuseHostVal && inTins(HOSTVAL, tin) }
+
 	startsValue := func(tin int) bool {
-		return inTins(j.TokenSet("VAL"), tin) || tin == tabnas.TinOB || tin == tabnas.TinOS ||
+		return inTins(j.TokenSet("VAL"), tin) || inTins(HOSTVAL, tin) ||
+			tin == tabnas.TinOB || tin == tabnas.TinOS ||
 			inTins(OP, tin) || inTins(PREFIX, tin)
 	}
 
@@ -641,6 +734,19 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 
 	// === VAL rule modifications ===
 	modifyRule("val", func(rs *tabnas.RuleSpec) {
+		// A host grammar's value after this one, with juxtapose false:
+		// values side by side, refused. Prepended first, so it is the last
+		// of the alternates added here, before the base grammar's own.
+		if refuseHostVal {
+			rs.PrependClose(&tabnas.AltSpec{
+				S: mkS(HOSTVAL),
+				E: func(r *tabnas.Rule, ctx *tabnas.Context) *tabnas.Token {
+					return r.C0
+				},
+				G: "expr,juxtaposed",
+			})
+		}
+
 		// With juxtapose false, the base grammar's implicit list of values
 		// side by side is refused inside a paren group, where the paren
 		// rule allows implicits again, and after a value an expression
@@ -799,6 +905,24 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					return r.N["expr_ternary"] > 0
 				},
 				G: "expr,ternary,close",
+			})
+		}
+
+		// A ternary with a binding power follows a term as an infix
+		// operator does: the first term's val becomes the expression, and
+		// a later term's ends for the expression it belongs to.
+		if hasBoundTernary {
+			rs.PrependClose(&tabnas.AltSpec{
+				S: mkS(TERN0B),
+				B: 1,
+				N: map[string]int{"expr_prefix": 0, "expr_suffix": 0},
+				RF: func(r *tabnas.Rule, ctx *tabnas.Context) string {
+					if r.N["expr"] < 1 {
+						return "expr"
+					}
+					return ""
+				},
+				G: "expr,ternary,ternary-bound",
 			})
 		}
 
@@ -1096,8 +1220,9 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 				group, _ := unwrapExpr(r.Prev.Node)
 				gop, _ := group[0].(*Op)
-				box := makeExpr(castByTin[gop.OTin], group[1])
+				box := makeExpr(occurrence(castByTin[gop.OTin], gop.Token), group[1])
 				r.Node = box
+				r.EnsureU()["expr_slot"] = box
 				// The val that pushed the group's expr holds the cast, and
 				// reads its node from that expr, its child, when it closes:
 				// that expr holds the cast too.
@@ -1124,7 +1249,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			P: "paren",
 			B: 1,
 			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-				op := parenPrevalByTin[r.O0.Tin]
+				op := occurrence(parenPrevalByTin[r.O0.Tin], r.O0)
 				prev := r.Prev
 				if isOp(prev.Node) {
 					box := asListRef(prev.Node)
@@ -1163,13 +1288,13 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return r.N["expr_prefix"] > 0
 			},
 			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-				op := prefixByTin[r.O0.Tin]
+				op := occurrence(prefixByTin[r.O0.Tin], r.O0)
 				if isOp(r.Parent.Node) && isExprOp(r.Parent.Node) {
 					// prattify mutates the root box in place and returns the
 					// TS-style attachment point; the Go engine tracks the
 					// ROOT on both rules (BC slot-fills via fillNextSlot).
 					box := asListRef(r.Parent.Node)
-					prattify(box, op)
+					r.EnsureU()["expr_slot"] = prattify(box, op)
 					r.Node = box
 					r.Parent.Node = box
 					// This prefix is a term of the expression the parent is
@@ -1180,6 +1305,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					r.EnsureU()["expr_inner"] = true
 				} else {
 					r.Node = prior(r, r.Parent, op)
+					r.EnsureU()["expr_slot"] = r.Node
 				}
 			},
 			G: "expr,prefix",
@@ -1193,7 +1319,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			P: "val",
 			N: map[string]int{"expr": 1, "expr_prefix": 0, "dlist": 1, "dmap": 1},
 			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-				op := infixByTin[r.O0.Tin]
+				op := occurrence(infixByTin[r.O0.Tin], r.O0)
 				prev := r.Prev
 				parent := r.Parent
 
@@ -1204,12 +1330,13 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				// contract holds for nodes that arrived unwrapped.
 				if isOp(parent.Node) && isExprOp(parent.Node) {
 					box := asListRef(parent.Node)
-					prattify(box, op)
+					r.EnsureU()["expr_slot"] = prattify(box, op)
 					r.Node = box
 					parent.Node = box
 				} else if isOp(prev.Node) {
 					box := asListRef(prev.Node)
 					out := prattify(box, op)
+					r.EnsureU()["expr_slot"] = out
 					root := box
 					if pop, ok := box.Val[0].(*Op); ok && pop.Paren {
 						// A paren prior is a complete unit: prattify wraps
@@ -1231,9 +1358,70 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					prev.Node = root
 				} else {
 					r.Node = prior(r, prev, op)
+					r.EnsureU()["expr_slot"] = r.Node
 				}
 			},
 			G: "expr,infix",
+		})
+	}
+
+	// A ternary with a binding power, placed as an infix operator is: its
+	// first term is as much of the expression before it as binds tighter
+	// than its Left. Its middle term is a whole expression of its own, up
+	// to the second token, pushed here; the close below takes the second
+	// token and pushes its last term. This rule holds the expression's root,
+	// as every expr rule here does, but not while the middle term is read:
+	// a pushed rule is handed its parent's node, and the middle term is a
+	// new expression, not the root's next term (BC puts it back).
+	if hasBoundTernary {
+		exprOpen = append(exprOpen, &tabnas.AltSpec{
+			S: mkS(TERN0B),
+			P: "val",
+			N: map[string]int{"expr": 1, "expr_prefix": 0, "dlist": 1, "dmap": 1},
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+				op := occurrence(ternaryByTin[r.O0.Tin], r.O0)
+				prev := r.Prev
+				parent := r.Parent
+				var root, slot *tabnas.ListRef
+				if isOp(parent.Node) && isExprOp(parent.Node) {
+					root = asListRef(parent.Node)
+					slot = placeInfix(root, op)
+					parent.Node = root
+				} else if isOp(prev.Node) {
+					box := asListRef(prev.Node)
+					out := placeInfix(box, op)
+					slot = out
+					root = box
+					if pop, ok := box.Val[0].(*Op); ok && pop.Paren {
+						root = out
+					}
+					if prev.U["expr_postfix"] != nil && parent != nil && parent != tabnas.NoRule {
+						parent.Node = root
+					} else {
+						r.Parent = prev
+					}
+					prev.Node = root
+				} else {
+					root = prior(r, prev, op)
+					slot = root
+				}
+				u := r.EnsureU()
+				u["expr_slot"] = slot
+				u["expr_tern_name"] = op.Name
+				u["expr_tern_step"] = 1
+				u["expr_tern_root"] = root
+				n := r.EnsureN()
+				u["expr_tern_n"] = map[string]int{
+					"expr_paren": n["expr_paren"], "expr_sep": n["expr_sep"],
+					"expr_ternary": n["expr_ternary"],
+				}
+				n["expr"] = 0
+				n["expr_paren"] = 0
+				n["expr_sep"] = 0
+				n["expr_ternary"] = 1
+				r.Node = tabnas.Undefined
+			},
+			G: "expr,ternary,ternary-bound",
 		})
 	}
 
@@ -1243,7 +1431,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			S: mkS(SUFFIX),
 			N: map[string]int{"expr": 1, "expr_prefix": 0, "dlist": 1, "dmap": 1},
 			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-				op := suffixByTin[r.O0.Tin]
+				op := occurrence(suffixByTin[r.O0.Tin], r.O0)
 				prev := r.Prev
 				if isOp(prev.Node) {
 					r.Node = prattifySuffix(prev.Node, op)
@@ -1270,6 +1458,11 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	// This avoids Go slice append issues and works with the Go parser's
 	// replacement-chain result extraction.
 	exprSpec.AddBC(func(r *tabnas.Rule, ctx *tabnas.Context) {
+		// A ternary with a binding power, back from its middle term, has the
+		// expression's root back (see its open alternate).
+		if r.U["expr_tern_step"] == 1 && (r.Node == nil || tabnas.IsUndefined(r.Node)) {
+			r.Node = r.U["expr_tern_root"]
+		}
 		if r.Child == nil || r.Child == tabnas.NoRule {
 			return
 		}
@@ -1288,6 +1481,17 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			return
 		}
 
+		// The node this rule's operator heads, where it placed it, takes
+		// the term, in its first unfilled slot: a walk of the whole tree for
+		// the deepest one made a chain of n operators cost n squared. A
+		// node with no slot left was filled below it (a prefix placed into
+		// it fills its slot as it is placed).
+		if _, recorded := r.U["expr_slot"]; recorded {
+			if slot := openSlot(r); slot != nil {
+				fillSlot(slot, childNode)
+			}
+			return
+		}
 		if box, ok := r.Node.(*tabnas.ListRef); ok && len(box.Val) > 0 {
 			if _, isOpV := box.Val[0].(*Op); isOpV {
 				fillNextSlot(box, childNode)
@@ -1297,6 +1501,46 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 
 	// expr.Close alternates.
 	exprClose := make([]*tabnas.AltSpec, 0)
+
+	// The second token of a ternary with a binding power, after its middle
+	// term: its last term follows, an operand of this expression, with this
+	// expression's counters back. Anything else there is an unfinished
+	// ternary, refused.
+	if hasBoundTernary {
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS(TERN1B),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				if r.U["expr_tern_step"] != 1 {
+					return false
+				}
+				op := ternaryCloseByTin[r.C0.Tin]
+				return op != nil && op.Name == r.U["expr_tern_name"]
+			},
+			P: "val",
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+				n := r.EnsureN()
+				if saved, ok := r.U["expr_tern_n"].(map[string]int); ok {
+					for k, v := range saved {
+						n[k] = v
+					}
+				}
+				n["expr"] = 1
+				n["expr_prefix"] = 0
+				n["expr_suffix"] = 0
+				r.U["expr_tern_step"] = 2
+			},
+			G: "expr,ternary,ternary-bound",
+		})
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return r.U["expr_tern_step"] == 1
+			},
+			E: func(r *tabnas.Rule, ctx *tabnas.Context) *tabnas.Token {
+				return ctx.T0
+			},
+			G: "expr,ternary,ternary-bound,unfinished",
+		})
+	}
 
 	// A group the table's cast accepts: the expression goes on as a cast
 	// whose operand follows (the open alternate above), so this close keeps
@@ -1445,6 +1689,20 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		})
 	}
 
+	// A ternary with a binding power after this expression, placed as an
+	// infix operator is.
+	if hasBoundTernary {
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS(TERN0B),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return r.N["expr_prefix"] < 1
+			},
+			B: 1,
+			R: "expr",
+			G: "expr,ternary,ternary-bound",
+		})
+	}
+
 	// Ternary start.
 	if hasTernary {
 		exprClose = append(exprClose, &tabnas.AltSpec{
@@ -1455,6 +1713,31 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			B: 1,
 			R: "ternary",
 			G: "expr,ternary",
+		})
+
+		// A ternary after a prefix expression: complete the prefix first,
+		// as for an infix or a suffix, and leave the ternary to the
+		// expression the prefix belongs to, which takes it as a whole
+		// (`-a ? b : c` is `(-a) ? b : c`). The expression goes on, so this
+		// close keeps n.expr and nothing evaluates it here.
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS(TERN0),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return r.N["expr_prefix"] > 0
+			},
+			B: 1,
+			G: "expr,ternary,prefix-end",
+		})
+
+		// The second token of a ternary whose middle term this expression
+		// is: the expression ends there, and the ternary takes the token.
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS(TERN1),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return r.N["expr_ternary"] > 0
+			},
+			B: 1,
+			G: "expr,ternary,close",
 		})
 	}
 
@@ -1609,6 +1892,11 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	// (e.g. ZZ after a suffix like "1!"). Without this, jsonic/go >= v0.1.13
 	// raises jsonic/unexpected.
 	exprClose = append(exprClose, &tabnas.AltSpec{
+		// Never at a host grammar's value with juxtapose false, which is
+		// refused here.
+		C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+			return !hostValue(ctx.T0.Tin)
+		},
 		N: map[string]int{"expr": 0},
 		G: "expr,expr-end",
 	})
@@ -1845,6 +2133,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					if pop == nil {
 						return
 					}
+					pop = occurrence(pop, r.C0)
 
 					val := r.Node
 
@@ -1944,7 +2233,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				P: "val",
 				N: map[string]int{"expr_ternary": 1, "dlist": 1, "dmap": 1, "expr": 0, "expr_prefix": 0, "expr_suffix": 0},
 				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-					op := ternaryByTin[r.O0.Tin]
+					op := occurrence(ternaryByTin[r.O0.Tin], r.O0)
 					prev := r.Prev
 					prevNode := prev.Node
 					// If prev.Node is already a *ListRef expression box, REUSE
@@ -2160,11 +2449,12 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				}
 			}
 			out := evaluation(r, ctx, r.Node, eopts.Evaluate)
+			// The rules of the ternary's own replacement chain hold its
+			// node, the val that started it among them, which the rule
+			// above reads its value from. That rule's own node (a list's
+			// elements, a map's members, a paren's terms) is its own.
 			for cur := r; cur != nil && cur != tabnas.NoRule; cur = cur.Prev {
 				cur.Node = out
-			}
-			if r.Parent != nil && r.Parent != tabnas.NoRule {
-				r.Parent.Node = out
 			}
 		})
 
@@ -2227,6 +2517,46 @@ func prior(rule *tabnas.Rule, priorRule *tabnas.Rule, op *Op) *tabnas.ListRef {
 	return expr
 }
 
+// placeInfix places an operator that follows an expression and takes a
+// term on each side, by its binding powers: an infix operator, or a ternary
+// with a binding power, whose first term is as much of the expression as
+// binds tighter. The root box is mutated in place. Returns the box the
+// operator heads, [op, term, ...].
+func placeInfix(box *tabnas.ListRef, op *Op) *tabnas.ListRef {
+	for {
+		exprOp, isOpV := box.Val[0].(*Op)
+		if !isOpV {
+			return makeExpr(op, box)
+		}
+		// Paren expressions are complete units — never drill into them.
+		if exprOp.Paren {
+			return makeExpr(op, dupExpr(box))
+		}
+		// op is lower or equal precedence: wrap entire expression in place.
+		if exprOp.Suffix || op.Left <= exprOp.Right {
+			wrapExpr(box, op)
+			return box
+		}
+		// op is higher: drill into last term.
+		end := exprOp.Terms
+		if end >= len(box.Val) {
+			return box
+		}
+		if isOp(box.Val[end]) {
+			subBox := asListRef(box.Val[end])
+			box.Val[end] = subBox
+			subOp := subBox.Val[0].(*Op)
+			if !subOp.Paren && !(subOp.Ternary && !boundTernary(subOp)) && subOp.Right < op.Left {
+				box = subBox
+				continue
+			}
+		}
+		newNode := makeExpr(op, box.Val[end])
+		box.Val[end] = newNode
+		return newNode
+	}
+}
+
 // prattify integrates a new operator into the expression tree according to
 // operator precedence (Pratt algorithm). Operates on the *tabnas.ListRef
 // wrapper so any rebinding of expr.Val is visible to all holders of the
@@ -2256,37 +2586,14 @@ func prattify(exprNode interface{}, op *Op) *tabnas.ListRef {
 	}
 
 	if op.Infix {
-		// op is lower or equal precedence: wrap entire expression in place.
-		// The root is the attachment point (TS returns expr here).
-		if exprOp.Suffix || op.Left <= exprOp.Right {
-			wrapExpr(box, op)
-			return box
-		}
-
-		// op is higher: drill into last term. Create inner expression.
-		end := exprOp.Terms
-		if end < len(box.Val) {
-			if isOp(box.Val[end]) {
-				subBox := asListRef(box.Val[end])
-				// Keep the slot holding the shared box (the term may have
-				// arrived as a plain slice from outside the plugin).
-				box.Val[end] = subBox
-				subOp := subBox.Val[0].(*Op)
-				// Never drill into paren/ternary sub-units: they are
-				// complete structural groups. The canonical reaches the same
-				// result through the unset fallback alone, because a paren
-				// op's right is MAX_SAFE_INTEGER and this comparison is then
-				// false; bindingPower gives them the same right here, so the
-				// test is belt and braces rather than the only guard.
-				if !subOp.Paren && !subOp.Ternary && subOp.Right < op.Left {
-					return prattify(subBox, op)
-				}
-			}
-			newNode := makeExpr(op, box.Val[end])
-			box.Val[end] = newNode
-			return newNode
-		}
-		return box
+		// The drilling is a loop, one level of the expression's last terms
+		// at a time (placeInfix). It never drills into a paren or an
+		// unbound ternary: they are complete structural groups. The
+		// canonical reaches the same result through the unset fallback
+		// alone, because a paren op's right is MAX_SAFE_INTEGER and the
+		// comparison is then false; bindingPower gives them the same right
+		// here, so the test is belt and braces rather than the only guard.
+		return placeInfix(box, op)
 	}
 
 	if op.Prefix {
@@ -2617,6 +2924,16 @@ func resolveOptions(opts map[string]interface{}) *ExprOptions {
 	}
 	if v, ok := opts["juxtapose"].(bool); ok {
 		eopts.Juxtapose = &v
+	}
+	switch v := opts["values"].(type) {
+	case []string:
+		eopts.Values = append([]string{}, v...)
+	case []interface{}:
+		for _, name := range v {
+			if s, ok := name.(string); ok {
+				eopts.Values = append(eopts.Values, s)
+			}
+		}
 	}
 	if evalRaw, ok := opts["evaluate"]; ok {
 		if evalFn, ok := evalRaw.(func(*tabnas.Rule, *tabnas.Context, *Op, []interface{}) interface{}); ok {
@@ -3083,6 +3400,14 @@ func evaluationStep(
 		if isUnfilled(sub) {
 			continue
 		}
+		// An operand that was empty (`f(,a)` with a comma operator) is
+		// the engine's undefined, which the evaluator receives as nil, as
+		// the canonical's receives null: the marker itself never leaves
+		// the parse.
+		if tabnas.IsUndefined(sub) {
+			terms = append(terms, nil)
+			continue
+		}
 		terms = append(terms, evaluation(rule, ctx, sub, resolve))
 	}
 	return resolve(rule, ctx, op, terms)
@@ -3115,7 +3440,10 @@ func Simplify(node interface{}) interface{} {
 			}
 			result = append(result, src)
 			for _, el := range v[1:] {
-				if isUnfilled(el) {
+				// A term never filled, or filled with the engine's undefined
+				// (an operand that was empty, as in `f(,a)` with a comma
+				// operator), is dropped, as the canonical drops `undefined`.
+				if isUnfilled(el) || tabnas.IsUndefined(el) {
 					continue
 				}
 				s := Simplify(el)
@@ -3207,11 +3535,14 @@ func simplifyOrdered(node interface{}, open map[[2]uintptr]bool) interface{} {
 		result := make([]interface{}, 0, len(v))
 		if src, isOp := operatorSource(v[0]); isOp {
 			result = append(result, src)
-		} else if !isUnfilled(v[0]) {
+		} else if !isUnfilled(v[0]) && !tabnas.IsUndefined(v[0]) {
 			result = append(result, simplifyOrdered(v[0], open))
 		}
 		for _, el := range v[1:] {
-			if isUnfilled(el) {
+			// A term never filled, or filled with the engine's undefined
+			// (an operand that was empty, as in `f(,a)` with a comma
+			// operator), is dropped, as the canonical drops `undefined`.
+			if isUnfilled(el) || tabnas.IsUndefined(el) {
 				continue
 			}
 			result = append(result, simplifyOrdered(el, open))

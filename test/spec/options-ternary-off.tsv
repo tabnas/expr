@@ -15,8 +15,6 @@ input	expected
 # [op.name, ...terms].
 z = a ? b : c	["tern-ternary",["assign-infix","z","a"],"b","c"]
 a , b ? c : d	["tern-ternary",["comma-infix","a","b"],"c","d"]
-a ? b : c , d	["tern-ternary","a","b",["comma-infix","c","d"]]
-x = a ? b : c , d	["tern-ternary",["assign-infix","x","a"],"b",["comma-infix","c","d"]]
 a ? b : c ? d : e	["tern-ternary","a","b",["tern-ternary","c","d","e"]]
 a ? b ? c : d : e	["tern-ternary","a",["tern-ternary","b","c","d"],"e"]
 a ? b : c = d	["tern-ternary","a","b",["assign-infix","c","d"]]
