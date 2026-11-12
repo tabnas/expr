@@ -106,7 +106,7 @@ type ExprOptions = {
 | `evaluate` | `Evaluate` | If set, each expression is reduced to a value during parsing, and `parse` returns values instead of S-expression trees. |
 | `fold` | `FoldOptions` | If set, the finished document is folded before `parse` returns: its key operators are resolved against the whole tree. See [`fold`](#fold). |
 | `juxtapose` | `boolean` | Whether values side by side inside an expression or a paren group make an implicit list. The default, `true`, keeps the jsonic reading, where `f(a b)` calls `f` with `[a, b]`. With `false` the parser refuses the second value with `unexpected`. See [Values side by side](#values-side-by-side). |
-| `values` | `string[]` | The names of a host grammar's own value tokens, such as an identifier or a number it lexes itself. With `juxtapose: false`, the parser refuses one after a value wherever it stands. See [Values side by side](#values-side-by-side). |
+| `values` | `string[]` | The names of a host grammar's own value tokens, such as an identifier or a number its own lexer reads. With `juxtapose: false`, the parser refuses one after a value wherever it stands. See [Values side by side](#values-side-by-side). |
 
 Options are merged with the defaults; you only specify what differs. The
 operator name you pick is decorated by kind (see [Operator names](#operator-names)).
@@ -277,7 +277,7 @@ the second value inside an expression or a paren group, with
 own implicit list outside any expression, as in `a b`, and the items of
 a list or a map keep their reading.
 
-A host grammar that lexes values of its own, such as identifiers,
+A host grammar whose own lexer reads values, such as identifiers,
 names their tokens in `values`. With `juxtapose: false`, one of them
 after a value or an expression is refused wherever it stands, the items
 of a list or a map included: an expression never ends at one, and the
