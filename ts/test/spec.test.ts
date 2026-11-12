@@ -24,6 +24,10 @@ const C = (x: any) => JSON.parse(JSON.stringify(x))
 const mj =
   (je: Tabnas) => (s: string, m?: any) => C(simplify(je.parse(s, m)))
 
+// The evaluator of the rows that show which operator built each node: an
+// operation is written as [op.name, ...terms].
+const named = (_r: any, _ctx: any, op: any, terms: any) => [op.name, ...terms]
+
 
 // The fixtures live at the repo root in `test/spec/*.tsv` and are read by
 // @tabnas/support, whose Go half `go/expr_test.go` and Rust half
@@ -190,7 +194,7 @@ describe('spec', () => {
         factorial: { suffix: true, left: 6000000, src: '!' },
         question: { suffix: true, left: 3500000, src: '?' },
       },
-      evaluate: (_r: any, _ctx: any, op: any, terms: any) => [op.name, ...terms],
+      evaluate: named,
     })
     const j = (s: string) => C(je.parse(s))
     runSpec('unary-suffix-evaluate.tsv', j)
@@ -329,6 +333,27 @@ describe('spec', () => {
     })
     const j = mj(je)
     runSpec('paren-preval-chain.tsv', j)
+  })
+
+
+  // Two paren operators on one opener: the group without a value before
+  // it, the call with one. The rows hold the first declaration order; the
+  // other order must give every row too.
+  describe('paren-shared-opener', () => {
+    const paren = { paren: true, osrc: '(', csrc: ')', preval: { active: false } }
+    const call = { paren: true, osrc: '(', csrc: ')', preval: { active: true } }
+    const make = (op: any) => {
+      const je = new Tabnas().use(jsonic).use(Expr, { op, evaluate: named })
+      return (s: string) => C(je.parse(s))
+    }
+    runSpec('paren-shared-opener.tsv', make({ paren, call }))
+
+    test('paren-shared-opener.tsv: the other declaration order gives every row', () => {
+      const j = make({ call, paren })
+      for (const row of loadSpec(Path.join(SPEC, 'paren-shared-opener.tsv')).rows) {
+        assert.equal(JSON.stringify(j(row.unesc(0))), row.col(1), row.where())
+      }
+    })
   })
 
 
@@ -524,6 +549,6 @@ test('every fixture row is held to its canonical JSON', () => {
     (total, name) => total + loadSpec(Path.join(SPEC, name)).rows.length, 0)
   assert.equal(canonicalRows, onDisk,
     `${canonicalRows} rows were held to their canonical JSON, of ${onDisk} on disk`)
-  assert.equal(onDisk, 1163,
-    `the shared fixtures hold ${onDisk} rows, not the 1163 measured`)
+  assert.equal(onDisk, 1183,
+    `the shared fixtures hold ${onDisk} rows, not the 1183 measured`)
 })

@@ -274,15 +274,38 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
 
   const keyTM: KeyMap = makeKeyMap(optop)
 
-  const parenOTM: OpMap = makeParenMap(token, fixed, optop)
-  const parenCTM: OpMap = omap(parenOTM, ([_, pdef]: [Tin, Op]) => [
-    undefined,
-    undefined,
-    pdef.ctin,
-    pdef,
-  ])
+  // The default grouping paren yields to the table's own: `plain`, as the
+  // defaults define it, is left out when another paren operator opens
+  // with `(` and closes with `)`. Otherwise it would be that opener's
+  // group beside a call the table declares there, which a table that
+  // gave its call the group's job too (one paren operator whose preval
+  // is active and not required) never asked for. A `plain` the options
+  // change is theirs, and stays.
+  dropDefaultPlain(optop)
 
-  let parenFixed = Object.values({ ...parenOTM, ...parenCTM }).reduce(
+  // Several paren operators may share an opener: a group, whose preval is
+  // inactive, and a call or a subscript, whose preval is active. A value
+  // before the opener selects the preval one, and no value the group, so
+  // `(e)` and `e()` are different operators. Each map gives, for an
+  // opener, the operator of one of the two forms: the last declared of
+  // its kind, and for the group, failing an operator whose preval is
+  // inactive, the last whose preval is active and not required, which
+  // serves both forms as a lone operator always has.
+  const parenOps: Op[] = makeParenOps(token, fixed, optop)
+  const parenPlainTM: OpMap = {}
+  const parenPrevalTM: OpMap = {}
+  for (const pop of parenOps) {
+    if (pop.preval.active) {
+      parenPrevalTM[pop.otin] = pop
+    }
+    const group = parenPlainTM[pop.otin]
+    if (!pop.preval.active ||
+      (!pop.preval.required && (null == group || group.preval.active))) {
+      parenPlainTM[pop.otin] = pop
+    }
+  }
+
+  let parenFixed = parenOps.reduce(
     (a, p) => ((a[p.otkn] = p.osrc), (a[p.ctkn] = p.csrc), a),
     {} as any,
   )
@@ -381,8 +404,14 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
     .filter((op: any) => 1 === op.use.ternary.opI)
     .map((op: any) => op.tin)
 
-  const OP = values(parenOTM).map((pdef: any) => pdef.otin)
-  const CP = values(parenCTM).map((pdef: any) => pdef.ctin)
+  const OP = [...new Set(parenOps.map((pdef: Op) => pdef.otin as Tin))]
+  const CP = [...new Set(parenOps.map((pdef: Op) => pdef.ctin as Tin))]
+
+  // The paren operator a paren rule opens: the preval one when a value
+  // precedes the opener, which the val that pushed this rule's expr
+  // records as u.paren_preval, and the group otherwise.
+  const parenOpFor = (r: Rule, tin: Tin): Op | undefined =>
+    (r.parent?.parent?.u?.paren_preval ? parenPrevalTM : parenPlainTM)[tin]
 
   const hasPrefix = 0 < PREFIX.length
   const hasInfix = 0 < INFIX.length
@@ -437,9 +466,9 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           b: 1,
           p: 'expr',
           c: (r: Rule, ctx: Context) => {
-            const pdef = parenOTM[r.o1.tin]
+            const pdef = parenPrevalTM[r.o1.tin]
             const preval = r.o0.resolveVal(r, ctx)
-            return pdef.preval.active &&
+            return null != pdef &&
               (null == pdef.preval.allow || pdef.preval.allow.includes(preval))
           },
           u: { paren_preval: true },
@@ -458,10 +487,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           b: 1,
           p: 'expr',
 
-          c: (r: Rule) => {
-            const pdef = parenOTM[r.o0.tin]
-            return !pdef.preval.required
-          },
+          c: (r: Rule) => null != parenPlainTM[r.o0.tin],
 
           g: 'expr,expr-paren',
         }
@@ -544,8 +570,8 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           s: [OP],
           b: 1,
           c: (r: Rule) => {
-            const pdef = parenOTM[r.c0.tin]
-            return pdef.preval.active &&
+            const pdef = parenPrevalTM[r.c0.tin]
+            return null != pdef &&
               undefined !== r.node &&
               (null == pdef.preval.allow || pdef.preval.allow.includes(r.node))
           },
@@ -1029,9 +1055,8 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             s: [OP, CP],
             b: 1,
             g: 'expr,expr-paren,empty',
-            c: (r: Rule) =>
-              parenOTM[r.o0.tin].name === parenCTM[r.o1.tin].name,
-            a: makeOpenParen(parenOTM),
+            c: (r: Rule) => parenOpFor(r, r.o0.tin)?.ctin === r.o1.tin,
+            a: makeOpenParen(parenOpFor),
           }
           : NONE,
 
@@ -1046,7 +1071,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
               expr_suffix: 0,
             },
             g: 'expr,expr-paren,open',
-            a: makeOpenParen(parenOTM),
+            a: makeOpenParen(parenOpFor),
           }
           : NONE,
       ])
@@ -1055,13 +1080,10 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         hasParen
           ? {
             s: [CP],
-            c: (r: Rule) => {
-              const pdef = parenCTM[r.c0.tin]
-              let pd = 'expr_paren_depth_' + pdef.name
-              return !!r.n[pd]
-            },
+            // The closer of the operator this paren opened.
+            c: (r: Rule) => r.u.expr_paren_op?.ctin === r.c0.tin,
 
-            a: makeCloseParen(parenCTM),
+            a: makeCloseParen,
             g: 'expr,expr-paren,close',
           }
           : NONE,
@@ -1268,61 +1290,45 @@ function dupNode(node: any): any {
   return out
 }
 
-function makeOpenParen(parenOTM: OpMap) {
+function makeOpenParen(parenOpFor: (r: Rule, tin: Tin) => Op | undefined) {
   return function openParen(r: Rule) {
-    const op = makeOp(r.o0, parenOTM)
+    const op = parenOpFor(r, r.o0.tin) as Op
+    // The operator this paren opened, which its close builds the node
+    // with: the closer alone cannot say which, since two operators may
+    // share one.
+    r.u.expr_paren_op = op
     let pd = 'expr_paren_depth_' + op.name
     r.u[pd] = r.n[pd] = 1
     r.node = undefined
   }
 }
 
-function makeCloseParen(parenCTM: OpMap) {
-  return function closeParen(r: Rule) {
-    if (isOp(r.child.node)) {
-      r.node = r.child.node
-    } else if (undefined === r.node) {
-      r.node = r.child.node
+function makeCloseParen(r: Rule) {
+  if (isOp(r.child.node)) {
+    r.node = r.child.node
+  } else if (undefined === r.node) {
+    r.node = r.child.node
+  }
+
+  const op = makeOp(r.c0, { [r.c0.tin]: r.u.expr_paren_op })
+  let pd = 'expr_paren_depth_' + op.name
+
+  // Construct completed paren expression.
+  if (r.u[pd] === r.n[pd]) {
+
+    const val = r.node
+
+    // r.node = [op.osrc]
+    r.node = [op]
+
+    // WWW
+    if (r.parent.parent?.u?.paren_preval
+      && undefined !== r.parent.parent.node) {
+      r.node.push(r.parent.parent.node)
     }
 
-    const op = makeOp(r.c0, parenCTM)
-    let pd = 'expr_paren_depth_' + op.name
-
-    // Construct completed paren expression.
-    if (r.u[pd] === r.n[pd]) {
-
-      const val = r.node
-
-      // r.node = [op.osrc]
-      r.node = [op]
-
-      // WWW
-      if (r.parent.parent?.u?.paren_preval
-        && undefined !== r.parent.parent.node) {
-        r.node.push(r.parent.parent.node)
-      }
-
-      if (undefined !== val) {
-        r.node.push(val)
-      }
-
-      // console.log('MCP', r.i, r.name, p(r.node),
-      //   'PP', r.parent.parent?.u, p(r.parent.parent?.node), 'N', p(r.node))
-
-      // WWW
-      // if (r.parent.prev.u.paren_preval) {
-      //   if (isParenOp(r.parent.prev.node)) {
-      //     r.node = updateExprNode(
-      //       r.parent.prev.node,
-      //       r.node[0],
-      //       dupNode(r.parent.prev.node),
-      //       r.node[1],
-      //     )
-      //   } else {
-      //     r.node.splice(1, 0, r.parent.prev.node)
-      //     r.parent.prev.node = r.node
-      //   }
-      // }
+    if (undefined !== val) {
+      r.node.push(val)
     }
   }
 }
@@ -1576,19 +1582,21 @@ function makeOpMap(
     }, {})
 }
 
-function makeParenMap(
+// The paren operators, in declaration order. Several may share an
+// opener; the plugin picks, per opener, the group and the preval one.
+function makeParenOps(
   token: (tkn_tin: string | Tin) => Tin | string,
   fixed: (tkn: string) => Tin,
   optop: { [name: string]: OpDef },
-): OpMap {
-  return entries(optop).reduce((a: OpMap, [name, pdef]: [string, any]) => {
+): Op[] {
+  return entries(optop).reduce((a: Op[], [name, pdef]: [string, any]) => {
     if (pdef.paren) {
       let otin = (fixed(pdef.osrc) || token('#E' + pdef.osrc)) as Tin
       let otkn = token(otin) as string
       let ctin = (fixed(pdef.csrc) || token('#E' + pdef.csrc)) as Tin
       let ctkn = token(ctin) as string
 
-      a[otin] = {
+      a.push({
         name: name + '-paren',
         osrc: pdef.osrc,
         csrc: pdef.csrc,
@@ -1630,10 +1638,32 @@ function makeParenMap(
         dynamic: false,
         token: {} as Token,
         OP_MARK,
-      }
+      })
     }
     return a
-  }, {}) as OpMap
+  }, [])
+}
+
+
+// The default grouping paren, as `Expr.defaults` defines it, is left out
+// of a table that has another paren operator opening with `(` and closing
+// with `)`, as the Go and Rust ports leave it out. A `plain` the options
+// change is theirs, and is kept.
+function dropDefaultPlain(optop: { [name: string]: OpDef }) {
+  const plain: any = optop.plain
+  const def: any = (Expr.defaults as ExprOptions).op?.plain
+  if (null == plain || null == def ||
+    Object.keys(plain).length !== Object.keys(def).length ||
+    Object.keys(def).some((k) => plain[k] !== def[k])) {
+    return
+  }
+  for (const [name, pdef] of entries(optop) as [string, any][]) {
+    if ('plain' !== name && null != pdef && pdef.paren &&
+      def.osrc === pdef.osrc && def.csrc === pdef.csrc) {
+      delete optop.plain
+      return
+    }
+  }
 }
 
 

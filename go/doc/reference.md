@@ -246,6 +246,21 @@ right` is left-associative; `left > right` is right-associative. See
 | `"required"` | `false` | Require a preceding value to match (so `[1]` is a list literal but `a[1]` is an index op). |
 | `"allow"` | unset | `[]interface{}` / `[]string` of names the preceding value must match. |
 
+### Two paren operators on one opener
+
+Two paren operators can share an opener: a group, whose preval is
+inactive, and a call or a subscript, whose preval is active. A value
+before the opener selects the preval operator, and no value selects the
+group, so an evaluator gets `(e)` and `e()` as different operators. Of
+two operators of one kind on an opener, the one whose name sorts last
+applies, since a Go map keeps no declaration order, and an opener with
+no group uses an operator whose preval is active and not required for
+both forms.
+
+The default `"plain"` gives way to the table's own paren operators: a
+table with another paren operator on `(` and `)` drops it. A `"plain"`
+that the options change stays.
+
 ## Exported types
 
 ### `OpDef`

@@ -2917,6 +2917,37 @@ describe('expr', () => {
   })
 
 
+  test('paren-default-plain-yields', () => {
+    // The default group, `plain`, gives way to a paren operator of the
+    // table on the same opener and closer, so a lone call whose preval is
+    // active and not required serves both forms, as it always has.
+    const named = (_r: Rule, _c: Context, op: Op, terms: any) => [op.name, ...terms]
+    const mk = (op: any) => {
+      const je = new Tabnas().use(jsonic).use(Expr, { op, evaluate: named })
+      return (s: string) => C(je.parse(s))
+    }
+    const func = { paren: true, osrc: '(', csrc: ')', preval: { active: true } }
+
+    expect(mk({ func })('(1)')).equal(['func-paren', 1])
+    expect(mk({ func })('f(1)')).equal(['func-paren', 'f', 1])
+
+    // A paren operator on another opener leaves it in place.
+    const angle = { paren: true, osrc: '<', csrc: '>' }
+    expect(mk({ angle })('(1)')).equal(['plain-paren', 1])
+
+    // A `plain` the options change is theirs, and stays: here it is the
+    // group beside the call.
+    const plain = { paren: true, osrc: '(', csrc: ')', preval: { active: false } }
+    expect(mk({ plain, func })('(1)')).equal(['plain-paren', 1])
+    expect(mk({ plain, func })('f(1)')).equal(['func-paren', 'f', 1])
+
+    // A call whose preval is required serves only its own form.
+    const index = { paren: true, osrc: '(', csrc: ')', preval: { required: true } }
+    expect(mk({ index })('f(1)')).equal(['index-paren', 'f', 1])
+    expect(() => mk({ index })('(1)')).throw(/unexpected/)
+  })
+
+
   test('evaluate-once-in-tree-order', () => {
     // Each operation of the tree is reduced once, after its terms, so the
     // calls follow the S-expression. A prefix inside an operand (`-2` in

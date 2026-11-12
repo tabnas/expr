@@ -638,6 +638,63 @@ fn evaluate_called_once_per_operator() {
     }
 }
 
+/// The default group, `plain`, gives way to a paren operator of the table
+/// on the same opener and closer, so a lone call whose preval is active and
+/// not required serves both forms, as it always has. The Rust half of the
+/// TypeScript suite's `paren-default-plain-yields`.
+#[test]
+fn paren_default_plain_yields() {
+    let named = |options: ExprOptions| {
+        parser_with(options.with_evaluate(|_site, op, terms| {
+            let mut items = vec![Value::String(op.name.clone())];
+            items.extend(terms.iter().cloned());
+            Value::array(items)
+        }))
+    };
+    let paren = |active: bool, required: bool| {
+        OpDef::paren("(", ")").with_preval(PrevalDef {
+            active,
+            required,
+            allow: None,
+        })
+    };
+    let check = |parser: &Tabnas, src: &str, want: &str| {
+        let value =
+            tabnas_expr::parse_with(parser, src).unwrap_or_else(|error| panic!("{src}: {error}"));
+        assert_eq!(
+            norm(value.to_json()),
+            norm(serde_json::from_str(want).unwrap()),
+            "{src}"
+        );
+    };
+
+    let func = named(ExprOptions::new().with_op("func", paren(true, false)));
+    check(&func, "(1)", r#"["func-paren",1]"#);
+    check(&func, "f(1)", r#"["func-paren","f",1]"#);
+
+    // A paren operator on another opener leaves it in place.
+    let angle = named(ExprOptions::new().with_op("angle", OpDef::paren("<", ">")));
+    check(&angle, "(1)", r#"["plain-paren",1]"#);
+
+    // A `plain` the options change is theirs, and stays: here it is the
+    // group beside the call.
+    let both = named(
+        ExprOptions::new()
+            .with_op("plain", paren(false, false))
+            .with_op("func", paren(true, false)),
+    );
+    check(&both, "(1)", r#"["plain-paren",1]"#);
+    check(&both, "f(1)", r#"["func-paren","f",1]"#);
+
+    // A call whose preval is required serves only its own form.
+    let index = named(ExprOptions::new().with_op("index", paren(true, true)));
+    check(&index, "f(1)", r#"["index-paren","f",1]"#);
+    assert!(
+        tabnas_expr::parse_with(&index, "(1)").is_err(),
+        "(1) with only a required-preval paren on ( should fail"
+    );
+}
+
 /// Each operation of the tree is reduced once, after its terms, so the
 /// calls follow the S-expression. A prefix inside an operand (`-2` in
 /// `1+-2`) is not reduced with the enclosing tree before that tree is

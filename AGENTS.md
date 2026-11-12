@@ -315,6 +315,31 @@ When porting a behaviour change, keep all four invariants: instance-level
 `FixedSrc` lookups, sorted op iteration, the suffix paren-guard/infix
 drill, and the zero-is-unset fallback.
 
+## Paren operators on one opener
+
+A group (preval inactive) and a call or a subscript (preval active) may
+share an opener. Each runtime keeps, per opener, the operator of each
+form: `parenPlainTM` and `parenPrevalTM` in TypeScript,
+`parenPlainByTin` and `parenPrevalByTin` in Go, `paren_plain` and
+`paren_preval` in Rust. Of two of one kind, the later wins (TypeScript
+and Rust: declaration order; Go: name order, as its table is a map),
+and with no group an operator whose preval is active and not required
+serves both forms, as a lone operator always has. The paren rule picks
+the operator at its open, by whether the val that pushed its expr set
+`u.paren_preval`, records it (`u.expr_paren_op`), and closes only on that
+operator's closer, building the node with it: a closer shared by two
+operators cannot say which one it closes.
+
+The default `plain` yields to a table's own paren operator on `(` and
+`)`, in every runtime. Go always dropped it so; TypeScript receives its
+options merged over the defaults and cannot tell an untouched `plain`
+from a named one, so the rule reads a `plain` equal to the default
+definition as the default, and Go and Rust apply that same rule. Without
+it, a table whose lone call served groups too would hand its groups to
+`plain` instead. `paren-shared-opener.tsv` pins the selection; the
+TypeScript and Rust runners also parse its rows with the two operators
+declared in the other order.
+
 ## The tree layer: key operators and `fold`
 
 The plugin has two kinds of operator. A **token** operator is what the
