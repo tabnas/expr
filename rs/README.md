@@ -199,7 +199,7 @@ give way to separators. `OpDef::cast` declares a cast, and
 `ExprOptions::with_juxtapose` refuses values side by side.
 `OpDef::with_left` and `OpDef::with_right` on a ternary place it as an
 infix operator is, and `ExprOptions::with_values` names a host grammar's
-own value tokens, which are refused side by side too. The TypeScript
+own value tokens, which the parser refuses side by side too. The TypeScript
 reference, `ts/doc/reference.md`, describes each one.
 
 ```rust

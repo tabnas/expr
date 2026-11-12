@@ -222,7 +222,7 @@ Each `"op"` entry is itself a `map[string]interface{}`. Recognised fields:
 | `"src"` | `string` or `[]interface{}` | infix/prefix/suffix; ternary; key | Operator text, for example `"+"`. For ternary, a two-element slice `[]interface{}{"?", ":"}`. For key, the member name that marks a site, for example `"$ref"`. |
 | `"osrc"` | `string` | paren | Opening token text, for example `"("`. |
 | `"csrc"` | `string` | paren | Closing token text, for example `")"`. |
-| `"left"` | `int64` (or `int`, or `float64`) | infix, suffix, preval paren, ternary | Left binding power. Higher binds tighter. Defaults to `MinSafeInteger` (loosest); a declared `0` takes that default too. For a preval paren, see [Binding power of a preval paren](#binding-power-of-a-preval-paren); for a ternary, [A ternary with a binding power](#a-ternary-with-a-binding-power). |
+| `"left"` | `int64` (or `int`, or `float64`) | infix, suffix, preval paren, ternary | Left binding power. Higher binds tighter. Defaults to `MinSafeInteger` (loosest); a declared `0` takes that default too. For a preval paren, see [Binding power of a preval paren](#binding-power-of-a-preval-paren). For a ternary, see [A ternary with a binding power](#a-ternary-with-a-binding-power). |
 | `"right"` | `int64` (or `int`, or `float64`) | infix, prefix, ternary | Right binding power. Higher binds tighter. Defaults to `MaxSafeInteger` (tightest); a declared `0` takes that default too. |
 | `"infix"` | `bool` | (none) | Binary infix operator (2 terms). |
 | `"prefix"` | `bool` | (none) | Unary prefix operator (1 term). |
@@ -284,7 +284,7 @@ takes the whole expression before it as its first term, and the whole
 one after it as its last, so with `=` declared, `x = a ? b : c` is
 `(x = a) ? b : c`.
 
-A ternary with a `"left"` is placed as an infix operator is. Its first
+The parser places a ternary with a `"left"` as it places an infix operator. Its first
 term is as much of the expression before it as binds tighter than its
 `"left"`, and its last term is an operand on its right, which an
 operator after it binds into, or takes the whole ternary, by the same
@@ -346,9 +346,10 @@ a list or a map keep their reading.
 
 A host grammar whose own lexer reads values, such as identifiers,
 names their tokens in `"values"`. With `"juxtapose": false`, one of
-them after a value or an expression is refused wherever it stands, the
-items of a list or a map included: an expression never ends at one, and
-the rule the expression is in never sees it.
+them after a value or an expression is a value side by side wherever it
+stands, the items of a list or a map included, and the parser refuses it
+there: an expression never ends at one, and one never reaches the rule
+the expression is in.
 
 ## Exported types
 
