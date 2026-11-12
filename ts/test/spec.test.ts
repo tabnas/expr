@@ -708,6 +708,6 @@ test('every fixture row is held to its canonical JSON', () => {
     (total, name) => total + loadSpec(Path.join(SPEC, name)).rows.length, 0)
   assert.equal(canonicalRows, onDisk,
     `${canonicalRows} rows were held to their canonical JSON, of ${onDisk} on disk`)
-  assert.equal(onDisk, 1460,
-    `the shared fixtures hold ${onDisk} rows, not the 1460 measured`)
+  assert.equal(onDisk, 1462,
+    `the shared fixtures hold ${onDisk} rows, not the 1462 measured`)
 })
