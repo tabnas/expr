@@ -516,6 +516,20 @@ describe('spec', () => {
   })
 
 
+  // An operator of the table takes a default operator's token, whatever
+  // the two are named.
+  describe('op-override', () => {
+    const je = new Tabnas().use(jsonic).use(Expr, {
+      op: {
+        minus: { src: '-', infix: true, left: 12000, right: 12001 },
+        unary_n: { src: '-', prefix: true, right: 16000 },
+        pct: { src: '%', infix: true, left: 13000, right: 13001 },
+      },
+    })
+    runSpec('op-override.tsv', mj(je))
+  })
+
+
   describe('json-base', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('json-base.tsv', j)
@@ -708,6 +722,6 @@ test('every fixture row is held to its canonical JSON', () => {
     (total, name) => total + loadSpec(Path.join(SPEC, name)).rows.length, 0)
   assert.equal(canonicalRows, onDisk,
     `${canonicalRows} rows were held to their canonical JSON, of ${onDisk} on disk`)
-  assert.equal(onDisk, 1462,
-    `the shared fixtures hold ${onDisk} rows, not the 1462 measured`)
+  assert.equal(onDisk, 1470,
+    `the shared fixtures hold ${onDisk} rows, not the 1470 measured`)
 })

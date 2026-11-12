@@ -562,6 +562,21 @@ fn spec_ternary_paren() {
     );
 }
 
+/// An operator of the table takes a default operator's token, whatever the
+/// two are named.
+#[test]
+fn spec_op_override() {
+    run_spec(
+        "op-override.tsv",
+        parser_with(
+            ExprOptions::new()
+                .with_op("minus", OpDef::infix("-", 12_000, 12_001))
+                .with_op("unary_n", OpDef::prefix("-", 16_000))
+                .with_op("pct", OpDef::infix("%", 13_000, 13_001)),
+        ),
+    );
+}
+
 /// Evaluation follows the tree: every cell is the S-expression the
 /// unary-suffix-*.tsv rows show, with operator names for sources.
 #[test]
@@ -923,8 +938,8 @@ fn every_fixture_row_is_held_to_its_canonical_json() {
         })
         .sum();
     assert_eq!(
-        rows, 1462,
-        "the shared fixtures hold {rows} rows, not the 1462 measured"
+        rows, 1470,
+        "the shared fixtures hold {rows} rows, not the 1470 measured"
     );
 }
 
