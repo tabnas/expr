@@ -16,7 +16,7 @@ mod common;
 
 use serde_json::json;
 use tabnas::{Tabnas, Value as EngineValue};
-use tabnas_expr::{ExprOptions, OpDef, PrevalDef};
+use tabnas_expr::{ContentDef, ExprOptions, OpDef, PrevalDef};
 use tabnas_support::{load_spec, Runner, SpecOptions, Value};
 
 use common::{
@@ -283,6 +283,145 @@ fn spec_paren_shared_opener() {
     hold_to_canonical_json(
         &spec_dir().join("paren-shared-opener.tsv"),
         &shared_opener(false),
+    );
+}
+
+/// The options of #105 a file switches on, over the small C every
+/// options-*.tsv file shares: `left` on the preval parens, a cast, a
+/// separated call content beside a separator comma, `juxtapose: false`,
+/// and a required group content.
+#[derive(Default, Clone, Copy)]
+struct COptions {
+    left: bool,
+    cast: bool,
+    separated: bool,
+    refuse_juxtaposed: bool,
+    required: bool,
+}
+
+fn c_like(on: COptions) -> Tabnas {
+    let preval = |active: bool, required: bool| PrevalDef {
+        active,
+        required,
+        allow: None,
+    };
+    let mut comma = OpDef::infix(",", 1_000_000, 1_100_000);
+    if on.separated {
+        comma = comma.with_separator();
+    }
+    let mut paren = OpDef::paren("(", ")").with_preval(preval(false, false));
+    if on.required {
+        paren = paren.with_content(ContentDef {
+            required: true,
+            separated: false,
+        });
+    }
+    let mut call = OpDef::paren("(", ")").with_preval(preval(true, false));
+    let mut subscript = OpDef::paren("[", "]").with_preval(preval(true, true));
+    if on.left {
+        call = call.with_left(5_000_000);
+        subscript = subscript.with_left(5_000_000);
+    }
+    if on.separated {
+        call = call.with_content(ContentDef {
+            required: false,
+            separated: true,
+        });
+    }
+    let mut options = ExprOptions::new()
+        .with_op("comma", comma)
+        .with_op("deref", OpDef::prefix("*", 4_000_000))
+        .with_op("post_inc", OpDef::suffix("++", 5_000_000))
+        .with_op("dot", OpDef::infix(".", 5_000_000, 5_100_000))
+        .with_op("paren", paren)
+        .with_op("call", call)
+        .with_op("subscript", subscript);
+    if on.cast {
+        options = options.with_op(
+            "cast",
+            OpDef::cast("(", ")", 4_000_000, |term| {
+                matches!(term, EngineValue::String(name) if "int" == name || "long" == name || "char" == name)
+            }),
+        );
+    }
+    if on.refuse_juxtaposed {
+        options = options.with_juxtapose(false);
+    }
+    parser_with(named(options))
+}
+
+/// The options of #105, each off and on, over one small C.
+#[test]
+fn spec_options_off() {
+    run_spec("options-off.tsv", c_like(COptions::default()));
+}
+
+#[test]
+fn spec_options_paren_left() {
+    run_spec(
+        "options-paren-left.tsv",
+        c_like(COptions {
+            left: true,
+            ..COptions::default()
+        }),
+    );
+}
+
+#[test]
+fn spec_options_cast() {
+    run_spec(
+        "options-cast.tsv",
+        c_like(COptions {
+            cast: true,
+            ..COptions::default()
+        }),
+    );
+}
+
+#[test]
+fn spec_options_separated() {
+    run_spec(
+        "options-separated.tsv",
+        c_like(COptions {
+            separated: true,
+            ..COptions::default()
+        }),
+    );
+}
+
+#[test]
+fn spec_options_juxtapose() {
+    run_spec(
+        "options-juxtapose.tsv",
+        c_like(COptions {
+            refuse_juxtaposed: true,
+            ..COptions::default()
+        }),
+    );
+}
+
+#[test]
+fn spec_options_content_required() {
+    run_spec(
+        "options-content-required.tsv",
+        c_like(COptions {
+            required: true,
+            ..COptions::default()
+        }),
+    );
+}
+
+#[test]
+fn spec_options_all() {
+    run_spec(
+        "options-all.tsv",
+        c_like(COptions {
+            left: true,
+            cast: true,
+            separated: true,
+            refuse_juxtaposed: true,
+            required: true,
+        }),
     );
 }
 
@@ -561,6 +700,21 @@ fn hold_to_canonical_json(path: &std::path::Path, parser: &Tabnas) {
         .unwrap_or_else(|error| panic!("{}: {}", path.display(), error.0));
     let mut failures = Vec::new();
     for row in &spec.rows {
+        // A refusal is held to its code, which is all its cell says.
+        if let Some(code) = row.col(1).strip_prefix("ERROR:") {
+            match tabnas_expr::parse_simplified(parser, &row.unesc(0)) {
+                Err(error) if error.code == code => {}
+                other => failures.push(format!(
+                    "{}\n  not refused with {code}: {}",
+                    row.location(),
+                    match other {
+                        Ok(value) => canonical(&value),
+                        Err(error) => error.code.to_string(),
+                    }
+                )),
+            }
+            continue;
+        }
         let value = tabnas_expr::parse_simplified(parser, &row.unesc(0))
             .unwrap_or_else(|error| panic!("{}: {error}", row.location()));
         let got = canonical(&value);
@@ -632,8 +786,8 @@ fn every_fixture_row_is_held_to_its_canonical_json() {
         })
         .sum();
     assert_eq!(
-        rows, 1183,
-        "the shared fixtures hold {rows} rows, not the 1183 measured"
+        rows, 1314,
+        "the shared fixtures hold {rows} rows, not the 1314 measured"
     );
 }
 

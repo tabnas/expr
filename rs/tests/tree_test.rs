@@ -1171,9 +1171,18 @@ fn the_realized_description_carries_key_and_dynamic_in_the_canonical_order() {
     assert_eq!(op["dynamic"], json!(false));
     let keys: Vec<&String> = op.as_object().expect("a description").keys().collect();
     let at = |name: &str| keys.iter().position(|key| *key == name).expect(name);
-    assert!(at("preval") < at("key"));
+    assert!(at("preval") < at("content"));
+    assert!(at("content") < at("separator"));
+    assert!(at("separator") < at("cast"));
+    assert!(at("cast") < at("key"));
     assert!(at("key") < at("dynamic"));
     assert!(at("dynamic") < at("token"));
+    assert_eq!(
+        op["content"],
+        json!({"required": false, "separated": false})
+    );
+    assert_eq!(op["separator"], json!(false));
+    assert_eq!(op["cast"], json!(false));
 }
 
 #[test]

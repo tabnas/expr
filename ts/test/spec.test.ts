@@ -28,6 +28,49 @@ const mj =
 // operation is written as [op.name, ...terms].
 const named = (_r: any, _ctx: any, op: any, terms: any) => [op.name, ...terms]
 
+// The small C every options-*.tsv file shares, with the options of #105
+// a file switches on: `left` on the preval parens, a `cast`, a `separated`
+// call content beside a `separator` comma, `juxtapose: false`, and a
+// `required` group content.
+type COptions = {
+  left?: boolean, cast?: boolean, separated?: boolean,
+  refuseJuxtaposed?: boolean, required?: boolean,
+}
+const cLike = (on: COptions) => {
+  const op: any = {
+    comma: {
+      src: ',', infix: true, left: 1000000, right: 1100000,
+      ...(on.separated ? { separator: true } : {}),
+    },
+    deref: { src: '*', prefix: true, right: 4000000 },
+    post_inc: { src: '++', suffix: true, left: 5000000 },
+    dot: { src: '.', infix: true, left: 5000000, right: 5100000 },
+    paren: {
+      paren: true, osrc: '(', csrc: ')', preval: { active: false },
+      ...(on.required ? { content: { required: true } } : {}),
+    },
+    call: {
+      paren: true, osrc: '(', csrc: ')', preval: { active: true },
+      ...(on.left ? { left: 5000000 } : {}),
+      ...(on.separated ? { content: { separated: true } } : {}),
+    },
+    subscript: {
+      paren: true, osrc: '[', csrc: ']', preval: { active: true, required: true },
+      ...(on.left ? { left: 5000000 } : {}),
+    },
+  }
+  if (on.cast) {
+    op.cast = {
+      cast: true, osrc: '(', csrc: ')', right: 4000000,
+      accept: (term: any) => 'int' === term || 'long' === term || 'char' === term,
+    }
+  }
+  const je = new Tabnas().use(jsonic).use(Expr, {
+    op, evaluate: named, ...(on.refuseJuxtaposed ? { juxtapose: false } : {}),
+  })
+  return (s: string) => C(je.parse(s))
+}
+
 
 // The fixtures live at the repo root in `test/spec/*.tsv` and are read by
 // @tabnas/support, whose Go half `go/expr_test.go` and Rust half
@@ -58,7 +101,15 @@ function runSpec(specName: string, j: (s: string) => any) {
 
   test(`${specName}: every cell is the canonical JSON, byte for byte`, () => {
     for (const row of loadSpec(Path.join(SPEC, specName)).rows) {
-      assert.equal(JSON.stringify(j(row.unesc(0))), row.col(1), row.where())
+      // A refusal is held to its code, which is all its cell says.
+      const want = row.col(1)
+      if (want.startsWith('ERROR:')) {
+        assert.throws(() => j(row.unesc(0)),
+          (err: any) => want === 'ERROR:' + err.code, row.where())
+      }
+      else {
+        assert.equal(JSON.stringify(j(row.unesc(0))), want, row.where())
+      }
       canonicalRows++
     }
   })
@@ -357,6 +408,20 @@ describe('spec', () => {
   })
 
 
+  // The options of #105, each off and on, over one small C.
+  describe('options', () => {
+    runSpec('options-off.tsv', cLike({}))
+    runSpec('options-paren-left.tsv', cLike({ left: true }))
+    runSpec('options-cast.tsv', cLike({ cast: true }))
+    runSpec('options-separated.tsv', cLike({ separated: true }))
+    runSpec('options-juxtapose.tsv', cLike({ refuseJuxtaposed: true }))
+    runSpec('options-content-required.tsv', cLike({ required: true }))
+    runSpec('options-all.tsv', cLike({
+      left: true, cast: true, separated: true, refuseJuxtaposed: true, required: true,
+    }))
+  })
+
+
   describe('json-base', () => {
     const j = mj(new Tabnas().use(jsonic).use(Expr))
     runSpec('json-base.tsv', j)
@@ -549,6 +614,6 @@ test('every fixture row is held to its canonical JSON', () => {
     (total, name) => total + loadSpec(Path.join(SPEC, name)).rows.length, 0)
   assert.equal(canonicalRows, onDisk,
     `${canonicalRows} rows were held to their canonical JSON, of ${onDisk} on disk`)
-  assert.equal(onDisk, 1183,
-    `the shared fixtures hold ${onDisk} rows, not the 1183 measured`)
+  assert.equal(onDisk, 1314,
+    `the shared fixtures hold ${onDisk} rows, not the 1314 measured`)
 })

@@ -68,6 +68,34 @@ type OpDef = {
     allow?: string[]
   }
 
+  // A paren operator's content. `required`: the content may not be empty,
+  // so `()` is refused while a call that admits none stays `f()`.
+  // `separated`: the content is a list of terms separated by commas, as a
+  // call's arguments are, and each is a term of the operator
+  // (`f(a, b)` is `[f, a, b]` under a call), so an infix operator on `,`
+  // does not apply directly inside it.
+  content?: {
+    required?: boolean
+    separated?: boolean
+  }
+
+  // An infix operator on `,` that gives way to the separator: wherever an
+  // enclosing context separates on `,` (a list, a map, or a paren whose
+  // content is separated) the comma separates, and only elsewhere is it
+  // this operator. A paren whose content is not separated, a group, is
+  // such an elsewhere, even inside a call.
+  separator?: boolean
+
+  // A CAST: a prefix operator whose token is a group (`(int)` in
+  // `(int)a`) that `accept` accepts. `osrc` and `csrc` name the group,
+  // which a paren operator of the table on the same opener and closer
+  // parses; `right` is the cast's binding power, as a prefix's; `src`, by
+  // default `osrc` and `csrc` together, is what `simplify` writes. The
+  // operation's terms are the group's content and the operand. A group
+  // `accept` refuses stays a group, or a call.
+  cast?: boolean
+  accept?: (term: any) => boolean
+
   // STRUCTURAL (key) operator: an occurrence is a map that owns the member
   // named by `src` (for example `$ref`), recognised by shape when a tree is
   // folded, never by a token. No fixed token is registered, so the base
@@ -97,6 +125,13 @@ type ExprOptions = {
   // pass of the parse. Key operators resolve against the finished root,
   // where `evaluate` above reduces a token expression at its own close.
   fold?: FoldOptions
+
+  // Values side by side, with nothing between them, inside an expression
+  // or a paren group make an implicit list, as jsonic makes one (`f(a b)`
+  // is a call of `[a, b]`). With `false` they are refused, with the
+  // engine's `unexpected`. A document's own implicit list, outside any
+  // expression, and the items of a list or a map are unchanged.
+  juxtapose?: boolean
 }
 
 // Full operator description (provided for evaluation).
@@ -125,6 +160,13 @@ type Op = {
     required: boolean
     allow?: string[]
   }
+  content: {
+    required: boolean
+    separated: boolean
+  }
+  separator: boolean
+  cast: boolean
+  accept?: (term: any) => boolean
   key: boolean
   dynamic: boolean
   token: Token
@@ -409,9 +451,13 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
 
   // The paren operator a paren rule opens: the preval one when a value
   // precedes the opener, which the val that pushed this rule's expr
-  // records as u.paren_preval, and the group otherwise.
+  // records as u.paren_preval, or when the paren is a postfix of the
+  // expression its expr extends (u.expr_postfix), and the group otherwise.
   const parenOpFor = (r: Rule, tin: Tin): Op | undefined =>
-    (r.parent?.parent?.u?.paren_preval ? parenPrevalTM : parenPlainTM)[tin]
+    (r.parent?.parent?.u?.paren_preval || r.parent?.u?.expr_postfix
+      ? parenPrevalTM : parenPlainTM)[tin]
+
+  const hasRequired = parenOps.some((op: Op) => op.content.required)
 
   const hasPrefix = 0 < PREFIX.length
   const hasInfix = 0 < INFIX.length
@@ -432,6 +478,83 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
 
   const NONE = null as unknown as AltSpec
 
+  // --- The options of #105, every one off unless a table asks ----------
+
+  // Casts, by the opener of the group each is written with.
+  const castTM: OpMap = makeCastOps(token, fixed, optop)
+  const hasCast = 0 < Object.keys(castTM).length
+
+  // Whether the paren this expr rule pushed closed the token of a cast: a
+  // group (no value before it) on a cast's opener and closer, holding a
+  // content the cast's `accept` accepts. A cast without `accept` accepts
+  // nothing.
+  const castHere = (r: Rule): boolean => {
+    const child = r.child
+    if (null == child || 'paren' !== child.name || !child.u.expr_paren_group) {
+      return false
+    }
+    const node: any = child.node
+    const group: Op | undefined = child.u.expr_paren_op
+    const cast = null == group ? undefined : castTM[group.otin]
+    return null != cast && null != cast.accept && cast.ctin === group?.ctin &&
+      isOp(node) && 2 === node.length && !!cast.accept(node[1])
+  }
+
+  // A preval paren with a binding power, `left`, binds like a suffix: to
+  // the value just before it only where it binds at least as tightly as
+  // the operator whose operand that value is, and otherwise to the
+  // expression that operator heads (`a.b[1]` is `(a.b)[1]` when `[` binds
+  // no tighter than `.`).
+  const bound = (op: Op | undefined): op is Op =>
+    null != op && Number.MIN_SAFE_INTEGER !== op.left
+  const hasBound = values(parenPrevalTM).some((op: Op) => bound(op))
+  const postfixOpener = (tin: Tin) => bound(parenPrevalTM[tin])
+
+  // The operator whose operand a val is, when its parent is an expr rule
+  // building one: the operator the expr's node heads.
+  const enclosing = (r: Rule): Op | undefined => {
+    const parent = r.parent
+    const node: any = parent?.node
+    return null != parent && 'expr' === parent.name && isOp(node) &&
+      !isTernaryOp(node) && !isParenOp(node) ? node[0] : undefined
+  }
+
+  // Whether a bound preval paren takes the value before it, compared as a
+  // suffix is with the operator it would drill into. A prefix built into
+  // an enclosing tree (u.expr_inner) leaves the val holding that tree, not
+  // its own value, so the enclosing expression places the paren instead.
+  const bindsHere = (r: Rule, op: Op): boolean => {
+    if (!bound(op)) {
+      return true
+    }
+    if (r.child?.u?.expr_inner) {
+      return false
+    }
+    const encl = enclosing(r)
+    return null == encl || encl.right <= op.left
+  }
+
+  // Separators. A comma separates in a paren whose content is separated,
+  // and, once an infix operator on `,` is declared a separator, in lists
+  // and maps too: jsonic's comma, or the token an infix operator on `,`
+  // uses, which a host lexer may emit in its place. n.expr_sep marks a
+  // context that separates.
+  const commaInfix = values(infixTM).filter((op: Op) => ',' === op.src)
+  const SEP = [...new Set([CA, ...commaInfix.map((op: Op) => op.tin as Tin)])]
+  const hasSeparated = parenOps.some((op: Op) => op.content.separated)
+  const hasSeparator = values(infixTM).some((op: Op) => op.separator)
+  const separating = hasSeparated || hasSeparator
+  const separatedHere = (r: Rule) => 0 < (r.n.expr_sep || 0)
+
+  const openParen = makeOpenParen(parenOpFor, separating)
+
+  // Values side by side. A token that starts a value, where the one before
+  // has ended.
+  const noJuxtapose = false === options.juxtapose
+  const startsValue = (tin: Tin) =>
+    VAL.includes(tin) || tn.token.OB === tin || tn.token.OS === tin ||
+    OP.includes(tin) || PREFIX.includes(tin)
+
   rule('val', (rs: RuleSpec) => {
     // TODO: jsonic - make it easier to handle this case
     // Implicit pair not allowed inside ternary
@@ -444,6 +567,25 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           alt.c = origcond
             ? (r: Rule, ctx: Context) => origcond(r, ctx) && internary(r)
             : internary
+        })
+    }
+
+    // With `juxtapose: false`, the base grammar's implicit list of values
+    // side by side is refused inside a paren group, where the paren rule
+    // allows implicits again, and after a value an expression made (its
+    // val pushed an expr rule: `-a b`): no alternate takes the second
+    // value, and the parse fails on it with `unexpected`.
+    if (noJuxtapose) {
+      rs.def.close
+        .filter((a: any) => a.g.includes('imp') && a.g.includes('space') &&
+          a.g.includes('jsonic'))
+        .map((alt: any) => {
+          let origcond = alt.c
+          let plain = (r: Rule) =>
+            !(0 < (r.n.expr_paren || 0)) && 'expr' !== r.child?.name
+          alt.c = origcond
+            ? (r: Rule, ctx: Context) => origcond(r, ctx) && plain(r)
+            : plain
         })
     }
 
@@ -469,7 +611,8 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             const pdef = parenPrevalTM[r.o1.tin]
             const preval = r.o0.resolveVal(r, ctx)
             return null != pdef &&
-              (null == pdef.preval.allow || pdef.preval.allow.includes(preval))
+              (null == pdef.preval.allow || pdef.preval.allow.includes(preval)) &&
+              bindsHere(r, pdef)
           },
           u: { paren_preval: true },
           g: 'expr,expr-paren,expr-paren-preval',
@@ -493,6 +636,17 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         }
         : NONE,
     ]).close([
+      // A separator where the context separates (n.expr_sep): the value
+      // ends, and the rule that collects the terms takes the comma.
+      separating
+        ? {
+          s: [SEP],
+          c: separatedHere,
+          b: 1,
+          g: 'expr,expr-sep',
+        }
+        : NONE,
+
       // Comma-op suppression. When a parent rule (e.g. an embedding
       // grammar's wrapper rule) sets n.no_comma_op, bail at `,` without
       // treating it as the comma operator — the parent then consumes
@@ -573,11 +727,27 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             const pdef = parenPrevalTM[r.c0.tin]
             return null != pdef &&
               undefined !== r.node &&
-              (null == pdef.preval.allow || pdef.preval.allow.includes(r.node))
+              (null == pdef.preval.allow || pdef.preval.allow.includes(r.node)) &&
+              bindsHere(r, pdef)
           },
           p: 'expr',
           u: { paren_preval: true },
           g: 'expr,expr-paren,expr-paren-preval-chain',
+        }
+        : NONE,
+
+      // A bound preval paren that binds looser than the operator whose
+      // operand this value is: the value ends, and the expression that
+      // operator heads takes the paren as its postfix.
+      hasBound
+        ? {
+          s: [OP],
+          b: 1,
+          c: (r: Rule) => {
+            const pdef = parenPrevalTM[r.c0.tin]
+            return bound(pdef) && undefined !== r.node && !bindsHere(r, pdef)
+          },
+          g: 'expr,expr-paren,expr-postfix',
         }
         : NONE,
 
@@ -624,6 +794,12 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         r.n.expr_suffix = 0
         r.n.expr_paren = 0
         r.n.expr_ternary = 0
+
+        // A list separates on `,` once an infix operator on `,` gives way
+        // to separators, and otherwise leaves the comma to that operator.
+        if (separating) {
+          r.n.expr_sep = hasSeparator ? 1 : 0
+        }
       }
     }).close([
       hasParen && {
@@ -632,6 +808,17 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         // If end of normal list, consume `]` - it's not a close paren.
         b: (r: Rule) => (CS === r.c0.tin && !r.n.expr_paren ? 0 : 1),
       },
+
+      // An implicit list of values side by side ends at a separator of
+      // the paren content it is a term of.
+      separating
+        ? {
+          s: [SEP],
+          c: (r: Rule) => separatedHere(r) && !!r.prev?.u?.implist,
+          b: 1,
+          g: 'expr,expr-sep',
+        }
+        : NONE,
     ])
   })
 
@@ -643,6 +830,11 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
       rest[0].n.expr_suffix = 0
       rest[0].n.expr_paren = 0
       rest[0].n.expr_ternary = 0
+
+      // A map separates on `,` as a list does.
+      if (separating) {
+        rest[0].n.expr_sep = hasSeparator ? 1 : 0
+      }
     }).close([
       hasParen && {
         s: [CP],
@@ -654,6 +846,17 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
 
   rule('elem', (rs: RuleSpec) => {
     rs.close([
+      // An implicit list of values side by side ends at a separator of
+      // the paren content it is a term of: the list ends with it.
+      separating
+        ? {
+          s: [SEP],
+          c: (r: Rule) => separatedHere(r) && !!r.parent?.prev?.u?.implist,
+          b: 1,
+          g: 'expr,expr-sep',
+        }
+        : NONE,
+
       // Close implicit list within parens.
       hasParen
         ? {
@@ -692,6 +895,54 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
 
   rule('expr', (rs: RuleSpec) => {
     rs.open([
+
+      // A cast: the group just closed (the expr this one replaced holds
+      // it, `[group, type]`) heads a prefix expression, `[cast, type]`,
+      // whose operand follows. It takes no token: the group was the
+      // token.
+      hasCast
+        ? {
+          c: (r: Rule) => !!r.prev?.u?.expr_cast_next,
+          n: { expr: 1, expr_prefix: 1, expr_suffix: 0, dlist: 1, dmap: 1 },
+          p: 'val',
+          a: (r: Rule) => {
+            const group: any = r.prev.node
+            const cast = castTM[group[0].otin]
+            const op: Op = { ...cast, token: group[0].token, OP_MARK }
+            r.node = prior(r, r.parent, op, 'expr-cast')
+            r.node.push(group[1])
+
+            // The val that pushed the group's expr reads its node from
+            // that expr, its child, when it closes: that expr holds the
+            // cast too.
+            r.prev.node = r.node
+          },
+          g: 'expr,expr-cast',
+        }
+        : NONE,
+
+      // A bound preval paren after an expression: a postfix operator that
+      // takes the expression, or as much of it as it binds tighter than,
+      // as its first term, placed as a suffix is (prattifyPostfix). The
+      // paren then parses the content into the same node.
+      hasBound
+        ? {
+          s: [OP],
+          c: (r: Rule) => !!r.prev?.u?.expr_postfix_next,
+          n: { expr: 1, expr_prefix: 0, dlist: 1, dmap: 1 },
+          p: 'paren',
+          b: 1,
+          a: (r: Rule) => {
+            const op = makeOp(r.o0, parenPrevalTM)
+            const node = isOp(r.prev.node)
+              ? prattifyPostfix(r.prev.node, op)
+              : prior(r, r.prev, op, 'expr-postfix')
+            r.node = node
+            r.u.expr_postfix = node
+          },
+          g: 'expr,expr-paren,expr-postfix',
+        }
+        : NONE,
 
       // An opening parenthesis of an expression.
       hasParen
@@ -812,8 +1063,25 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
       })
 
       .close([
+        // A group the table's cast accepts: the expression goes on as a
+        // cast whose operand follows (the open alternate above), so this
+        // close keeps n.expr and nothing evaluates the group yet.
+        hasCast
+          ? {
+            c: (r: Rule) => castHere(r),
+            // Inside a list, a map or a paren, n.expr is zero by descent,
+            // and the after-close would evaluate the group.
+            n: { expr: 1 },
+            r: 'expr',
+            u: { expr_cast_next: true },
+            g: 'expr,expr-cast',
+          }
+          : NONE,
+
+        // A postfix paren's expression goes on after the paren, as a
+        // suffix's does, so it takes the alternates below.
         {
-          c: (r: Rule) => 'paren' === r.child.name,
+          c: (r: Rule) => 'paren' === r.child.name && !r.u.expr_postfix,
           n: { expr: 0 },
           g: 'expr,expr-end,expr-paren-end',
         },
@@ -833,6 +1101,18 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             b: 1,
             n: { expr: 0 },
             g: 'expr,no-comma-op-bail',
+          }
+          : NONE,
+
+        // A separator where the context separates: the expression ends,
+        // and the rule that collects the terms takes the comma.
+        separating
+          ? {
+            s: [SEP],
+            c: separatedHere,
+            b: 1,
+            n: { expr: 0 },
+            g: 'expr,expr-sep',
           }
           : NONE,
 
@@ -886,6 +1166,30 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
           }
           : NONE,
 
+        // A bound preval paren after this expression: a postfix that the
+        // next expr rule places, as the suffix alternate above does.
+        hasBound
+          ? {
+            s: [OP],
+            c: (r: Rule) => postfixOpener(r.c0.tin) && !r.n.expr_prefix,
+            b: 1,
+            r: 'expr',
+            u: { expr_postfix_next: true },
+            g: 'expr,expr-paren,expr-postfix',
+          }
+          : NONE,
+
+        // After a prefix expression: complete the prefix first, as for a
+        // suffix, and leave the paren to the expression it belongs to.
+        hasBound
+          ? {
+            s: [OP],
+            c: (r: Rule) => postfixOpener(r.c0.tin) && !!r.n.expr_prefix,
+            b: 1,
+            g: 'expr,expr-paren,expr-postfix,expr-prefix',
+          }
+          : NONE,
+
         hasParen
           ? {
             s: [CP],
@@ -919,7 +1223,7 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         {
           s: [VAL],
           // c: { d: 0 },
-          c: (r: Rule) => r.d <= 0,
+          c: (r: Rule) => r.d <= 0 && !noJuxtapose,
           n: { expr: 0 },
           b: 1,
           r: 'elem',
@@ -950,7 +1254,8 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         {
           c: (r: Rule, ctx: Context) =>
             r.lte('pk') && r.lte('expr_suffix') &&
-            !SUFFIX.includes(ctx.t0.tin),
+            !SUFFIX.includes(ctx.t0.tin) &&
+            !(noJuxtapose && startsValue(ctx.t0.tin)),
           n: { expr: 0 },
           h: implicitList,
           g: 'expr,list,val,imp,space',
@@ -1028,6 +1333,12 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
             r.parent.node = out
           }
 
+          // A cast took over its group's expr rule, which the val that
+          // pushed it reads its node from when it closes.
+          if (r.prev?.u?.expr_cast_next) {
+            r.prev.node = out
+          }
+
           // Also write the evaluated result onto this expr rule's own
           // node. When the expr rule was PUSHED from a still-open val
           // (the prefix/paren forms: `+1`, `(a)`), that val's close
@@ -1050,13 +1361,27 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
       r.n.pk = 0
     })
       .open([
+        // A paren whose content is required may not be empty: `()` is
+        // refused at its closer, where a content was due.
+        hasRequired
+          ? {
+            s: [OP, CP],
+            c: (r: Rule) => {
+              const op = parenOpFor(r, r.o0.tin)
+              return op?.ctin === r.o1.tin && op.content.required
+            },
+            e: (r: Rule) => r.o1,
+            g: 'expr,expr-paren,empty,required',
+          }
+          : NONE,
+
         hasParen
           ? {
             s: [OP, CP],
             b: 1,
             g: 'expr,expr-paren,empty',
             c: (r: Rule) => parenOpFor(r, r.o0.tin)?.ctin === r.o1.tin,
-            a: makeOpenParen(parenOpFor),
+            a: openParen,
           }
           : NONE,
 
@@ -1071,12 +1396,43 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
               expr_suffix: 0,
             },
             g: 'expr,expr-paren,open',
-            a: makeOpenParen(parenOpFor),
+            a: openParen,
           }
           : NONE,
       ])
 
       .close([
+        // A separator in a separated content: the term before it is done,
+        // and the next one follows. The loop is this rule's own close, so
+        // a long argument list adds no rule depth. A term that is empty
+        // (`f(,a)`, `f(a,,b)`) is refused at the separator after it.
+        separating
+          ? {
+            s: [SEP],
+            c: (r: Rule) => !!r.u.expr_paren_op?.content.separated &&
+              undefined === parenTerm(r),
+            e: (r: Rule) => r.c0,
+            g: 'expr,expr-paren,expr-sep,empty',
+          }
+          : NONE,
+
+        separating
+          ? {
+            s: [SEP],
+            c: (r: Rule) => !!r.u.expr_paren_op?.content.separated,
+            p: 'val',
+            n: { expr: 0, expr_prefix: 0, expr_suffix: 0 },
+            a: (r: Rule) => {
+              ; (r.u.expr_items ??= []).push(parenTerm(r))
+              // The next term starts empty, as the first did: a value an
+              // earlier term wrote here (a ternary's) is not the next one.
+              r.node = undefined
+              r.u.expr_paren_more = true
+            },
+            g: 'expr,expr-paren,expr-sep',
+          }
+          : NONE,
+
         hasParen
           ? {
             s: [CP],
@@ -1090,6 +1446,19 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
       ])
 
       .ac((r: Rule, _ctx: Context) => {
+        // A separator's pass goes on to the next term: the paren is not
+        // done.
+        if (r.u.expr_paren_more) {
+          r.u.expr_paren_more = false
+          return
+        }
+
+        // A postfix paren extended the node of the expression it applies
+        // to, in place, and its expr rule holds that node already: the
+        // rules above hold the expression's root, which stays.
+        if (r.parent.u.expr_postfix) {
+          return
+        }
         r.parent.node = r.node
         r.parent.parent.node = r.node
       })
@@ -1156,7 +1525,10 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         // End of ternary at top level. Implicit list indicated by comma.
         {
           s: [[CA, ...CP]],
-          c: implicitTernaryCond,
+          // Not at a separator of a separated content, which ends the
+          // ternary as one of that content's terms.
+          c: (r: Rule) => implicitTernaryCond(r) &&
+            !(separatedHere(r) && SEP.includes(r.c0.tin)),
           // Handle ternary as first item of imp list inside paren.
           b: (_r: Rule, ctx: Context) => (CP.includes(ctx.t0.tin) ? 1 : 0),
           r: (r: Rule, ctx: Context) =>
@@ -1172,7 +1544,11 @@ let Expr: Plugin = function Expr(tn: Tabnas, options: ExprOptions) {
         // End of ternary at top level.
         // Implicit list indicated by space separated value.
         {
-          c: implicitTernaryCond,
+          // Neither at a separator of a separated content, nor, with
+          // `juxtapose: false`, at a value beside the ternary.
+          c: (r: Rule, ctx: Context) => implicitTernaryCond(r) &&
+            !(separatedHere(r) && SEP.includes(ctx.t0.tin)) &&
+            !(noJuxtapose && startsValue(ctx.t0.tin)),
           // Handle ternary as first item of imp list inside paren.
           r: (r: Rule, ctx: Context) => {
             return (0 === r.d ||
@@ -1290,25 +1666,41 @@ function dupNode(node: any): any {
   return out
 }
 
-function makeOpenParen(parenOpFor: (r: Rule, tin: Tin) => Op | undefined) {
+function makeOpenParen(
+  parenOpFor: (r: Rule, tin: Tin) => Op | undefined,
+  separating: boolean,
+) {
   return function openParen(r: Rule) {
     const op = parenOpFor(r, r.o0.tin) as Op
     // The operator this paren opened, which its close builds the node
     // with: the closer alone cannot say which, since two operators may
     // share one.
     r.u.expr_paren_op = op
+    // A group, opened with no value before it, which a cast may take as
+    // its token.
+    r.u.expr_paren_group =
+      !(r.parent?.parent?.u?.paren_preval || r.parent?.u?.expr_postfix)
+    // The content separates on commas only in a paren whose content is
+    // separated: a group inside a call takes the comma operator again.
+    if (separating) {
+      r.n.expr_sep = op.content.separated ? 1 : 0
+    }
     let pd = 'expr_paren_depth_' + op.name
     r.u[pd] = r.n[pd] = 1
     r.node = undefined
   }
 }
 
+// The term a paren holds when it closes or meets a separator: the child's
+// node when that is an expression, or when nothing set the paren's own,
+// and otherwise the paren's own (an implicit list, or a value an
+// expression or a ternary below wrote here).
+function parenTerm(r: Rule): any {
+  return isOp(r.child.node) || undefined === r.node ? r.child.node : r.node
+}
+
 function makeCloseParen(r: Rule) {
-  if (isOp(r.child.node)) {
-    r.node = r.child.node
-  } else if (undefined === r.node) {
-    r.node = r.child.node
-  }
+  r.node = parenTerm(r)
 
   const op = makeOp(r.c0, { [r.c0.tin]: r.u.expr_paren_op })
   let pd = 'expr_paren_depth_' + op.name
@@ -1317,6 +1709,23 @@ function makeCloseParen(r: Rule) {
   if (r.u[pd] === r.n[pd]) {
 
     const val = r.node
+
+    // The content's terms: the one term, or each term of a separated
+    // content, the earlier ones collected at their separators.
+    const terms: any[] = undefined === r.u.expr_items ? [] : [...r.u.expr_items]
+    if (undefined !== val) {
+      terms.push(val)
+    }
+
+    // A postfix paren extends the node its expr rule placed in the tree,
+    // `[op, target]`, in place.
+    const postfix = r.parent?.u?.expr_postfix
+    if (postfix) {
+      postfix[0] = op
+      postfix.push(...terms)
+      r.node = postfix
+      return
+    }
 
     // r.node = [op.osrc]
     r.node = [op]
@@ -1327,9 +1736,7 @@ function makeCloseParen(r: Rule) {
       r.node.push(r.parent.parent.node)
     }
 
-    if (undefined !== val) {
-      r.node.push(val)
-    }
+    r.node.push(...terms)
   }
 }
 
@@ -1552,6 +1959,9 @@ function makeOpMap(
           active: false,
           required: false,
         },
+        content: { required: false, separated: false },
+        separator: 'infix' === anyfix && !!opdef.separator,
+        cast: false,
         key: false,
         dynamic: false,
         token: {} as Token,
@@ -1620,12 +2030,19 @@ function makeParenOps(
                 ? false
                 : pdef.preval.required,
         },
+        content: {
+          required: !!pdef.content?.required,
+          separated: !!pdef.content?.separated,
+        },
+        separator: false,
+        cast: false,
         use: {} as any,
         paren: true,
         src: pdef.osrc,
-        // left: -1,
-        // right: -1,
-        left: Number.MIN_SAFE_INTEGER,
+        // A binding power on a preval paren: compared like a suffix's
+        // with the operator whose operand precedes it (see bindsHere).
+        // Unset, the paren binds to the value just before it.
+        left: pdef.left || Number.MIN_SAFE_INTEGER,
         right: Number.MAX_SAFE_INTEGER,
         infix: false,
         prefix: false,
@@ -1642,6 +2059,54 @@ function makeParenOps(
     }
     return a
   }, [])
+}
+
+
+// The cast operators, by the opener of the group each is written with.
+function makeCastOps(
+  token: (tkn_tin: string | Tin) => Tin | string,
+  fixed: (tkn: string) => Tin,
+  optop: { [name: string]: OpDef },
+): OpMap {
+  return entries(optop).reduce((a: OpMap, [name, cdef]: [string, any]) => {
+    if (cdef.cast) {
+      let otin = (fixed(cdef.osrc) || token('#E' + cdef.osrc)) as Tin
+      let ctin = (fixed(cdef.csrc) || token('#E' + cdef.csrc)) as Tin
+      a[otin] = {
+        name: name + (name.endsWith('-cast') ? '' : '-cast'),
+        src: 'string' === typeof cdef.src ? cdef.src : cdef.osrc + cdef.csrc,
+        left: Number.MIN_SAFE_INTEGER,
+        right: cdef.right || Number.MAX_SAFE_INTEGER,
+        use: cdef.use || {},
+        // A prefix, whose first term, the group's content, is fixed when
+        // it opens: prattify reads it as one.
+        prefix: true,
+        suffix: false,
+        infix: false,
+        ternary: false,
+        paren: false,
+        terms: 2,
+        tkn: '',
+        tin: -1,
+        osrc: cdef.osrc,
+        csrc: cdef.csrc,
+        otkn: token(otin) as string,
+        otin,
+        ctkn: token(ctin) as string,
+        ctin,
+        preval: { active: false, required: false },
+        content: { required: false, separated: false },
+        separator: false,
+        cast: true,
+        accept: cdef.accept,
+        key: false,
+        dynamic: false,
+        token: {} as Token,
+        OP_MARK,
+      }
+    }
+    return a
+  }, {})
 }
 
 
@@ -1711,6 +2176,9 @@ function makeKeyMap(optop: { [name: string]: OpDef }): KeyMap {
       ctkn: '',
       ctin: -1,
       preval: { active: false, required: false },
+      content: { required: false, separated: false },
+      separator: false,
+      cast: false,
       key: true,
       dynamic: !!kdef.dynamic,
       token: {} as Token,
@@ -2398,6 +2866,25 @@ function prattify(expr: any, op?: Op, whence?: string): any[] {
 
   // console.log('PRATT-END', whence, p(out), op?.name)
   return out
+}
+
+
+// Place a bound preval paren after an expression, as prattify places a
+// suffix: drilling into the last term while the operator heading it binds
+// no tighter than the paren, and wrapping the rest. Returns the node the
+// paren heads, `[op, target]`, which the paren's content then extends.
+// NOTE: preserves referential integrity of root expression.
+function prattifyPostfix(expr: any, op: Op): any[] {
+  const expr_op = expr[0]
+  if (!expr_op.suffix && expr_op.right <= op.left) {
+    const end = expr_op.terms
+    if (isOp(expr[end]) && expr[end][0].prefix && expr[end][0].right < op.left) {
+      return prattifyPostfix(expr[end], op)
+    }
+    return (expr[end] = updateExprNode([], op, expr[end]))
+  }
+  updateExprNode(expr, op, dupNode(expr))
+  return expr
 }
 
 

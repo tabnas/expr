@@ -39,6 +39,27 @@ type OpDef struct {
 	Preval  interface{}
 	Use     interface{}
 
+	// Content configures a paren operator's content: a ContentDef, or a
+	// map with the same fields as "required" and "separated".
+	Content interface{}
+
+	// Separator marks an infix operator on `,` that gives way to the
+	// separator: wherever an enclosing context separates on `,` (a list, a
+	// map, or a paren whose content is separated) the comma separates, and
+	// only elsewhere is it this operator. A group is such an elsewhere,
+	// even inside a call.
+	Separator bool
+
+	// Cast marks a cast: a prefix operator whose token is a group (`(int)`
+	// in `(int)a`) that Accept accepts. OSrc and CSrc name the group, which
+	// a paren operator of the table on the same opener and closer parses;
+	// Right is the cast's binding power; Src, by default OSrc and CSrc
+	// together, is what Simplify writes. The operation's terms are the
+	// group's content and the operand. A group Accept refuses stays a
+	// group, or a call, and a cast without Accept accepts nothing.
+	Cast   bool
+	Accept func(term interface{}) bool `json:"-"`
+
 	// Key marks a key operator: a map that owns the member named by Src
 	// (for example "$ref") is an occurrence, recognised by its shape when
 	// a tree is folded (Fold), never by a token. No fixed token is
@@ -76,6 +97,26 @@ type Op struct {
 	Use     interface{}
 	Key     bool // a key operator, recognised by a map's shape (see Fold)
 	Dynamic bool // a key operator a fold reports and never evaluates
+
+	Content   ContentDef // a paren operator's content
+	Separator bool       // an infix on `,` that gives way to separators
+	Cast      bool       // a cast, whose token is a group
+
+	// Accept is a cast's test of the group's content. A func has no JSON
+	// encoding, so it is left out of one: a raw tree holding an operator
+	// marshals as it did before casts.
+	Accept func(term interface{}) bool `json:"-"`
+}
+
+// ContentDef configures a paren operator's content. Required: the content
+// may not be empty, so `()` is refused while a call that admits none stays
+// `f()`. Separated: the content is a list of terms separated by commas, as
+// a call's arguments are, each a term of the operator (`f(a, b)` is
+// `[f, a, b]` under a call), so an infix operator on `,` does not apply
+// directly inside it.
+type ContentDef struct {
+	Required  bool
+	Separated bool
 }
 
 // PrevalDef specifies paren-preval options.
@@ -96,6 +137,14 @@ type ExprOptions struct {
 	// fails. Given in the options map as "fold", a FoldOptions or a
 	// *FoldOptions.
 	Fold *FoldOptions
+
+	// Juxtapose, given as "juxtapose": values side by side, with nothing
+	// between them, inside an expression or a paren group make an implicit
+	// list, as jsonic makes one (`f(a b)` is a call of `[a, b]`). With
+	// false they are refused, with the engine's `unexpected`. A document's
+	// own implicit list, outside any expression, and the items of a list
+	// or a map are unchanged. Nil reads as true.
+	Juxtapose *bool
 }
 
 // _unfilled is a sentinel value for pre-allocated but unfilled expression slots.
@@ -216,6 +265,44 @@ func fillNextSlotSeen(node interface{}, val interface{}, seen map[*tabnas.ListRe
 	return false
 }
 
+// nextSlotOp is the operator of the node whose slot fillNextSlot fills
+// next: the deepest expression with an unfilled term, which is the
+// operator the coming operand belongs to. Nil when no slot is open.
+func nextSlotOp(node interface{}) *Op {
+	return nextSlotOpSeen(node, nil)
+}
+
+func nextSlotOpSeen(node interface{}, seen map[*tabnas.ListRef]bool) *Op {
+	box, _ := node.(*tabnas.ListRef)
+	if box == nil || len(box.Val) == 0 {
+		return nil
+	}
+	if seen == nil {
+		seen = map[*tabnas.ListRef]bool{}
+	}
+	if seen[box] {
+		return nil
+	}
+	seen[box] = true
+	op, ok := box.Val[0].(*Op)
+	if !ok {
+		return nil
+	}
+	for i := 1; i <= op.Terms && i < len(box.Val); i++ {
+		if sub, ok := box.Val[i].(*tabnas.ListRef); ok {
+			if found := nextSlotOpSeen(sub, seen); found != nil {
+				return found
+			}
+		}
+	}
+	for i := 1; i <= op.Terms && i < len(box.Val); i++ {
+		if isUnfilled(box.Val[i]) {
+			return op
+		}
+	}
+	return nil
+}
+
 // makeExpr creates a pre-allocated expression wrapped in *tabnas.ListRef.
 // The wrapper means later rule actions can re-point ListRef.Val (e.g. when
 // a ternary opens after a prefix/suffix expr) and every rule holding the
@@ -291,8 +378,14 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	parenCloseTins := make(map[int]*Op)
 	ternaryByTin := make(map[int]*Op)
 	ternaryCloseByTin := make(map[int]*Op)
+	// Casts, by the opener of the group each is written with.
+	castByTin := make(map[int]*Op)
 
 	for _, op := range allOps {
+		if op.Cast {
+			castByTin[op.OTin] = op
+			continue
+		}
 		if op.Infix {
 			infixByTin[op.Tin] = op
 		}
@@ -335,11 +428,17 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 
 	// The paren operator a paren rule opens: the preval one when a value
 	// precedes the opener, which the val that pushed this rule's expr
-	// records as U["paren_preval"], and the group otherwise.
+	// records as U["paren_preval"], or when the paren is a postfix of the
+	// expression its expr extends (U["expr_postfix"]), and the group
+	// otherwise.
+	parenHasPreval := func(r *tabnas.Rule) bool {
+		return r.Parent != nil && r.Parent != tabnas.NoRule &&
+			(r.Parent.U["expr_postfix"] != nil ||
+				(r.Parent.Parent != nil && r.Parent.Parent != tabnas.NoRule &&
+					r.Parent.Parent.U["paren_preval"] == true))
+	}
 	parenOpFor := func(r *tabnas.Rule, tin int) *Op {
-		if r.Parent != nil && r.Parent != tabnas.NoRule &&
-			r.Parent.Parent != nil && r.Parent.Parent != tabnas.NoRule &&
-			r.Parent.Parent.U["paren_preval"] == true {
+		if parenHasPreval(r) {
 			return parenPrevalByTin[tin]
 		}
 		return parenPlainByTin[tin]
@@ -352,6 +451,128 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	hasSuffix := len(SUFFIX) > 0
 	hasParen := len(OP) > 0
 	hasTernary := len(TERN0) > 0
+
+	// --- The options of #105, every one off unless a table asks ----------
+	// (TS: the same helpers, by the same names.)
+
+	hasCast := len(castByTin) > 0
+
+	// Whether the paren this expr rule pushed closed the token of a cast: a
+	// group (no value before it) on a cast's opener and closer, holding a
+	// content the cast's Accept accepts.
+	castHere := func(r *tabnas.Rule) *Op {
+		child := r.Child
+		if child == nil || child == tabnas.NoRule || child.Name != "paren" ||
+			child.U["expr_paren_group"] != true {
+			return nil
+		}
+		group, _ := child.U["expr_paren_op"].(*Op)
+		if group == nil {
+			return nil
+		}
+		cast := castByTin[group.OTin]
+		if cast == nil || cast.Accept == nil || cast.CTin != group.CTin {
+			return nil
+		}
+		sl, ok := unwrapExpr(child.Node)
+		if !ok || len(sl) != 2 || !isOp(child.Node) || isUnfilled(sl[1]) {
+			return nil
+		}
+		if !cast.Accept(sl[1]) {
+			return nil
+		}
+		return cast
+	}
+
+	// A preval paren with a binding power, Left, binds like a suffix: to
+	// the value just before it only where it binds at least as tightly as
+	// the operator whose operand that value is, and otherwise to the
+	// expression that operator heads.
+	bound := func(op *Op) bool { return op != nil && op.Left != MinSafeInteger }
+	hasBound := false
+	for _, op := range parenPrevalByTin {
+		if bound(op) {
+			hasBound = true
+		}
+	}
+	postfixOpener := func(tin int) bool { return bound(parenPrevalByTin[tin]) }
+
+	// Whether a bound preval paren takes the value before it, compared as a
+	// suffix is with the operator it would drill into: the operator of the
+	// node whose slot the val's value is to fill (the Go rules hold the
+	// expression's root, not its attachment point). A prefix built into an
+	// enclosing tree (U["expr_inner"]) leaves the val holding that tree,
+	// not its own value, so the enclosing expression places the paren.
+	bindsHere := func(r *tabnas.Rule, op *Op) bool {
+		if !bound(op) {
+			return true
+		}
+		if r.Child != nil && r.Child != tabnas.NoRule && r.Child.U["expr_inner"] == true {
+			return false
+		}
+		parent := r.Parent
+		if parent == nil || parent == tabnas.NoRule || parent.Name != "expr" ||
+			!isExprOp(parent.Node) {
+			return true
+		}
+		encl := nextSlotOp(parent.Node)
+		return encl == nil || encl.Right <= op.Left
+	}
+
+	// Separators. A comma separates in a paren whose content is separated,
+	// and, once an infix operator on `,` is declared a separator, in lists
+	// and maps too: jsonic's comma, or the token an infix operator on `,`
+	// uses, which a host lexer may emit in its place. N["expr_sep"] marks
+	// a context that separates.
+	SEP := []int{tabnas.TinCA}
+	hasSeparator := false
+	for _, op := range allOps {
+		if op.Infix && op.Src == "," && op.Tin != tabnas.TinCA {
+			SEP = append(SEP, op.Tin)
+		}
+		if op.Separator {
+			hasSeparator = true
+		}
+	}
+	hasSeparated := false
+	for _, op := range allOps {
+		if op.Paren && op.Content.Separated {
+			hasSeparated = true
+		}
+	}
+	separating := hasSeparated || hasSeparator
+	isSep := func(tin int) bool {
+		for _, t := range SEP {
+			if t == tin {
+				return true
+			}
+		}
+		return false
+	}
+	separatedHere := func(r *tabnas.Rule) bool { return r.N["expr_sep"] > 0 }
+
+	hasRequired := false
+	for _, op := range allOps {
+		if op.Paren && op.Content.Required {
+			hasRequired = true
+		}
+	}
+
+	// Values side by side. A token that starts a value, where the one
+	// before has ended.
+	noJuxtapose := eopts.Juxtapose != nil && !*eopts.Juxtapose
+	inTins := func(tins []int, tin int) bool {
+		for _, t := range tins {
+			if t == tin {
+				return true
+			}
+		}
+		return false
+	}
+	startsValue := func(tin int) bool {
+		return inTins(j.TokenSet("VAL"), tin) || tin == tabnas.TinOB || tin == tabnas.TinOS ||
+			inTins(OP, tin) || inTins(PREFIX, tin)
+	}
 
 	// Check if any paren op has preval active.
 	hasPreval := false
@@ -420,6 +641,32 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 
 	// === VAL rule modifications ===
 	modifyRule("val", func(rs *tabnas.RuleSpec) {
+		// With juxtapose false, the base grammar's implicit list of values
+		// side by side is refused inside a paren group, where the paren
+		// rule allows implicits again, and after a value an expression
+		// made (its val pushed an expr rule: `-a b`): no alternate takes
+		// the second value, and the parse fails on it with `unexpected`.
+		// The alternate is replaced by a copy, so no other instance that
+		// shares it sees the condition.
+		if noJuxtapose {
+			alts := rs.CloseAlts()
+			for i, alt := range alts {
+				if alt == nil || !hasGroupTags(alt.G, "imp", "space", "jsonic") {
+					continue
+				}
+				wrapped := *alt
+				orig := alt.C
+				wrapped.C = func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+					if orig != nil && !orig(r, ctx) {
+						return false
+					}
+					return r.N["expr_paren"] < 1 &&
+						(r.Child == nil || r.Child == tabnas.NoRule || r.Child.Name != "expr")
+				}
+				alts[i] = &wrapped
+			}
+		}
+
 		// Prefix operator: backtrack and push to 'expr'.
 		if hasPrefix {
 			rs.PrependOpen(&tabnas.AltSpec{
@@ -445,14 +692,11 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					}
 					if len(pdef.Preval.Allow) > 0 {
 						val, _ := r.O0.ResolveVal(r, ctx).(string)
-						for _, a := range pdef.Preval.Allow {
-							if a == val {
-								return true
-							}
+						if !containsString(pdef.Preval.Allow, val) {
+							return false
 						}
-						return false
 					}
-					return true
+					return bindsHere(r, pdef)
 				},
 				U: map[string]interface{}{"paren_preval": true},
 				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
@@ -601,6 +845,23 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		// subsequent parens because the leading "value" is by then a
 		// produced node, not a token in the lex buffer.
 		// Examples: a[0][1], f(x)(y), f(x)[i], (1+2)(3).
+		//
+		// A bound preval paren that binds looser than the operator whose
+		// operand this value is: the value ends, and the expression that
+		// operator heads takes the paren as its postfix. Prepended first,
+		// so it follows the chain alternate, whose condition it negates.
+		if hasBound {
+			rs.PrependClose(&tabnas.AltSpec{
+				S: mkS(OP),
+				B: 1,
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+					pdef := parenPrevalByTin[r.C0.Tin]
+					return bound(pdef) && r.Node != nil && !tabnas.IsUndefined(r.Node) &&
+						!bindsHere(r, pdef)
+				},
+				G: "expr,paren,postfix",
+			})
+		}
 		if hasParen && hasPreval {
 			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(OP),
@@ -616,14 +877,11 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					}
 					if len(pdef.Preval.Allow) > 0 {
 						s, _ := r.Node.(string)
-						for _, a := range pdef.Preval.Allow {
-							if a == s {
-								return true
-							}
+						if !containsString(pdef.Preval.Allow, s) {
+							return false
 						}
-						return false
 					}
-					return true
+					return bindsHere(r, pdef)
 				},
 				U: map[string]interface{}{"paren_preval": true},
 				G: "expr,paren,preval,chain",
@@ -644,6 +902,20 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				G: "expr,no-comma-op-bail",
 			})
 		}
+
+		// A separator where the context separates (N["expr_sep"]): the
+		// value ends, and the rule that collects the terms takes the comma.
+		// Prepended last, so it is the first close alternate, as in TS.
+		if separating {
+			rs.PrependClose(&tabnas.AltSpec{
+				S: mkS(SEP),
+				B: 1,
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+					return separatedHere(r)
+				},
+				G: "expr,sep",
+			})
+		}
 	})
 
 	// === LIST rule modifications ===
@@ -656,8 +928,32 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				rn["expr_suffix"] = 0
 				rn["expr_paren"] = 0
 				rn["expr_ternary"] = 0
+
+				// A list separates on `,` once an infix operator on `,`
+				// gives way to separators, and otherwise leaves the comma
+				// to that operator.
+				if separating {
+					rn["expr_sep"] = 0
+					if hasSeparator {
+						rn["expr_sep"] = 1
+					}
+				}
 			}
 		})
+		// An implicit list of values side by side ends at a separator of
+		// the paren content it is a term of. Prepended before the paren
+		// close alternate, so it follows it, as in TS.
+		if separating {
+			rs.PrependClose(&tabnas.AltSpec{
+				S: mkS(SEP),
+				B: 1,
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+					return separatedHere(r) && r.Prev != nil && r.Prev != tabnas.NoRule &&
+						r.Prev.U["implist"] == true
+				},
+				G: "expr,sep",
+			})
+		}
 		if hasParen {
 			rs.PrependClose(&tabnas.AltSpec{
 				S: mkS(CP),
@@ -689,6 +985,14 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			rn["expr_suffix"] = 0
 			rn["expr_paren"] = 0
 			rn["expr_ternary"] = 0
+
+			// A map separates on `,` as a list does.
+			if separating {
+				rn["expr_sep"] = 0
+				if hasSeparator {
+					rn["expr_sep"] = 1
+				}
+			}
 		})
 		if hasParen {
 			rs.PrependClose(&tabnas.AltSpec{
@@ -754,12 +1058,88 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				}
 			})
 		}
+
+		// An implicit list of values side by side ends at a separator of
+		// the paren content it is a term of: the list ends with it.
+		// Prepended last, so it is the first close alternate, as in TS.
+		if separating {
+			rs.PrependClose(&tabnas.AltSpec{
+				S: mkS(SEP),
+				B: 1,
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+					if !separatedHere(r) || r.Parent == nil || r.Parent == tabnas.NoRule {
+						return false
+					}
+					prev := r.Parent.Prev
+					return prev != nil && prev != tabnas.NoRule && prev.U["implist"] == true
+				},
+				G: "expr,sep",
+			})
+		}
 	})
 
 	// === EXPR rule ===
 	exprSpec := &tabnas.RuleSpec{Name: "expr"}
 
 	exprOpen := make([]*tabnas.AltSpec, 0)
+
+	// A cast: the group just closed (the expr this one replaced holds it,
+	// [group, type]) heads a prefix expression, [cast, type, operand], whose
+	// operand follows. It takes no token: the group was the token.
+	if hasCast {
+		exprOpen = append(exprOpen, &tabnas.AltSpec{
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return r.Prev != nil && r.Prev != tabnas.NoRule && r.Prev.U["expr_cast_next"] == true
+			},
+			N: map[string]int{"expr": 1, "expr_prefix": 1, "expr_suffix": 0, "dlist": 1, "dmap": 1},
+			P: "val",
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+				group, _ := unwrapExpr(r.Prev.Node)
+				gop, _ := group[0].(*Op)
+				box := makeExpr(castByTin[gop.OTin], group[1])
+				r.Node = box
+				// The val that pushed the group's expr holds the cast, and
+				// reads its node from that expr, its child, when it closes:
+				// that expr holds the cast too.
+				setParentNode(r, box)
+				r.Prev.Node = box
+			},
+			G: "expr,cast",
+		})
+	}
+
+	// A bound preval paren after an expression: a postfix operator that
+	// takes the expression, or as much of it as it binds tighter than, as
+	// its first term, placed as a suffix is (prattifyPostfix). The paren
+	// then parses the content into the same node. This rule holds the
+	// expression's root, as every expr rule here does, and U["expr_postfix"]
+	// the node the paren heads.
+	if hasBound {
+		exprOpen = append(exprOpen, &tabnas.AltSpec{
+			S: mkS(OP),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return r.Prev != nil && r.Prev != tabnas.NoRule && r.Prev.U["expr_postfix_next"] == true
+			},
+			N: map[string]int{"expr": 1, "expr_prefix": 0, "dlist": 1, "dmap": 1},
+			P: "paren",
+			B: 1,
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+				op := parenPrevalByTin[r.O0.Tin]
+				prev := r.Prev
+				if isOp(prev.Node) {
+					box := asListRef(prev.Node)
+					prev.Node = box
+					r.EnsureU()["expr_postfix"] = prattifyPostfix(box, op)
+					r.Node = box
+				} else {
+					box := prior(r, prev, op)
+					r.EnsureU()["expr_postfix"] = box
+					r.Node = box
+				}
+			},
+			G: "expr,paren,postfix",
+		})
+	}
 
 	// Paren open inside expression: push to 'paren' rule (not 'val').
 	// The 'paren' rule consumes '(' and pushes to 'val', breaking the
@@ -838,7 +1218,16 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 						root = out
 					}
 					r.Node = root
-					r.Parent = prev
+					if prev.U["expr_postfix"] != nil && parent != nil && parent != tabnas.NoRule {
+						// After a postfix paren that took the whole
+						// expression, the rule holding the root is the
+						// parent this rule inherited (the first term's val),
+						// which a list, a map or a paren reads the value
+						// from: the new root goes there.
+						parent.Node = root
+					} else {
+						r.Parent = prev
+					}
 					prev.Node = root
 				} else {
 					r.Node = prior(r, prev, op)
@@ -909,11 +1298,31 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 	// expr.Close alternates.
 	exprClose := make([]*tabnas.AltSpec, 0)
 
-	// After paren child (paren rule completed).
+	// A group the table's cast accepts: the expression goes on as a cast
+	// whose operand follows (the open alternate above), so this close keeps
+	// N["expr"] and nothing evaluates the group yet. Inside a list, a map
+	// or a paren, N["expr"] is zero by descent, and the after-close would
+	// evaluate the group.
+	if hasCast {
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return castHere(r) != nil
+			},
+			N: map[string]int{"expr": 1},
+			R: "expr",
+			U: map[string]interface{}{"expr_cast_next": true},
+			G: "expr,cast",
+		})
+	}
+
+	// After paren child (paren rule completed). A postfix paren's
+	// expression goes on after the paren, as a suffix's does, so it takes
+	// the alternates below.
 	if hasParen {
 		exprClose = append(exprClose, &tabnas.AltSpec{
 			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-				return r.Child != nil && r.Child != tabnas.NoRule && r.Child.Name == "paren"
+				return r.Child != nil && r.Child != tabnas.NoRule && r.Child.Name == "paren" &&
+					r.U["expr_postfix"] == nil
 			},
 			N: map[string]int{"expr": 0},
 			G: "expr,paren,end",
@@ -932,6 +1341,20 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			B: 1,
 			N: map[string]int{"expr": 0},
 			G: "expr,no-comma-op-bail",
+		})
+	}
+
+	// A separator where the context separates: the expression ends, and
+	// the rule that collects the terms takes the comma.
+	if separating {
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS(SEP),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return separatedHere(r)
+			},
+			B: 1,
+			N: map[string]int{"expr": 0},
+			G: "expr,sep",
 		})
 	}
 
@@ -985,6 +1408,31 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		})
 	}
 
+	// A bound preval paren after this expression: a postfix that the next
+	// expr rule places, as the suffix alternate above does. After a prefix
+	// expression the prefix completes first, as for a suffix, and the paren
+	// is left to the expression the prefix belongs to.
+	if hasBound {
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS(OP),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return postfixOpener(r.C0.Tin) && r.N["expr_prefix"] < 1
+			},
+			B: 1,
+			R: "expr",
+			U: map[string]interface{}{"expr_postfix_next": true},
+			G: "expr,paren,postfix",
+		})
+		exprClose = append(exprClose, &tabnas.AltSpec{
+			S: mkS(OP),
+			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+				return postfixOpener(r.C0.Tin) && r.N["expr_prefix"] > 0
+			},
+			B: 1,
+			G: "expr,paren,postfix,prefix-end",
+		})
+	}
+
 	// Paren close inside expression.
 	if hasParen {
 		exprClose = append(exprClose, &tabnas.AltSpec{
@@ -1031,11 +1479,12 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		G: "expr,comma,list,top",
 	})
 
-	// Implicit list at top level (space).
+	// Implicit list at top level (space), unless values side by side are
+	// refused.
 	exprClose = append(exprClose, &tabnas.AltSpec{
 		S: mkS(valTins),
 		C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-			return r.D <= 0
+			return r.D <= 0 && !noJuxtapose
 		},
 		N: map[string]int{"expr": 0},
 		B: 1,
@@ -1122,7 +1571,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(valTins),
 			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-				return isFirstImplicitInParen(r) && r.N["expr_suffix"] < 1
+				return isFirstImplicitInParen(r) && r.N["expr_suffix"] < 1 && !noJuxtapose
 			},
 			N: map[string]int{"expr": 0, "expr_prefix": 0, "expr_suffix": 0},
 			B: 1,
@@ -1143,10 +1592,12 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		G: "expr,list,imp,comma",
 	})
 
-	// Implicit list (space, not top).
+	// Implicit list (space, not top), unless values side by side are
+	// refused and a value is next.
 	exprClose = append(exprClose, &tabnas.AltSpec{
 		C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-			return r.N["pk"] < 1 && r.N["expr_suffix"] < 1
+			return r.N["pk"] < 1 && r.N["expr_suffix"] < 1 &&
+				!(noJuxtapose && startsValue(ctx.T0.Tin))
 		},
 		N: map[string]int{"expr": 0},
 		G: "expr,list,imp,space",
@@ -1239,6 +1690,11 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 
 				out := evaluation(parent, ctx, parent.Node, eopts.Evaluate)
 				parent.Node = out
+				// A cast took over its group's expr rule, which the val that
+				// pushed it reads its node from when it closes.
+				if r.Prev != nil && r.Prev != tabnas.NoRule && r.Prev.U["expr_cast_next"] == true {
+					r.Prev.Node = out
+				}
 				// Also write the evaluated result onto this expr rule's own
 				// node. When expr was PUSHED from a still-open value val (the
 				// prefix/paren/suffix forms `-1`, `(1+2)`, `(2+1)!`), that
@@ -1274,10 +1730,38 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		openParen := func(r *tabnas.Rule, ctx *tabnas.Context) {
 			pop := parenOpFor(r, r.O0.Tin)
 			r.EnsureU()["expr_paren_op"] = pop
+			// A group, opened with no value before it, which a cast may take
+			// as its token.
+			r.U["expr_paren_group"] = !parenHasPreval(r)
+			// The content separates on commas only in a paren whose content
+			// is separated: a group inside a call takes the comma operator
+			// again.
+			if separating {
+				r.EnsureN()["expr_sep"] = 0
+				if pop.Content.Separated {
+					r.N["expr_sep"] = 1
+				}
+			}
 			pd := "expr_paren_depth_" + pop.Name
 			r.EnsureU()[pd] = 1
 			r.EnsureN()[pd] = 1
 			r.Node = tabnas.Undefined
+		}
+
+		// A paren whose content is required may not be empty: `()` is
+		// refused at its closer, where a content was due.
+		if hasRequired {
+			parenSpec.AddOpen(&tabnas.AltSpec{
+				S: [][]int{OP, CP},
+				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+					pop := parenOpFor(r, r.O0.Tin)
+					return pop != nil && pop.CTin == r.O1.Tin && pop.Content.Required
+				},
+				E: func(r *tabnas.Rule, ctx *tabnas.Context) *tabnas.Token {
+					return r.O1
+				},
+				G: "expr,paren,empty,required",
+			})
 		}
 
 		parenSpec.AddOpen([]*tabnas.AltSpec{
@@ -1307,6 +1791,44 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			},
 		}...)
 
+		// A separator in a separated content: the term before it is done,
+		// and the next one follows. The loop is this rule's own close, so a
+		// long argument list adds no rule depth. A term that is empty
+		// (`f(,a)`, `f(a,,b)`) is refused at the separator after it.
+		separatedParen := func(r *tabnas.Rule) bool {
+			pop, _ := r.U["expr_paren_op"].(*Op)
+			return pop != nil && pop.Content.Separated
+		}
+		if separating {
+			parenSpec.AddClose([]*tabnas.AltSpec{
+				{
+					S: mkS(SEP),
+					C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+						return separatedParen(r) && tabnas.IsUndefined(r.Node)
+					},
+					E: func(r *tabnas.Rule, ctx *tabnas.Context) *tabnas.Token {
+						return r.C0
+					},
+					G: "expr,paren,sep,empty",
+				},
+				{
+					S: mkS(SEP),
+					C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+						return separatedParen(r)
+					},
+					P: "val",
+					N: map[string]int{"expr": 0, "expr_prefix": 0, "expr_suffix": 0},
+					A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+						items, _ := r.U["expr_items"].([]interface{})
+						r.U["expr_items"] = append(items, r.Node)
+						r.U["expr_paren_more"] = true
+						r.Node = tabnas.Undefined
+					},
+					G: "expr,paren,sep",
+				},
+			}...)
+		}
+
 		parenSpec.AddClose([]*tabnas.AltSpec{
 			{
 				S: mkS(CP),
@@ -1326,6 +1848,24 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 
 					val := r.Node
 
+					// The content's terms: the one term, or each term of a
+					// separated content, the earlier ones collected at their
+					// separators.
+					items, _ := r.U["expr_items"].([]interface{})
+					terms := append([]interface{}{}, items...)
+					if !tabnas.IsUndefined(val) {
+						terms = append(terms, val)
+					}
+
+					// A postfix paren extends the node its expr rule placed
+					// in the tree, [op, target], in place.
+					if postfix, ok := r.Parent.U["expr_postfix"].(*tabnas.ListRef); ok && postfix != nil {
+						postfix.Val[0] = pop
+						postfix.Val = append(postfix.Val, terms...)
+						r.Node = postfix
+						return
+					}
+
 					// Build paren expression node as a *ListRef so it shares
 					// the same shared-mutation contract as other op-arrays
 					// (e.g., the chain-preval case where a chained paren
@@ -1340,9 +1880,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 						resultVal = append(resultVal, r.Parent.Parent.Node)
 					}
 
-					if !tabnas.IsUndefined(val) {
-						resultVal = append(resultVal, val)
-					}
+					resultVal = append(resultVal, terms...)
 
 					r.Node = &tabnas.ListRef{Val: resultVal, Meta: map[string]any{"expr": true}}
 				},
@@ -1373,6 +1911,18 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		})
 
 		parenSpec.AddAC(func(r *tabnas.Rule, ctx *tabnas.Context) {
+			// A separator's pass goes on to the next term: the paren is not
+			// done.
+			if r.U["expr_paren_more"] == true {
+				r.U["expr_paren_more"] = false
+				return
+			}
+			// A postfix paren extended the node of the expression it applies
+			// to, in place, and its expr rule holds the expression's root,
+			// which stays.
+			if r.Parent.U["expr_postfix"] != nil {
+				return
+			}
 			// Propagate paren result to parent.
 			r.Parent.Node = r.Node
 			if r.Parent.Parent != nil && r.Parent.Parent != tabnas.NoRule {
@@ -1528,11 +2078,13 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				G: "expr,ternary,sep2",
 			},
 
-			// Implicit list after ternary (comma): 1?2:3,b → [[?,1,2,3],"b"]
+			// Implicit list after ternary (comma): 1?2:3,b → [[?,1,2,3],"b"].
+			// Not at a separator of a separated content, which ends the
+			// ternary as one of that content's terms.
 			{
 				S: mkS([]int{tabnas.TinCA}),
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-					return implicitTernaryCond(r)
+					return implicitTernaryCond(r) && !separatedHere(r)
 				},
 				R: "elem",
 				A: implicitTernaryAction,
@@ -1550,10 +2102,14 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				G: "expr,ternary,paren,close",
 			},
 
-			// Implicit list after ternary (space): 1?2:3 b → [[?,1,2,3],"b"]
+			// Implicit list after ternary (space): 1?2:3 b → [[?,1,2,3],"b"].
+			// Neither at a separator of a separated content, nor, with
+			// juxtapose false, at a value beside the ternary.
 			{
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-					return implicitTernaryCond(r) && ctx.T0.Tin != tabnas.TinZZ
+					return implicitTernaryCond(r) && ctx.T0.Tin != tabnas.TinZZ &&
+						!(separatedHere(r) && isSep(ctx.T0.Tin)) &&
+						!(noJuxtapose && startsValue(ctx.T0.Tin))
 				},
 				R: "elem",
 				A: implicitTernaryAction,
@@ -1825,6 +2381,67 @@ func prattifySuffix(node interface{}, op *Op) *tabnas.ListRef {
 	return box
 }
 
+// prattifyPostfix places a bound preval paren after an expression, as
+// prattifySuffix places a suffix: from the root, drilling into the last term
+// while the operator heading it binds no tighter than the paren, and
+// wrapping what is left (`a.b[1]` wraps `a.b`, `x*a.b[1]` wraps the `a.b`
+// inside the product). The root box is mutated in place, so every rule
+// holding it sees the paren. Returns the box the paren heads, [op, target],
+// which the paren's content then extends.
+func prattifyPostfix(node interface{}, op *Op) *tabnas.ListRef {
+	box := asListRef(node)
+	if box == nil || len(box.Val) == 0 {
+		return makeExpr(op, node)
+	}
+	exprOp, isOpV := box.Val[0].(*Op)
+	if !isOpV {
+		return makeExpr(op, node)
+	}
+	if !exprOp.Paren && !exprOp.Ternary && !exprOp.Suffix && exprOp.Right <= op.Left {
+		end := exprOp.Terms
+		if end < len(box.Val) {
+			lastTerm := box.Val[end]
+			if subBox := asListRef(lastTerm); subBox != nil && len(subBox.Val) > 0 {
+				if subOp, isSub := subBox.Val[0].(*Op); isSub && !subOp.Paren &&
+					!subOp.Ternary && (subOp.Prefix || subOp.Infix) && subOp.Right < op.Left {
+					box.Val[end] = subBox
+					return prattifyPostfix(subBox, op)
+				}
+			}
+			inner := makeExpr(op, lastTerm)
+			box.Val[end] = inner
+			return inner
+		}
+	}
+	wrapExpr(box, op)
+	return box
+}
+
+// containsString reports whether list holds s.
+func containsString(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+// hasGroupTags reports whether an alternate's group tags, a comma list,
+// hold every one of tags.
+func hasGroupTags(g string, tags ...string) bool {
+	have := map[string]bool{}
+	for _, tag := range strings.Split(g, ",") {
+		have[strings.TrimSpace(tag)] = true
+	}
+	for _, tag := range tags {
+		if !have[tag] {
+			return false
+		}
+	}
+	return true
+}
+
 // cleanExpr removes _unfilled sentinels from an expression tree, returning
 // a plain []interface{}. Used at the boundary where a partially-built
 // expression escapes into an enclosing list/elem (and so loses its slot
@@ -1981,10 +2598,25 @@ func resolveOptions(opts map[string]interface{}) *ExprOptions {
 					if v, ok := defMap["dynamic"].(bool); ok {
 						od.Dynamic = v
 					}
+					if v, ok := defMap["content"]; ok {
+						od.Content = v
+					}
+					if v, ok := defMap["separator"].(bool); ok {
+						od.Separator = v
+					}
+					if v, ok := defMap["cast"].(bool); ok {
+						od.Cast = v
+					}
+					if v, ok := defMap["accept"].(func(interface{}) bool); ok {
+						od.Accept = v
+					}
 					eopts.Op[name] = od
 				}
 			}
 		}
+	}
+	if v, ok := opts["juxtapose"].(bool); ok {
+		eopts.Juxtapose = &v
 	}
 	if evalRaw, ok := opts["evaluate"]; ok {
 		if evalFn, ok := evalRaw.(func(*tabnas.Rule, *tabnas.Context, *Op, []interface{}) interface{}); ok {
@@ -2175,8 +2807,9 @@ func makeAllOps(j *tabnas.Tabnas, eopts *ExprOptions) []*Op {
 			Right:  bindingPower(def.Right, MaxSafeInteger),
 			Prefix: def.Prefix, Suffix: def.Suffix, Infix: def.Infix,
 			Ternary: def.Ternary, Paren: def.Paren, Use: def.Use,
+			Separator: def.Infix && def.Separator,
 		}
-		if def.Infix {
+		if def.Infix || (def.Cast && !def.Paren && !def.Ternary) {
 			op.Terms = 2
 		} else if def.Ternary {
 			op.Terms = 3
@@ -2192,6 +2825,7 @@ func makeAllOps(j *tabnas.Tabnas, eopts *ExprOptions) []*Op {
 			op.CTkn = "#E" + def.CSrc
 			op.OTin = getOrCreateTin(op.OTkn, op.OSrc)
 			op.CTin = getOrCreateTin(op.CTkn, op.CSrc)
+			op.Content = contentDef(def.Content)
 			if def.Preval != nil {
 				switch pv := def.Preval.(type) {
 				case bool:
@@ -2220,6 +2854,28 @@ func makeAllOps(j *tabnas.Tabnas, eopts *ExprOptions) []*Op {
 					op.Preval = pv
 				}
 			}
+		} else if def.Cast {
+			// A prefix, whose first term, the group's content, is fixed when
+			// it opens: prattify reads it as one.
+			op.Name = name
+			if !strings.HasSuffix(name, "-cast") {
+				op.Name = name + "-cast"
+			}
+			op.OSrc = def.OSrc
+			op.CSrc = def.CSrc
+			if src, ok := def.Src.(string); ok {
+				op.Src = src
+			} else {
+				op.Src = def.OSrc + def.CSrc
+			}
+			op.OTkn = "#E" + def.OSrc
+			op.CTkn = "#E" + def.CSrc
+			op.OTin = getOrCreateTin(op.OTkn, op.OSrc)
+			op.CTin = getOrCreateTin(op.CTkn, op.CSrc)
+			op.Prefix = true
+			op.Cast = true
+			op.Left = MinSafeInteger
+			op.Accept = def.Accept
 		} else if def.Ternary {
 			op.Name = name + "-ternary"
 			if src, ok := def.Src.([]interface{}); ok && len(src) >= 2 {
@@ -2258,6 +2914,25 @@ func makeAllOps(j *tabnas.Tabnas, eopts *ExprOptions) []*Op {
 		ops = append(ops, op)
 	}
 	return ops
+}
+
+// contentDef reads a paren operator's "content": a ContentDef, or a map
+// with "required" and "separated".
+func contentDef(raw interface{}) ContentDef {
+	switch v := raw.(type) {
+	case ContentDef:
+		return v
+	case *ContentDef:
+		if v != nil {
+			return *v
+		}
+	case map[string]interface{}:
+		out := ContentDef{}
+		out.Required, _ = v["required"].(bool)
+		out.Separated, _ = v["separated"].(bool)
+		return out
+	}
+	return ContentDef{}
 }
 
 // Prattify exposes the core Pratt algorithm for unit testing, mirroring
