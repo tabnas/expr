@@ -61,6 +61,19 @@ value the way `JSON.stringify` does and compares the text, and
 `go/expr_test.go` does the same with `SimplifyOrdered`. So write a new
 cell from the TypeScript output rather than by hand.
 
+## `passes/`: the groups of the rule passes
+
+`passes/groups.tsv` holds, for each input, the groups of expr's
+alternates in the rule passes the parse makes, which a transducer part
+reads (tabnas/c's part places each operator by them): each pass whose
+alternate is one expr declares (its groups hold `expr`), probes left out,
+as `<state> <rule> <groups>`, the groups sorted, each once. The parser is
+the small C of tabnas/c that `spec/options-values.tsv` reads. Write a row
+from the TypeScript output. It is not a `spec/` file, since its cell is
+not the parsed value: `passes` in `ts/test/spec.test.ts`,
+`TestPassGroups` in `go/expr_test.go` and `pass_groups` in
+`rs/tests/parity_test.rs` run it.
+
 ## Rules
 
 - Prefer adding a fixture here over a one-off in-language assertion when a

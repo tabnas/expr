@@ -74,8 +74,10 @@ Consequences to keep in mind:
   coalescing asks whether a node is a container, and the canonical
   expression node, a JavaScript array, is one. A string handle would be
   read as a scalar and `@val-bc` would keep a stale parent-seeded node
-  where TypeScript resolves the token. That is the defect the Go port
-  works around with a `block-pair` alternate; this port does not need one.
+  where TypeScript resolves the token. The Go port once read a ternary's
+  middle term with an alternate of its own (`block-pair`) that cleared
+  that node; since 0.6.3 it reads the term with the base grammar's value
+  alternate, as this port and TypeScript do.
 - **The arena is released at the end of the outermost parse** this crate
   drives, and at the START of the next parse for a caller driving the
   engine directly. So a result read straight off `Tabnas::parse` must go

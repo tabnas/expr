@@ -693,6 +693,13 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		}
 	}
 
+	// copied holds the copies a modifier puts in place of the base
+	// grammar's own alternates (to give one a condition without changing
+	// it for another instance that shares it): they stay the base
+	// grammar's, so they are not tagged, as TS's tagExpr leaves the
+	// alternates it changes in place.
+	copied := map[*tabnas.AltSpec]bool{}
+
 	// modifyRule wraps j.Rule(): snapshot the existing alt pointers on
 	// rs.Open/rs.Close, run the modifier, then tag only the alts the
 	// modifier added (by identity) with "expr".
@@ -708,12 +715,12 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			}
 			fn(rs)
 			for _, a := range rs.OpenAlts() {
-				if !preOpen[a] {
+				if !preOpen[a] && !copied[a] {
 					appendExprTag(a)
 				}
 			}
 			for _, a := range rs.CloseAlts() {
-				if !preClose[a] {
+				if !preClose[a] && !copied[a] {
 					appendExprTag(a)
 				}
 			}
@@ -743,7 +750,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				E: func(r *tabnas.Rule, ctx *tabnas.Context) *tabnas.Token {
 					return r.C0
 				},
-				G: "expr,juxtaposed",
+				G: "expr,expr-juxtaposed",
 			})
 		}
 
@@ -770,6 +777,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 						(r.Child == nil || r.Child == tabnas.NoRule || r.Child.Name != "expr")
 				}
 				alts[i] = &wrapped
+				copied[&wrapped] = true
 			}
 		}
 
@@ -780,7 +788,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				B: 1,
 				P: "expr",
 				N: map[string]int{"expr_prefix": 1, "expr_suffix": 0},
-				G: "expr,prefix",
+				G: "expr,expr-prefix",
 			})
 		}
 
@@ -808,36 +816,32 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
 					r.Node = r.O0.ResolveVal(r, ctx)
 				},
-				G: "expr,paren,preval",
+				G: "expr,expr-paren,expr-paren-preval",
 			})
 		}
 
-		// Block pair detection when inside ternary and the colon
-		// is a ternary close token (e.g., `1?2:3` — the `2:` should
-		// NOT be treated as a key-value pair).
-		if hasTernary {
-			rs.PrependOpen(&tabnas.AltSpec{
-				S: [][]int{j.TokenSet("VAL"), TERN1},
-				B: 1,
-				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
-					return r.N["expr_ternary"] > 0
-				},
-				// Clear the parent-seeded node (mirrors json's #VAL @reset$).
-				// This alt consumes the value token (r.O0, e.g. the `2` of
-				// `2:3`) without going through json's #VAL alt, so its
-				// @reset$ never runs. The engine seeds a pushed val from its
-				// parent (here the ternary's *ListRef op-array). Because
-				// @val-bc's primitive-vs-container test treats the plugin's
-				// *ListRef box as a primitive (it is not a recognised
-				// container type), the stale box would survive coalescing
-				// instead of the resolved scalar — and the ternary then-slot
-				// would fill with the ternary node itself (a self-cycle).
-				// Resetting forces @val-bc to resolve the matched token.
-				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-					r.Node = tabnas.Undefined
-				},
-				G: "expr,ternary,block-pair",
-			})
+		// No implicit pair inside a ternary whose second token is the
+		// colon (`1?2:3`: the `2:` is no key): the base grammar's pair
+		// alternates are held off there, as in TS, and the value is read
+		// by the base grammar's own alternate. Each is replaced by a copy,
+		// so no other instance that shares it sees the condition.
+		if hasTernary && containsInt(TERN1, tabnas.TinCL) {
+			alts := rs.OpenAlts()
+			for i, alt := range alts {
+				if alt == nil || !hasGroupTags(alt.G, "pair") {
+					continue
+				}
+				wrapped := *alt
+				orig := alt.C
+				wrapped.C = func(r *tabnas.Rule, ctx *tabnas.Context) bool {
+					if orig != nil && !orig(r, ctx) {
+						return false
+					}
+					return r.N["expr_ternary"] < 1
+				}
+				alts[i] = &wrapped
+				copied[&wrapped] = true
+			}
 		}
 
 		// Paren open: backtrack and push to 'expr'.
@@ -849,7 +853,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return parenPlainByTin[r.O0.Tin] != nil
 				},
-				G: "expr,paren",
+				G: "expr,expr-paren",
 			})
 		}
 
@@ -865,7 +869,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					}
 					return ""
 				},
-				G: "expr,infix",
+				G: "expr,expr-infix",
 			})
 		}
 
@@ -881,7 +885,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					}
 					return ""
 				},
-				G: "expr,suffix",
+				G: "expr,expr-suffix",
 			})
 		}
 
@@ -894,7 +898,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					return r.N["expr"] < 1
 				},
 				R: "ternary",
-				G: "expr,ternary",
+				G: "expr,expr-ternary",
 			})
 
 			// Ternary close: backtrack so ternary rule can consume it.
@@ -904,7 +908,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["expr_ternary"] > 0
 				},
-				G: "expr,ternary,close",
+				G: "expr,expr-ternary",
 			})
 		}
 
@@ -922,7 +926,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					}
 					return ""
 				},
-				G: "expr,ternary,ternary-bound",
+				G: "expr,expr-ternary,expr-ternary-bound",
 			})
 		}
 
@@ -934,7 +938,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["expr_paren"] > 0
 				},
-				G: "expr,paren-close",
+				G: "expr,expr-paren",
 			})
 		}
 
@@ -952,7 +956,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return (r.D == 1 && (r.N["expr"] >= 1 || r.N["expr_ternary"] >= 1)) ||
 					(r.N["expr_ternary"] >= 1 && r.N["expr_paren"] >= 1)
 			},
-			G: "expr,imp,comma",
+			G: "expr,list,val,imp,comma,top",
 		})
 
 		// Prevent implicit list inside expression (space).
@@ -964,7 +968,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return (r.D == 1 && (r.N["expr"] >= 1 || r.N["expr_ternary"] >= 1)) ||
 					(r.N["expr_ternary"] >= 1 && r.N["expr_paren"] >= 1)
 			},
-			G: "expr,imp,space",
+			G: "expr,list,val,imp,space,top",
 		})
 
 		// Chain-time preval: when val has produced a node and the next
@@ -989,7 +993,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					return bound(pdef) && r.Node != nil && !tabnas.IsUndefined(r.Node) &&
 						!bindsHere(r, pdef)
 				},
-				G: "expr,paren,postfix",
+				G: "expr,expr-paren,expr-postfix",
 			})
 		}
 		if hasParen && hasPreval {
@@ -1014,7 +1018,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					return bindsHere(r, pdef)
 				},
 				U: map[string]interface{}{"paren_preval": true},
-				G: "expr,paren,preval,chain",
+				G: "expr,expr-paren,expr-paren-preval-chain",
 			})
 		}
 
@@ -1043,7 +1047,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return separatedHere(r)
 				},
-				G: "expr,sep",
+				G: "expr,expr-sep",
 			})
 		}
 	})
@@ -1081,7 +1085,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					return separatedHere(r) && r.Prev != nil && r.Prev != tabnas.NoRule &&
 						r.Prev.U["implist"] == true
 				},
-				G: "expr,sep",
+				G: "expr,expr-sep",
 			})
 		}
 		if hasParen {
@@ -1093,7 +1097,6 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					}
 					return 1
 				},
-				G: "expr,paren,list",
 			})
 			// Propagate implicit list node to enclosing paren.
 			// Go slice append may reallocate, making paren.Child.Node
@@ -1133,7 +1136,6 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					}
 					return 1
 				},
-				G: "expr,paren,map",
 			})
 		}
 	})
@@ -1147,7 +1149,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					return r.N["expr_paren"] > 0 || r.N["pk"] > 0
 				},
-				G: "expr,paren,pair",
+				G: "expr,expr-paren,imp,map",
 			})
 		}
 	})
@@ -1163,14 +1165,14 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 						return r.N["expr_paren"] > 0
 					},
-					G: "expr,paren,elem,close",
+					G: "expr,expr-paren,imp,close,list",
 				},
 				// Following elem is a paren expression.
 				{
 					S: mkS(OP),
 					B: 1,
 					R: "elem",
-					G: "expr,paren,elem,open",
+					G: "expr,expr-paren,imp,open,list",
 				},
 			}...)
 			// Propagate elem node to enclosing paren after close.
@@ -1203,7 +1205,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					prev := r.Parent.Prev
 					return prev != nil && prev != tabnas.NoRule && prev.U["implist"] == true
 				},
-				G: "expr,sep",
+				G: "expr,expr-sep",
 			})
 		}
 	})
@@ -1235,7 +1237,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				setParentNode(r, box)
 				r.Prev.Node = box
 			},
-			G: "expr,cast",
+			G: "expr,expr-cast",
 		})
 	}
 
@@ -1268,7 +1270,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					r.Node = box
 				}
 			},
-			G: "expr,paren,postfix",
+			G: "expr,expr-paren,expr-postfix",
 		})
 	}
 
@@ -1280,7 +1282,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			S: mkS(OP),
 			P: "paren",
 			B: 1,
-			G: "expr,paren,open",
+			G: "expr,expr-paren,expr-start",
 		})
 	}
 
@@ -1314,7 +1316,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					r.EnsureU()["expr_slot"] = r.Node
 				}
 			},
-			G: "expr,prefix",
+			G: "expr,expr-prefix",
 		})
 	}
 
@@ -1367,7 +1369,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					r.EnsureU()["expr_slot"] = r.Node
 				}
 			},
-			G: "expr,infix",
+			G: "expr,expr-infix",
 		})
 	}
 
@@ -1427,7 +1429,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				n["expr_ternary"] = 1
 				r.Node = tabnas.Undefined
 			},
-			G: "expr,ternary,ternary-bound",
+			G: "expr,expr-ternary,expr-ternary-bound",
 		})
 	}
 
@@ -1453,7 +1455,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					r.Node = prior(r, prev, op)
 				}
 			},
-			G: "expr,suffix",
+			G: "expr,expr-suffix",
 		})
 	}
 
@@ -1535,7 +1537,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				n["expr_suffix"] = 0
 				r.U["expr_tern_step"] = 2
 			},
-			G: "expr,ternary,ternary-bound",
+			G: "expr,expr-ternary,expr-ternary-bound",
 		})
 		exprClose = append(exprClose, &tabnas.AltSpec{
 			C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
@@ -1544,7 +1546,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			E: func(r *tabnas.Rule, ctx *tabnas.Context) *tabnas.Token {
 				return ctx.T0
 			},
-			G: "expr,ternary,ternary-bound,unfinished",
+			G: "expr,expr-ternary,expr-ternary-bound,unfinished",
 		})
 	}
 
@@ -1561,7 +1563,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			N: map[string]int{"expr": 1},
 			R: "expr",
 			U: map[string]interface{}{"expr_cast_next": true},
-			G: "expr,cast",
+			G: "expr,expr-cast",
 		})
 	}
 
@@ -1575,7 +1577,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					r.U["expr_postfix"] == nil
 			},
 			N: map[string]int{"expr": 0},
-			G: "expr,paren,end",
+			G: "expr,expr-end,expr-paren-end",
 		})
 	}
 
@@ -1604,7 +1606,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			},
 			B: 1,
 			N: map[string]int{"expr": 0},
-			G: "expr,sep",
+			G: "expr,expr-sep",
 		})
 	}
 
@@ -1617,7 +1619,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			},
 			B: 1,
 			R: "expr",
-			G: "expr,infix,more",
+			G: "expr,expr-infix,expr-prefix",
 		})
 		// Infix seen during prefix: just end and backtrack.
 		exprClose = append(exprClose, &tabnas.AltSpec{
@@ -1626,7 +1628,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return r.N["expr_prefix"] > 0
 			},
 			B: 1,
-			G: "expr,infix,prefix-end",
+			G: "expr,expr-infix",
 		})
 	}
 
@@ -1639,10 +1641,10 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			},
 			B: 1,
 			R: "expr",
-			G: "expr,suffix,more",
+			G: "expr,expr-suffix,expr-prefix",
 		})
 		// A suffix after a prefix expression: complete the prefix first,
-		// as the infix prefix-end alternate does, and leave the suffix to
+		// as the infix alternate after a prefix does, and leave the suffix to
 		// the expression the prefix belongs to, which drills it into the
 		// prefix (`-1!` is `-(1!)`). The expression goes on, so this close
 		// keeps n.expr, and nothing evaluates it here: the after-close
@@ -1654,7 +1656,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return r.N["expr_prefix"] > 0
 			},
 			B: 1,
-			G: "expr,suffix,prefix-end",
+			G: "expr,expr-suffix,expr-prefix",
 		})
 	}
 
@@ -1671,7 +1673,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			B: 1,
 			R: "expr",
 			U: map[string]interface{}{"expr_postfix_next": true},
-			G: "expr,paren,postfix",
+			G: "expr,expr-paren,expr-postfix",
 		})
 		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(OP),
@@ -1679,7 +1681,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return postfixOpener(r.C0.Tin) && r.N["expr_prefix"] > 0
 			},
 			B: 1,
-			G: "expr,paren,postfix,prefix-end",
+			G: "expr,expr-paren,expr-postfix,expr-prefix",
 		})
 	}
 
@@ -1691,7 +1693,6 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return r.N["expr_paren"] > 0
 			},
 			B: 1,
-			G: "expr,paren,close",
 		})
 	}
 
@@ -1705,7 +1706,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			},
 			B: 1,
 			R: "expr",
-			G: "expr,ternary,ternary-bound",
+			G: "expr,expr-ternary,expr-ternary-bound",
 		})
 	}
 
@@ -1718,7 +1719,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			},
 			B: 1,
 			R: "ternary",
-			G: "expr,ternary",
+			G: "expr,expr-ternary",
 		})
 
 		// A ternary after a prefix expression: complete the prefix first,
@@ -1732,7 +1733,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return r.N["expr_prefix"] > 0
 			},
 			B: 1,
-			G: "expr,ternary,prefix-end",
+			G: "expr,expr-ternary,expr-prefix",
 		})
 
 		// The second token of a ternary whose middle term this expression
@@ -1743,7 +1744,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				return r.N["expr_ternary"] > 0
 			},
 			B: 1,
-			G: "expr,ternary,close",
+			G: "expr,expr-ternary",
 		})
 	}
 
@@ -1855,7 +1856,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			N: map[string]int{"expr": 0, "expr_prefix": 0, "expr_suffix": 0},
 			R: "elem",
 			A: implicitListAction,
-			G: "expr,paren,imp,comma",
+			G: "expr,expr-paren,imp,comma",
 		})
 		exprClose = append(exprClose, &tabnas.AltSpec{
 			S: mkS(valTins),
@@ -1866,7 +1867,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			B: 1,
 			R: "elem",
 			A: implicitListAction,
-			G: "expr,paren,imp,space",
+			G: "expr,expr-paren,imp,space",
 		})
 	}
 
@@ -1878,7 +1879,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 		},
 		N: map[string]int{"expr": 0},
 		B: 1,
-		G: "expr,list,imp,comma",
+		G: "expr,list,val,imp,comma",
 	})
 
 	// Implicit list (space, not top), unless values side by side are
@@ -1889,7 +1890,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				!(noJuxtapose && startsValue(ctx.T0.Tin))
 		},
 		N: map[string]int{"expr": 0},
-		G: "expr,list,imp,space",
+		G: "expr,list,val,imp,space",
 	})
 
 	// Expression ends on non-expression token (catch-all).
@@ -2054,7 +2055,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				E: func(r *tabnas.Rule, ctx *tabnas.Context) *tabnas.Token {
 					return r.O1
 				},
-				G: "expr,paren,empty,required",
+				G: "expr,expr-paren,empty,required",
 			})
 		}
 
@@ -2063,7 +2064,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 			{
 				S: func() [][]int { return [][]int{OP, CP} }(),
 				B: 1,
-				G: "expr,paren,empty",
+				G: "expr,expr-paren,empty",
 				C: func(r *tabnas.Rule, ctx *tabnas.Context) bool {
 					pop := parenOpFor(r, r.O0.Tin)
 					return pop != nil && pop.CTin == r.O1.Tin
@@ -2080,7 +2081,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					"expr_prefix": 0,
 					"expr_suffix": 0,
 				},
-				G: "expr,paren,open",
+				G: "expr,expr-paren,open",
 				A: openParen,
 			},
 		}...)
@@ -2103,7 +2104,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					E: func(r *tabnas.Rule, ctx *tabnas.Context) *tabnas.Token {
 						return r.C0
 					},
-					G: "expr,paren,sep,empty",
+					G: "expr,expr-paren,expr-sep,empty",
 				},
 				{
 					S: mkS(SEP),
@@ -2118,7 +2119,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 						r.U["expr_paren_more"] = true
 						r.Node = tabnas.Undefined
 					},
-					G: "expr,paren,sep",
+					G: "expr,expr-paren,expr-sep",
 				},
 			}...)
 		}
@@ -2179,7 +2180,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 
 					r.Node = &tabnas.ListRef{Val: resultVal, Meta: map[string]any{"expr": true}}
 				},
-				G: "expr,paren,close",
+				G: "expr,expr-paren,close",
 			},
 		}...)
 
@@ -2268,7 +2269,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					r.Node = makeExpr(op, prevNode)
 					prev.Node = r.Node
 				},
-				G: "expr,ternary,open",
+				G: "expr,expr-ternary,open",
 			},
 		}...)
 
@@ -2378,7 +2379,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					step, _ := r.U["ternary_step"].(int)
 					return step == 1
 				},
-				G: "expr,ternary,sep2",
+				G: "expr,expr-ternary,step",
 			},
 
 			// Implicit list after ternary (comma): 1?2:3,b → [[?,1,2,3],"b"].
@@ -2391,7 +2392,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				},
 				R: "elem",
 				A: implicitTernaryAction,
-				G: "expr,ternary,list,imp,comma",
+				G: "expr,expr-ternary,list,val,imp,comma",
 			},
 
 			// Paren close after ternary: backtrack so paren can consume it.
@@ -2402,7 +2403,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					return step == 2 && r.N["expr_paren"] >= 1
 				},
 				B: 1,
-				G: "expr,ternary,paren,close",
+				G: "expr,expr-ternary,expr-paren,close",
 			},
 
 			// Implicit list after ternary (space): 1?2:3 b → [[?,1,2,3],"b"].
@@ -2416,7 +2417,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 				},
 				R: "elem",
 				A: implicitTernaryAction,
-				G: "expr,ternary,list,imp,space",
+				G: "expr,expr-ternary,list,val,imp,space",
 			},
 
 			// End of ternary (deeper depth, or no more tokens).
@@ -2425,7 +2426,7 @@ func Expr(j *tabnas.Tabnas, opts map[string]interface{}) error {
 					step, _ := r.U["ternary_step"].(int)
 					return step == 2
 				},
-				G: "expr,ternary,end",
+				G: "expr,expr-ternary,close",
 			},
 		}...)
 
@@ -2739,6 +2740,15 @@ func prattifyPostfix(node interface{}, op *Op) *tabnas.ListRef {
 }
 
 // containsString reports whether list holds s.
+func containsInt(list []int, n int) bool {
+	for _, x := range list {
+		if x == n {
+			return true
+		}
+	}
+	return false
+}
+
 func containsString(list []string, s string) bool {
 	for _, item := range list {
 		if item == s {
