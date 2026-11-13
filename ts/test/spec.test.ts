@@ -78,7 +78,7 @@ const cLike = (on: COptions) => {
 // and `right` 1600000 when its binding powers are on. With `values`, the
 // host grammar's value `@` (a token of its own, `#AT`, which jsonic's
 // lexer does not cut as a value) is declared.
-const cTernary = (on: { bound?: boolean, values?: boolean }) => {
+const cTernaryParser = (on: { bound?: boolean, values?: boolean }) => {
   const op: any = {
     comma: { src: ',', infix: true, left: 1000000, right: 1100000, separator: true },
     assign: { src: '=', infix: true, left: 1500000, right: 1400000 },
@@ -116,6 +116,10 @@ const cTernary = (on: { bound?: boolean, values?: boolean }) => {
     op, evaluate: named, juxtapose: false,
     ...(on.values ? { values: ['#AT'] } : {}),
   })
+  return je
+}
+const cTernary = (on: { bound?: boolean, values?: boolean }) => {
+  const je = cTernaryParser(on)
   return (s: string) => C(je.parse(s))
 }
 
@@ -497,6 +501,35 @@ describe('spec', () => {
     runSpec('options-ternary.tsv', cTernary({ bound: true }))
     runSpec('options-values-off.tsv', cTernary({ bound: true }))
     runSpec('options-values.tsv', cTernary({ bound: true, values: true }))
+  })
+
+
+  // The groups of expr's alternates in a parse's rule passes, which a
+  // transducer part reads (test/passes/groups.tsv): each pass of an
+  // alternate expr declares, probes left out, as `<state> <rule>
+  // <groups>`, the groups sorted, each once. The Go and Rust ports name
+  // them as this one does.
+  describe('passes', () => {
+    test('passes/groups.tsv', () => {
+      const je = cTernaryParser({ bound: true, values: true })
+      let passes: string[] = []
+      je.sub({
+        ruleDone: (rule: any, _ctx: any, done: any) => {
+          if (done.probe || null == done.alt) return
+          const g = [...new Set<string>(done.alt.g)].sort()
+          if (g.includes('expr')) {
+            passes.push(`${'o' === done.state ? 'open' : 'close'} ${rule.name} ${g.join(',')}`)
+          }
+        },
+      })
+      const rows = loadSpec(Path.join(SPEC, '..', 'passes', 'groups.tsv')).rows
+      assert.ok(0 < rows.length)
+      for (const row of rows) {
+        passes = []
+        je.parse(row.unesc(0))
+        assert.equal(JSON.stringify(passes), row.col(1), row.where())
+      }
+    })
   })
 
 

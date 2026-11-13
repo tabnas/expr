@@ -525,6 +525,49 @@ fn spec_options_values() {
     run_spec("options-values.tsv", c_ternary(true, true));
 }
 
+/// The groups of expr's alternates in a parse's rule passes, which a
+/// transducer part reads (`test/passes/groups.tsv`): each pass of an
+/// alternate expr declares, probes left out, as `<state> <rule>
+/// <groups>`, the groups sorted, each once, as TypeScript names them.
+#[test]
+fn pass_groups() {
+    use std::sync::{Arc, Mutex};
+    let path = spec_dir().join("..").join("passes").join("groups.tsv");
+    let spec = load_spec(&path, &SpecOptions::default())
+        .unwrap_or_else(|error| panic!("{}: {}", path.display(), error.0));
+    assert!(!spec.rows.is_empty(), "{} holds no rows", path.display());
+    let passes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = c_ternary(true, true);
+    let seen = passes.clone();
+    parser.subscribe_rule_done(move |rule, _ctx, done| {
+        let Some(alt) = &done.alt else { return };
+        if done.probe {
+            return;
+        }
+        let mut g: Vec<&str> = alt.g.iter().map(String::as_str).collect();
+        g.sort_unstable();
+        g.dedup();
+        if !g.contains(&"expr") {
+            return;
+        }
+        let state = match done.state {
+            tabnas::RuleState::Open => "open",
+            tabnas::RuleState::Close => "close",
+        };
+        seen.lock()
+            .unwrap()
+            .push(format!("{state} {} {}", rule.name.as_str(), g.join(",")));
+    });
+    for row in &spec.rows {
+        passes.lock().unwrap().clear();
+        if let Err(error) = parser.parse(&row.unesc(0)) {
+            panic!("{}: {error:?}", row.location());
+        }
+        let got = serde_json::to_string(&*passes.lock().unwrap()).unwrap();
+        assert_eq!(got, row.col(1), "{}", row.location());
+    }
+}
+
 /// A ternary's value under an evaluator, wherever it stands: `call` `(`
 /// `)` is a preval paren whose content is separated, beside a `comma`
 /// separator.

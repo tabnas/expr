@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -433,6 +434,62 @@ func TestSpecOptionsValuesOff(t *testing.T) {
 
 func TestSpecOptionsValues(t *testing.T) {
 	runSpec(t, "options-values.tsv", cTernary(true, true))
+}
+
+// The groups of expr's alternates in a parse's rule passes, which a
+// transducer part reads (test/passes/groups.tsv): each pass of an
+// alternate expr declares, probes left out, as "<state> <rule>
+// <groups>", the groups sorted, each once, as TypeScript names them.
+func TestPassGroups(t *testing.T) {
+	dir, err := support.FindSpecDir("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := support.LoadSpec(filepath.Join(dir, "..", "passes", "groups.tsv"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Rows) == 0 {
+		t.Fatal("test/passes/groups.tsv holds no rows")
+	}
+	j := cTernary(true, true)
+	passes := []string{}
+	j.SubRuleDone(func(rule *tabnas.Rule, _ *tabnas.Context, done tabnas.RuleDone) {
+		if done.Probe || done.Alt == nil {
+			return
+		}
+		seen := map[string]bool{}
+		g := []string{}
+		for _, name := range done.Alt.G {
+			if !seen[name] {
+				seen[name] = true
+				g = append(g, name)
+			}
+		}
+		if !seen["expr"] {
+			return
+		}
+		sort.Strings(g)
+		state := "close"
+		if done.State == tabnas.OPEN {
+			state = "open"
+		}
+		passes = append(passes, state+" "+rule.Name+" "+strings.Join(g, ","))
+	})
+	for _, row := range spec.Rows {
+		passes = passes[:0]
+		if _, err := j.Parse(row.Unesc(0)); err != nil {
+			t.Errorf("%s: %v", row.Where(), err)
+			continue
+		}
+		got, err := json.Marshal(passes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != row.Col(1) {
+			t.Errorf("%s:\n got: %s\nwant: %s", row.Where(), got, row.Col(1))
+		}
+	}
 }
 
 // A ternary's value under an evaluator, wherever it stands: call `(` `)`

@@ -228,9 +228,9 @@ Two consequences agents must internalise:
   tier base `N*1000000` (left = base, right = base+100000 for
   left-assoc) — no rescale needed.
 
-## Go-port parity: instance tins, op order, suffix drilling, zero powers
+## Go-port parity: instance tins, op order, suffix drilling, zero powers, pass groups
 
-Four defects in the Go port (`go/expr.go`) diverged from the canonical
+Five defects in the Go port (`go/expr.go`) diverged from the canonical
 TS behaviour. The first two bit downstream hosts that embed this plugin
 (notably the `@tabnas/c` parser, which hands `expr` a `(`/`+`/`*`/… op
 table and a host lexer that emits its own punctuation tins). All are
@@ -311,9 +311,28 @@ way it does so the fixes are not "simplified" back into bugs.
    test files too), and `TestBindingPowerCarriersAreInt64` states the
    requirement in the source.
 
-When porting a behaviour change, keep all four invariants: instance-level
+5. **An alternate's groups are TypeScript's.** A transducer part reads
+   the groups of the alternate each rule pass matched (`alt.g` in
+   `ParserEvents/1`): tabnas/c's part places each operator by them. So
+   every port names an alternate's groups as `ts/src/expr.ts` does
+   (`expr-infix`, `expr-prefix`, `expr-suffix`, `expr-ternary-bound`,
+   `expr-sep`, …). Go had names of its own (`infix`, `prefix`,
+   `ternary,close`, …), until 0.6.3. It also read a ternary's middle term
+   with an alternate of its own (`block-pair`, a value before the `:`),
+   where TypeScript holds the base grammar's pair alternates off inside a
+   ternary and lets the base grammar's value alternate read the term,
+   which is what Go now does too; and it tagged with `expr` the copies it
+   puts in place of the base grammar's alternates to give them a
+   condition (`copied`), which TypeScript changes in place and leaves
+   untagged. `test/passes/groups.tsv` pins the groups of expr's
+   alternates in the passes of a parse under the small C of tabnas/c, in
+   all three runtimes (`TestPassGroups`, `pass_groups`, and the `passes`
+   suite of `ts/test/spec.test.ts`).
+
+When porting a behaviour change, keep all five invariants: instance-level
 `FixedSrc` lookups, sorted op iteration, the suffix paren-guard/infix
-drill, and the zero-is-unset fallback.
+drill, the zero-is-unset fallback, and TypeScript's groups on every
+alternate.
 
 ## Paren operators on one opener
 
