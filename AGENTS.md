@@ -55,6 +55,39 @@ script or loop you write, and anything sent to the background.
 
 A quick command that finishes within 30 seconds needs nothing extra.
 
+## Client work
+
+Never mention or identify a private work-tracking repository, even indirectly,
+in this repository or in anything the client can see. This includes code,
+comments, documentation, configuration, branch names, commits, issues, pull
+requests, chat messages, and visible tool calls or output.
+
+Only plain delivery and task identifiers may be shared from internal tracking.
+For example, “Delivery `rounds`, task `restart`.” Keep repository names,
+URLs, paths, skill names, project and session identifiers, and transcript
+references private. Describe the product work and test results normally.
+
+For every private work record you create or update, write both a purpose
+(`desc`) and a current status explanation (`statusDetail`). This applies to
+the overall collection, projects, deliveries, tasks, sessions and individual
+messages. Give the next agent enough context to resume:
+
+- **Purpose.** State who needs the outcome, what problem it solves and what
+  would count as success. For a session, explain the intended handoff. For a
+  message, identify the request, decision or result it contributes.
+- **Current status.** Say what has happened, what evidence supports it, and
+  what remains open, blocked or deferred. Identify the next action when one
+  is known. For a message, record its disposition separately from its exact
+  text. Describe unknowns explicitly.
+- At handoff, update the affected records and the project summary. Keep task
+  status, status prose and timestamped changes consistent. A state label or
+  a repeated title alone leaves the next agent without a handoff.
+
+For example, a restart task could have the purpose “Let two players start
+another round on the same board.” A useful status update is “Reset clears all
+nine squares and restores X's turn. Keyboard focus after reset still needs
+verification.” Keep these annotations private under the sharing rules above.
+
 ## What this project is
 
 `@tabnas/expr` is a **Pratt expression-operator plugin** for the
