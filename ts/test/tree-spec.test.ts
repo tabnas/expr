@@ -46,15 +46,17 @@ function runTree(specName: string, run: (s: string) => any) {
 }
 
 // The resolver the pointer fixtures use: a `#/...` target folded through
-// `site.at`, kept verbatim when it names nothing or is a cycle, with the
-// site's own members laid over an object target.
-const resolving = (site: Site, op: Op, [value, siblings]: any[]) => {
+// `site.at`, or through `site.written`, kept verbatim when it names
+// nothing or is a cycle, with the site's own members laid over an object
+// target.
+const resolvingBy = (reach: 'at' | 'written') => (site: Site, op: Op, [value, siblings]: any[]) => {
   if (!op.key) return NaN
-  const hit = site.at(pointer(value))
+  const hit = site[reach](pointer(value))
   if (!hit.found || hit.cycle) return site.node
   if (null == hit.value || 'object' !== typeof hit.value || Array.isArray(hit.value)) return hit.value
   return { ...hit.value, ...siblings }
 }
+const resolving = resolvingBy('at')
 
 const NO_DEFAULTS = {
   positive: null, negative: null, addition: null, subtraction: null,
@@ -87,6 +89,16 @@ describe('tree', () => {
     const tn = new Tabnas().use(jsonic).use(Expr, { op: { ...NO_DEFAULTS, ...op } })
     const opts: FoldOptions = { op, evaluate: resolving }
     runTree('at-pointer.tsv', (s) => C(fold(tn.parse(s), opts)))
+  })
+
+
+  // The same resolver through `site.written`: a site on the way to the
+  // location named is stepped through as the map it is written as.
+  describe('written', () => {
+    const op = { ref: { key: true, src: '$ref' } }
+    const tn = new Tabnas().use(jsonic).use(Expr, { op: { ...NO_DEFAULTS, ...op } })
+    const opts: FoldOptions = { op, evaluate: resolvingBy('written') }
+    runTree('written.tsv', (s) => C(fold(tn.parse(s), opts)))
   })
 
 

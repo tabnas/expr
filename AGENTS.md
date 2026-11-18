@@ -496,8 +496,16 @@ reproduces:
   including the site's own map, each map's bag kept, so a target reached
   early through a reference gets its own ancestors' bag, never the
   referrer's), the opening token when `positions` gives one, `at(path,
-  doc?)`, `locate(path, doc?)` and `plain()`, the map folded as a plain
-  map, for a resolver that finds no operation there. `inherit` must
+  doc?)`, `written(path, doc?)`, `locate(path, doc?)` and `plain()`, the
+  map folded as a plain map, for a resolver that finds no operation
+  there. `at` folds a key-operator site met on the way and reads the rest
+  of the path in its folded value. `written` steps through such a site as
+  the map it is and folds only the location named, so a member beside a
+  site's key is read as written, and a site may name one of its own
+  members without closing a cycle. A host that reads pointers on the
+  document as written, as RFC 6901 does, uses `written` and follows a
+  site to its target itself. `test/tree/written.tsv` pins it in all three
+  runtimes (`Written` in Go, `written` in Rust). `inherit` must
   return an object and must not fold below its own map (`fold_inherit`).
 - **Memory.** One result per location, kept in a trie of locations per
   document, so a deep document costs a constant amount per container;
@@ -555,8 +563,8 @@ failure all the same. What each port settled:
   `MakeKeyMap`, `KeyOpOf`, `IsOp`, `RecordPositions` and `Fold(root, opts)
   (any, error)`, with `FoldEvaluate`, `Inherit` and `Recognise` all
   returning an error, which stops the fold and comes back from `Fold` as it
-  is, and `Site` with `At`, `Locate` and `Plain`, and `Path()` and `K()`
-  as methods. Recognition over `*OrderedMap` in its own order, and over
+  is, and `Site` with `At`, `Written`, `Locate` and `Plain`, and `Path()`
+  and `K()` as methods. Recognition over `*OrderedMap` in its own order, and over
   `map[string]any` and `MapRef`, which have none, in code-point order (Go
   compares strings by byte, which is code-point order for UTF-8); siblings
   are a new `*OrderedMap`, and a folded map or list is a new one of its own

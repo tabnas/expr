@@ -96,6 +96,15 @@ func mergeOver(value any, siblings *tabnas.OrderedMap) *tabnas.OrderedMap {
 // folded through site.At, kept verbatim when it names nothing or is a
 // cycle, with the site's own members laid over a map target.
 func resolving(site *Site, op *Op, terms []any) (any, error) {
+	return resolvingBy(false, site, op, terms)
+}
+
+// writing is the same resolver through site.Written.
+func writing(site *Site, op *Op, terms []any) (any, error) {
+	return resolvingBy(true, site, op, terms)
+}
+
+func resolvingBy(written bool, site *Site, op *Op, terms []any) (any, error) {
 	if !op.Key {
 		return math.NaN(), nil
 	}
@@ -103,7 +112,11 @@ func resolving(site *Site, op *Op, terms []any) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("resolving: a $ref of %T", terms[0])
 	}
-	hit, err := site.At(fragPointer(ref))
+	reach := site.At
+	if written {
+		reach = site.Written
+	}
+	hit, err := reach(fragPointer(ref))
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +203,13 @@ func atPointerOptions() map[string]interface{} {
 func TestTreeAtPointer(t *testing.T) {
 	j := treeParser(t, map[string]interface{}{"op": atPointerOptions()})
 	runTree(t, "at-pointer.tsv", foldParse(j, FoldOptions{Op: atPointerOp, Evaluate: resolving}))
+}
+
+// The same resolver through site.Written: a site on the way to the
+// location named is stepped through as the map it is written as.
+func TestTreeWritten(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{"op": noDefaults(refOp())})
+	runTree(t, "written.tsv", foldParse(j, FoldOptions{Op: refDef, Evaluate: writing}))
 }
 
 // Deferred mode gives the same value as the standalone fold, row for row
@@ -289,7 +309,7 @@ func TestEveryTreeFixtureIsRun(t *testing.T) {
 			t.Errorf("tree fixture with no runner: %s", file.Name)
 		}
 	}
-	if rows != 52 {
-		t.Errorf("the tree fixtures hold %d rows, not the 52 measured", rows)
+	if rows != 68 {
+		t.Errorf("the tree fixtures hold %d rows, not the 68 measured", rows)
 	}
 }

@@ -685,6 +685,16 @@ impl Site<'_> {
         self.fold.at(self.pn, path, doc)
     }
 
+    /// The folded value at `path` as the document is written. Raw members
+    /// are followed from the root, and a key operator site met on the way
+    /// is stepped through as the map it is, where [`Site::at`] folds it and
+    /// reads on in its folded value. Only the location named is folded, so
+    /// a member beside a site's key reads as it is written. A target still
+    /// being folded closes a cycle.
+    pub fn written(&self, path: &[Seg], doc: Option<&str>) -> Result<FoldHit, FoldError> {
+        self.fold.written(self.pn, path, doc)
+    }
+
     /// The raw value at `path`, following nothing.
     pub fn locate(&self, path: &[Seg], doc: Option<&str>) -> Result<Option<Value>, FoldError> {
         self.fold.locate(self.pn, path, doc)
@@ -1421,8 +1431,26 @@ impl Folder<'_> {
     /// reference hop, so it holds as little as it can.
     fn at(&self, from: usize, target: &[Seg], key: Option<&str>) -> Result<FoldHit, FoldError> {
         self.guard()?;
-        match self.find(from, target, key)? {
+        match self.find(from, target, key, false)? {
             Found::Hit(hit) => Ok(hit),
+            Found::Through(pn, next) => self.through(from, pn, target, next, key),
+            Found::End(pn) => self.reach(from, pn),
+        }
+    }
+
+    /// The folded value at `target` as the document is written: a site
+    /// met on the way is stepped through as the map it is, and only the
+    /// location named is folded.
+    fn written(
+        &self,
+        from: usize,
+        target: &[Seg],
+        key: Option<&str>,
+    ) -> Result<FoldHit, FoldError> {
+        self.guard()?;
+        match self.find(from, target, key, true)? {
+            Found::Hit(hit) => Ok(hit),
+            // `find` stops at no site when it reads as written.
             Found::Through(pn, next) => self.through(from, pn, target, next, key),
             Found::End(pn) => self.reach(from, pn),
         }
@@ -1493,8 +1521,15 @@ impl Folder<'_> {
 
     /// Follow `target` raw from the document's root, as far as the fold has
     /// to go: to its end, to a static key operator site met on the way,
-    /// or to an answer.
-    fn find(&self, from: usize, target: &[Seg], key: Option<&str>) -> Result<Found, FoldError> {
+    /// or to an answer. With `written`, a site on the way is one more map
+    /// to step through, and the walk goes to the end.
+    fn find(
+        &self,
+        from: usize,
+        target: &[Seg],
+        key: Option<&str>,
+        written: bool,
+    ) -> Result<Found, FoldError> {
         let Some(doc) = self.doc_of(from, key)? else {
             return Ok(Found::Hit(self.miss(from, key, target)));
         };
@@ -1532,7 +1567,7 @@ impl Folder<'_> {
             // Only a static site changes what lies below it; any other map,
             // a dynamic one or one `recognise` refused, folds member by
             // member, so the raw path below it names the same location.
-            if !last && is_record(&node) {
+            if !written && !last && is_record(&node) {
                 if let Some(op) = self.site_op_of(pn)? {
                     if !op.dynamic {
                         return Ok(Found::Through(pn, i + 1));

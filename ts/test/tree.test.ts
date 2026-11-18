@@ -64,6 +64,69 @@ describe('fold', () => {
   })
 
 
+  test('written reads a location as the document is written', () => {
+    const through = (reach: 'at' | 'written') => (site: Site, _op: Op, [value, siblings]: any[]) => {
+      const hit = site[reach](pointer(value))
+      if (!hit.found || hit.cycle) return site.node
+      if (null == hit.value || 'object' !== typeof hit.value || Array.isArray(hit.value)) return hit.value
+      return { ...hit.value, ...siblings }
+    }
+    const run = (src: string, reach: 'at' | 'written') =>
+      C(fold(parser().parse(src), { op: REF, evaluate: through(reach) }))
+
+    // A member only the site's target has: `at` reads it in the folded
+    // value, and as written it is not there.
+    const passing = '{a:{$ref:"#/b/x"},b:{$ref:"#/c"},c:{x:5}}'
+    assert.deepEqual(run(passing, 'at'), { a: 5, b: { x: 5 }, c: { x: 5 } })
+    assert.deepEqual(run(passing, 'written'), { a: { $ref: '#/b/x' }, b: { x: 5 }, c: { x: 5 } })
+
+    // A site that names its own member: a cycle through `at`, since the
+    // path passes the site while it is being folded, and a value as
+    // written.
+    const own = '{b:{$ref:"#/b/d",d:{x:1}},c:{$ref:"#/b"}}'
+    assert.deepEqual(run(own, 'at'), { b: { $ref: '#/b/d', d: { x: 1 } }, c: { $ref: '#/b' } })
+    assert.deepEqual(run(own, 'written'), { b: { x: 1, d: { x: 1 } }, c: { x: 1, d: { x: 1 } } })
+
+    // A location still being folded is a cycle, as it is through `at`.
+    const self = '{a:{b:{$ref:"#/a"}}}'
+    assert.deepEqual(run(self, 'written'), { a: { b: { $ref: '#/a' } } })
+  })
+
+
+  test('written shares the one result per location, and reaches another document', () => {
+    // The member beside the key is folded once: as the site's sibling, and
+    // again as the location another site names.
+    const raw = parser().parse('{a:{$ref:"#/b/d"},b:{$ref:"#/c",d:{e:1}},c:{}}')
+    const seen: any = {}
+    const out: any = fold(raw, {
+      op: REF,
+      evaluate: (site, _op, [value, siblings]) => {
+        const hit = site.written(pointer(value))
+        if ('b' === site.path[0]) seen.sibling = siblings.d
+        return hit.found && !hit.cycle ? hit.value : site.node
+      },
+    })
+    assert.equal(out.a, seen.sibling, 'one folded object for /b/d')
+
+    let report: FoldReport | undefined
+    const loads: string[] = []
+    const other: any = fold({ P: { $ref: 'b.json#/S/keep' }, Q: { $ref: 'c.json#/W' } }, {
+      op: REF,
+      doc: 'a.json',
+      load: (key) => { loads.push(key); return 'b.json' === key ? { S: { $ref: '#/T', keep: { k: 1 } }, T: {} } : undefined },
+      evaluate: (site, _op, [ref]) => {
+        const [doc, frag] = ref.split('#')
+        const hit = site.written(pointer('#' + frag), '' === doc ? undefined : doc)
+        return hit.found && !hit.cycle ? hit.value : site.node
+      },
+      report: (r) => { report = r },
+    })
+    assert.deepEqual(C(other.P), { k: 1 })
+    assert.deepEqual(loads, ['b.json', 'c.json'])
+    assert.deepEqual(report!.unresolved, [{ doc: 'a.json', at: '/Q', targetDoc: 'c.json', target: '/W' }])
+  })
+
+
   test('cycles are reported and kept verbatim, or thrown', () => {
     const src = '{a:{$ref:"#/a"},b:{c:{$ref:"#/b"}},x:{$ref:"#/y"},y:{$ref:"#/x"},r:{$ref:"#"}}'
     let report: FoldReport | undefined

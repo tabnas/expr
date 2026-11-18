@@ -27,7 +27,9 @@ use tabnas::{TabnasError, Value};
 use tabnas_expr::{fold, ExprOptions, FoldCycle, FoldError, FoldOptions, OpDef};
 use tabnas_support::{load_spec, Failure, Runner, SpecOptions};
 
-use common::{canonical, key_parser, pointer, repo_root, resolving, table, text_of, to_failure};
+use common::{
+    canonical, key_parser, pointer, repo_root, resolving, table, text_of, to_failure, writing,
+};
 
 fn tree_dir() -> PathBuf {
     repo_root().join("test").join("tree")
@@ -118,6 +120,18 @@ fn tree_at_pointer() {
     let parser = key_parser(&ops);
     let options = FoldOptions::new(resolving).with_ops(table(&ops));
     run_tree("at-pointer.tsv", move |input| {
+        fold_parse(&parser, &options, input)
+    });
+}
+
+// The same resolver through `site.written`: a site on the way to the
+// location named is stepped through as the map it is written as.
+#[test]
+fn tree_written() {
+    let ops = [("ref", OpDef::key("$ref"))];
+    let parser = key_parser(&ops);
+    let options = FoldOptions::new(writing).with_ops(table(&ops));
+    run_tree("written.tsv", move |input| {
         fold_parse(&parser, &options, input)
     });
 }

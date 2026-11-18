@@ -292,6 +292,11 @@ reference resolves, and every site that names one location shares one
 folded value. A hit carries a value only when the location was found and
 is not a cycle. The input is never changed: the result is a new tree.
 
+`site.written` folds a location as the document writes it. Where
+`site.at` folds a key operator map met on the way and reads on in its
+folded value, `site.written` steps through it as an ordinary map, so it
+reads a member beside the operator's own member as written.
+
 The rest of the contract is the canonical one, and the TypeScript
 reference documents it in full: `inherit` passes a bag of context down
 from the root, `recognise` lets a host decide that a map owning `$ref` is

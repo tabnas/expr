@@ -231,7 +231,7 @@ the code.
   error, and keeps it) and never a value's identity: `Arc` identity says
   nothing about a location, since values are copied on write.
 - **Re-entry.** Every resolver can call back into the fold through its
-  `Site` (`at`, `locate`, `plain`, `k`) while the fold is inside an outer
+  `Site` (`at`, `written`, `locate`, `plain`, `k`) while the fold is inside an outer
   callback. All state is one `RefCell<State>` and NO borrow of it may be
   held across a callback. The trap is a temporary in an `if let` or
   `match` scrutinee, which lives to the end of the whole statement: bind
@@ -279,7 +279,8 @@ hop from 10 KB to 4.5 KB in debug and from 4.3 KB to 3.3 KB in release.
 `FoldOptions::max_stack` bytes (a megabyte, `FOLD_MAX_STACK`) from where
 the OUTERMOST fold on the thread started (`STACK_BASE`, so a fold inside a
 resolver shares its caller's budget). It runs at every entry the re-entry
-passes through: `walk`, `at`, `locate`, `plain_of`, `k_of` and a `load`.
+passes through: `walk`, `at`, `written`, `locate`, `plain_of`, `k_of` and
+a `load`.
 On a 2 MiB thread with the defaults, 238 hops fold in a debug build, and
 313 (rustc 1.85, the MSRV) or 324 (1.97) in a release build; 3,000 nested
 maps fold with `max_depth` raised.

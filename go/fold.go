@@ -444,7 +444,21 @@ func (s *Site) At(path Path, doc ...string) (FoldHit, error) {
 		return FoldHit{}, err
 	}
 	key, named := docArg(doc)
-	return s.f.at(s.pn, path, key, named)
+	return s.f.at(s.pn, path, key, named, false)
+}
+
+// Written folds the location path names as the document is written. Raw
+// members are followed from the root, and a key-operator site met on the
+// way is stepped through as the map it is, where At folds it and reads on
+// in its folded value. Only the location named is folded, so a member
+// beside a site's key reads as it is written. A target still being folded
+// is a cycle.
+func (s *Site) Written(path Path, doc ...string) (FoldHit, error) {
+	if err := s.check(); err != nil {
+		return FoldHit{}, err
+	}
+	key, named := docArg(doc)
+	return s.f.at(s.pn, path, key, named, true)
 }
 
 // Locate reads the location path names, in this document or in the one doc
@@ -1147,7 +1161,9 @@ func (f *folder) cycleTo(from, target *pnode) (FoldHit, error) {
 }
 
 // at is the folded value at target in a document, for the site at from.
-func (f *folder) at(from *pnode, target Path, key string, named bool) (FoldHit, error) {
+// With written, a site met on the way is stepped through as the map it
+// is, and only the location named is folded.
+func (f *folder) at(from *pnode, target Path, key string, named bool, written bool) (FoldHit, error) {
 	targetDoc := from.doc.key
 	if named {
 		targetDoc = key
@@ -1175,7 +1191,7 @@ func (f *folder) at(from *pnode, target Path, key string, named bool) (FoldHit, 
 		// Only a static site changes what lies below it; any other map,
 		// a dynamic one or one Recognise refused, folds member by member,
 		// so the raw path below it names the same location.
-		if i < len(target)-1 && vs == shapeRecord {
+		if !written && i < len(target)-1 && vs == shapeRecord {
 			op, err := f.siteOpOf(pn)
 			if err != nil {
 				return FoldHit{}, err

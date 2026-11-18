@@ -473,6 +473,7 @@ type Site = {
   k: Record<string, any>             // the bag inherited down to and including this map
   token?: Token                      // the map's opening token, with `positions`
   at(path, doc?): { found: boolean; cycle: boolean; value?: any }
+  written(path, doc?): { found: boolean; cycle: boolean; value?: any }
   locate(path, doc?): { found: boolean; value?: any }
   plain(): any                       // this map folded as a plain map
 }
@@ -532,6 +533,16 @@ one value. A path names nothing (`found: false`) when a step does: an
 array index is an RFC 6901 index: `0`, or digits with no leading zero, so
 `01`, `1.0`, an empty segment, and `-` name nothing. `value` is present
 only when the location was found and is not a cycle.
+
+`site.written(path)` folds the location as the document writes it. It
+follows the same raw members and steps through a key-operator map on the
+way as an ordinary map, so it reads a member beside the operator's own
+member as written, not from the map's folded value. It folds only the
+location the path names, with the same one result per location, so a map
+can name one of its own members. A path through a key-operator map to a
+member that only its target has names nothing, and the resolver follows
+the map to its target itself.
+
 `site.locate(path)` reads the raw tree and follows nothing.
 
 ### Cycles
@@ -559,8 +570,9 @@ and reordering its members can move them.
 
 ### Several documents
 
-`site.at(path, doc)` and `site.locate(path, doc)` reach a location in
-another document, named by a key the host chooses, a URI say. The fold
+`site.at(path, doc)`, `site.written(path, doc)` and
+`site.locate(path, doc)` reach a location in another document, named by
+a key the host chooses, a URI say. The fold
 asks `load(doc, site)` for that document's raw root once per key, and
 treats `undefined` as a document it cannot have, reporting the location
 unresolved. Deciding what a key may name, and fetching it, belongs to the

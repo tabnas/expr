@@ -219,9 +219,11 @@ type FoldHit = { found: boolean; cycle: boolean; value?: any }
 // including this one), the map's opening token when positions are
 // recorded, and the ways to reach the rest of the tree: `at` folds
 // another location, in this document or another, through any key-operator
-// sites on the way; `locate` reads one raw; `plain` is this map folded as
-// a plain map, member by member in its own order, which is what a
-// resolver returns where the operator does not apply.
+// sites on the way; `written` folds one as the document is written, so a
+// site on the way is stepped through as the map it is and only the
+// location named is folded; `locate` reads one raw; `plain` is this map
+// folded as a plain map, member by member in its own order, which is what
+// a resolver returns where the operator does not apply.
 type Site = {
   readonly root: any
   readonly doc: string
@@ -230,6 +232,7 @@ type Site = {
   readonly k: Record<string, any>
   readonly token?: Token
   at: (path: Path, doc?: string) => FoldHit
+  written: (path: Path, doc?: string) => FoldHit
   locate: (path: Path, doc?: string) => { found: boolean; value?: any }
   plain: () => any
 }
@@ -2733,6 +2736,7 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
       },
       token: undefined !== lookup && null != node && 'object' === typeof node ? lookup(node) : undefined,
       at: (target: Path, doc?: string) => at(pn, target, doc),
+      written: (target: Path, doc?: string) => at(pn, target, doc, true),
       locate: (target: Path, doc?: string) => locate(pn, target, doc),
       plain: () => plainOf(pn),
     }
@@ -2787,8 +2791,9 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
   // way is folded (through the memo) and the remaining segments read its
   // folded value, so a reference to a reference resolves. A target still
   // being folded is a cycle, and so is a path that must pass through a
-  // site that was cut.
-  const at = (from: PNode, target: Path, key?: string): FoldHit => {
+  // site that was cut. With `written`, a site met on the way is stepped
+  // through as the map it is, and only the location named is folded.
+  const at = (from: PNode, target: Path, key?: string, written?: boolean): FoldHit => {
     const targetDoc = undefined === key ? from.doc.key : key
     const doc = docOf(from, key)
     if (undefined === doc) return miss(from, targetDoc, target)
@@ -2805,7 +2810,7 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
       // Only a static site changes what lies below it; any other map,
       // a dynamic one or one `recognise` refused, folds member by member,
       // so the raw path below it names the same location.
-      const op = i < target.length - 1 && isRecord(node) ? siteOpOf(pn) : null
+      const op = !written && i < target.length - 1 && isRecord(node) ? siteOpOf(pn) : null
       if (null !== op && !op.dynamic) {
         if (1 === pn.state || pn.loop) return cycleTo(from, pn)
         let folded = walk(pn, 1)

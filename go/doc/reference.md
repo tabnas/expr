@@ -571,6 +571,7 @@ type Site struct {
 func (s *Site) Path() Path                                      // from the root to this map
 func (s *Site) K() (map[string]interface{}, error)              // the bag down to and including this map
 func (s *Site) At(path Path, doc ...string) (FoldHit, error)    // fold another location
+func (s *Site) Written(path Path, doc ...string) (FoldHit, error) // fold one as the document is written
 func (s *Site) Locate(path Path, doc ...string) (FoldHit, error) // read one raw
 func (s *Site) Plain() (interface{}, error)                     // this map folded as a plain map
 
@@ -643,8 +644,18 @@ one value. A path names nothing (`Found` false) when a step does. An
 array index is an RFC 6901 index, `"0"` or digits with no leading zero,
 or an `int` or an integral `float64`: `"01"`, `"1.0"`, an empty segment
 and `"-"` name nothing. `Value` is set only when the location was found
-and is not a cycle. `site.Locate(path)` reads the raw tree and follows
-nothing.
+and is not a cycle.
+
+`site.Written(path)` folds the location as the document writes it. It
+follows the same raw members and steps through a key-operator map on the
+way as an ordinary map, so it reads a member beside the operator's own
+member as written, not from the map's folded value. It folds only the
+location the path names, with the same one result per location, so a map
+can name one of its own members. A path through a key-operator map to a
+member that only its target has names nothing, and the resolver follows
+the map to its target itself.
+
+`site.Locate(path)` reads the raw tree and follows nothing.
 
 ### Cycles
 
@@ -667,8 +678,9 @@ folded, and reordering its members can move them.
 
 ### Several documents
 
-`site.At(path, doc)` and `site.Locate(path, doc)` reach a location in
-another document, named by a key the host chooses. The fold asks
+`site.At(path, doc)`, `site.Written(path, doc)` and
+`site.Locate(path, doc)` reach a location in another document, named by
+a key the host chooses. The fold asks
 `Load(doc, site)` for that document's raw root once per key; `ok` false
 is a document it cannot have, and the location is reported unresolved,
 while an error stops the fold. Deciding what a key may name, and fetching
