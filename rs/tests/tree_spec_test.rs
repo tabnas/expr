@@ -24,7 +24,7 @@ mod common;
 use std::path::PathBuf;
 
 use tabnas::{TabnasError, Value};
-use tabnas_expr::{fold, ExprOptions, FoldCycle, FoldError, FoldOptions, OpDef};
+use tabnas_expr::{fold, ExprOptions, FoldBudget, FoldCycle, FoldError, FoldOptions, OpDef};
 use tabnas_support::{load_spec, Failure, Runner, SpecOptions};
 
 use common::{
@@ -217,6 +217,20 @@ fn tree_errors() {
         .with_cycle(FoldCycle::Error)
         .with_max_depth(3);
     run_tree("errors.tsv", move |input| {
+        fold_parse(&parser, &options, input)
+    });
+}
+
+// The step budget, at five steps: a container the fold starts to fold is
+// one step, and so is a location a resolver asks its site for.
+#[test]
+fn tree_budget() {
+    let ops = [("ref", OpDef::key("$ref"))];
+    let parser = key_parser(&ops);
+    let options = FoldOptions::new(resolving)
+        .with_ops(table(&ops))
+        .with_budget(FoldBudget::new(5));
+    run_tree("budget.tsv", move |input| {
         fold_parse(&parser, &options, input)
     });
 }

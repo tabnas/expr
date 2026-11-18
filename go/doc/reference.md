@@ -553,7 +553,14 @@ type FoldOptions struct {
     Tokens    *bool                  // nil is true: operator nodes met in the walk reduce too
     Positions interface{}            // a Positions lookup, or true in deferred mode
     MaxDepth  int                    // 0 is the default, 1000
+    Budget    *FoldBudget            // nil is no bound and no check
     Report    func(report FoldReport)
+}
+
+type FoldBudget struct {
+    Steps       int                  // the most steps a fold may take; 0 is no bound
+    CheckEveryN int                  // call OnCheck at every Nth step; 0 is off
+    OnCheck     func(steps int) bool // false cancels the fold
 }
 
 type FoldEvaluate func(site *Site, op *Op, terms []interface{}) (interface{}, error)
@@ -718,6 +725,21 @@ Running out of stack is fatal in Go rather than an error, so `MaxDepth`
 is the only guard: keep it within what a stack can hold, as the default
 of 1000 is.
 
+`Budget` bounds how much the fold does, and lets a host stop it. The
+fold takes a step each time it starts to fold a container: a map, a
+list, or an operator node. It takes another each time a resolver asks its
+site for a location, through `At`, `Written`, or `Locate`. A location
+already folded costs no step, and neither does `Plain`. `Steps`, when
+greater than 0, is the most steps a fold may take: the step after it ends
+the fold with a `FoldError` coded `fold_budget`. With `CheckEveryN`
+greater than 0 and `OnCheck` set, the fold calls `OnCheck` at every Nth
+step with the number of steps taken so far, and a `false` return ends the
+fold with a `FoldError` coded `fold_cancel`. A host keeps a deadline
+there, or reads a flag that other code sets. `OnCheck` returns a plain
+`bool`, as the engine's own `BudgetOptions.OnCheck` does, so it answers
+`true` to go on. The count is one for the whole fold, across documents,
+and in deferred mode each parse starts it again.
+
 ### Fold errors
 
 `FoldError` carries `Code`, and `Doc`, `At`, `TargetDoc` and `Target`
@@ -726,6 +748,8 @@ member names JSON-escaped and cut short, since they are document content.
 
 | Code | Returned when |
 |---|---|
+| `fold_budget` | the fold takes more steps than `Budget.Steps` |
+| `fold_cancel` | `Budget.OnCheck` returns `false` |
 | `fold_cycle` | a cycle is met under `Cycle: "error"` |
 | `fold_depth` | nesting and references go past `MaxDepth` |
 | `fold_inherit` | `Inherit` returns a nil bag, or folds below its own map |

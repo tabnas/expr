@@ -289,6 +289,14 @@ func TestTreeErrors(t *testing.T) {
 	runTree(t, "errors.tsv", foldParse(j, opts))
 }
 
+// The step budget, at five steps: a container the fold starts to fold is
+// one step, and so is a location a resolver asks its site for.
+func TestTreeBudget(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{"op": noDefaults(refOp())})
+	opts := FoldOptions{Op: refDef, Evaluate: resolving, Budget: &FoldBudget{Steps: 5}}
+	runTree(t, "budget.tsv", foldParse(j, opts))
+}
+
 // Every file in test/tree is named by a runTree call in this file, as
 // TestEveryFixtureRowIsHeldToItsCanonicalJSON checks test/spec, and the
 // row total is ratcheted at what is on disk, so a corpus that shrinks
@@ -309,7 +317,7 @@ func TestEveryTreeFixtureIsRun(t *testing.T) {
 			t.Errorf("tree fixture with no runner: %s", file.Name)
 		}
 	}
-	if rows != 68 {
-		t.Errorf("the tree fixtures hold %d rows, not the 68 measured", rows)
+	if rows != 85 {
+		t.Errorf("the tree fixtures hold %d rows, not the 85 measured", rows)
 	}
 }

@@ -462,6 +462,11 @@ type FoldOptions = {
   tokens?: boolean                   // default true: token operator arrays met in the walk reduce too
   positions?: boolean | ((node: object) => Token | undefined)
   maxDepth?: number                  // default 1000
+  budget?: {                         // default: no bound and no check
+    steps?: number                   // the most steps the fold may take
+    checkEveryN?: number             // call onCheck at every Nth step
+    onCheck?: (steps: number) => boolean | void   // false cancels the fold
+  }
   report?: (report: FoldReport) => void
 }
 
@@ -601,6 +606,20 @@ hops together. Past it, or if the JavaScript stack runs out first, the
 fold throws a `FoldError` coded `fold_depth`, so a hostile document gets
 a clean error and never a `RangeError`.
 
+`budget` bounds how much the fold does, and lets a host stop it. The
+fold takes a step each time it starts to fold a container: a map, an
+array, or an operator node. It takes another each time a resolver asks
+its site for a location, through `at`, `written`, or `locate`. A location
+already folded costs no step, and neither does `plain`. `steps`, when
+greater than 0, is the most steps a fold may take: the step after it
+throws a `FoldError` coded `fold_budget`. With `checkEveryN` greater than
+0, the fold calls `onCheck` at every Nth step with the number of steps
+taken so far, and a `false` return throws a `FoldError` coded
+`fold_cancel`. A host keeps a deadline there, or reads a flag that
+another task sets. Both parts are off by default. The count is one for
+the whole fold, across documents, and in deferred mode each parse starts
+it again. The option has the shape of the engine's `parse.budget`.
+
 ### Fold errors
 
 `FoldError` carries `code`, and `doc`, `at`, `targetDoc`, and `target`
@@ -609,6 +628,8 @@ short, since they are document content.
 
 | Code | Thrown when |
 |---|---|
+| `fold_budget` | the fold takes more steps than `budget.steps` |
+| `fold_cancel` | `budget.onCheck` returns `false` |
 | `fold_cycle` | a cycle is met under `cycle: 'error'` |
 | `fold_depth` | nesting and references go past `maxDepth`, or the stack runs out first |
 | `fold_inherit` | `inherit` returns something that is not an object, or folds below its own map |

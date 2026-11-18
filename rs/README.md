@@ -341,7 +341,8 @@ as an operator, because a document can spell the same array, and reading
 it would let the text of a document choose what the resolver runs.
 
 A fold that fails returns a `FoldError`. For the layer's own failures its
-`code` is `fold_cycle`, `fold_depth`, `fold_inherit` or `fold_key`, and
+`code` is `fold_budget`, `fold_cancel`, `fold_cycle`, `fold_depth`,
+`fold_inherit`, or `fold_key`, and
 `doc`, `at`, `target_doc` and `target` give the location, as pointers
 into the document; member names in its message are escaped and cut
 short, since they are document content. A resolver returns the engine's
@@ -361,6 +362,21 @@ the stack, which would end the process. A resolver like the first one
 here makes about 240 hops in a debug build and about 320 in a release
 build within the default. Raise `max_stack` only on a thread that has the
 stack to give.
+
+`budget` bounds how much the fold does, and lets a host stop it. The
+fold takes a step each time it starts to fold a container: a map, an
+array, or an operator node. It takes another each time a resolver asks
+its site for a location, through `at`, `written`, or `locate`. A location
+already folded costs no step, and neither does `plain`. `steps`, when
+greater than 0, is the most steps a fold may take: the step after it
+fails the fold with `fold_budget`. With `check_every_n` greater than 0
+and `on_check` set, the fold calls `on_check` at every Nth step with the
+number of steps taken so far, and a `false` return fails the fold with
+`fold_cancel`. A host keeps a deadline there, or reads a flag that
+another thread sets. Both parts are off by default, and the count is one
+for the whole fold, across documents. `FoldBudget::new(steps)` makes a
+bound, `with_check` adds the check, and `FoldOptions::with_budget` takes
+the result.
 
 `site.token()` is the token a token operator occurrence was matched from.
 At a map it is whatever `FoldOptions::positions` returns for the map:

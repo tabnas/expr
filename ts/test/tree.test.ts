@@ -629,6 +629,110 @@ describe('fold: second review', () => {
   })
 
 
+  test('budget: steps bound the walk, and onCheck can cancel it', () => {
+    // Eight steps: the root, `a`, the location `a` asks for, `b`, `c`,
+    // `d` and its two members.
+    const doc = { a: { $ref: '#/b' }, b: { c: {} }, d: [{}, {}] }
+    const budgeted = (budget: any) => fold(doc, { op: REF, evaluate: resolving, budget })
+    const seen: number[] = []
+    budgeted({ checkEveryN: 1, onCheck: (n: number) => { seen.push(n) } })
+    assert.deepEqual(seen, [1, 2, 3, 4, 5, 6, 7, 8])
+
+    assert.deepEqual(C(budgeted({ steps: 8 })), { a: { c: {} }, b: { c: {} }, d: [{}, {}] })
+    assert.throws(() => budgeted({ steps: 7 }),
+      (err: any) => err instanceof FoldError && 'fold_budget' === err.code && '' === err.doc && '/d/1' === err.at)
+
+    // Only a number greater than 0 is a bound.
+    for (const steps of [undefined, null, 0, -1, NaN, '3']) {
+      assert.ok(budgeted({ steps }), String(steps))
+    }
+    assert.ok(budgeted({}))
+
+    // onCheck is called at every Nth step with the count, and false cancels.
+    const thirds: number[] = []
+    budgeted({ checkEveryN: 3, onCheck: (n: number) => { thirds.push(n) } })
+    assert.deepEqual(thirds, [3, 6])
+    assert.throws(() => budgeted({ checkEveryN: 2, onCheck: (n: number) => n < 4 }),
+      (err: any) => err instanceof FoldError && 'fold_cancel' === err.code && '/b' === err.at)
+    for (const answer of [undefined, null, 0, '', true]) {
+      assert.ok(budgeted({ checkEveryN: 1, onCheck: () => answer }), String(answer))
+    }
+
+    // The check needs both of its parts, and the bound is tried first.
+    let calls = 0
+    const refuse = () => { calls++; return false }
+    assert.ok(budgeted({ onCheck: refuse }))
+    assert.ok(budgeted({ checkEveryN: 0, onCheck: refuse }))
+    assert.ok(budgeted({ checkEveryN: 1 }))
+    assert.ok(budgeted({ checkEveryN: 1, onCheck: null }))
+    assert.equal(calls, 0)
+    assert.throws(() => budgeted({ steps: 2, checkEveryN: 3, onCheck: refuse }),
+      (err: any) => 'fold_budget' === err.code)
+    assert.equal(calls, 0)
+  })
+
+
+  test('budget: what a step is', () => {
+    const count = (root: any, opts: Partial<FoldOptions>) => {
+      let n = 0
+      fold(root, {
+        op: REF, evaluate: resolving, ...opts,
+        budget: { checkEveryN: 1, onCheck: (steps) => { n = steps } },
+      })
+      return n
+    }
+
+    // The root, the site, and the location the site asks for, however it
+    // asks; a scalar target is not folded, so it costs nothing more.
+    const doc = { a: { $ref: '#/b' }, b: 1 }
+    assert.equal(count(doc, {}), 3)
+    assert.equal(count(doc, { evaluate: (site) => site.written(['b']).value }), 3)
+    assert.equal(count(doc, { evaluate: (site) => site.locate(['b']).value }), 3)
+    assert.equal(count(doc, {
+      evaluate: (site) => (site.locate(['b']), site.locate(['x']), site.at(['b']).value),
+    }), 5)
+
+    // A target is folded once, and each site that names it asks once.
+    assert.equal(count({ a: { $ref: '#/c' }, b: { $ref: '#/c' }, c: { d: 1 } }, {}), 6)
+
+    // `plain` reads members that are already folded: no step of its own.
+    assert.equal(count({ a: { $ref: 'x', m: {} } }, { evaluate: (site) => site.plain() }), 3)
+
+    // A map that is no site is one step; so is one `recognise` refuses.
+    assert.equal(count({ a: { $ref: '#/b' }, b: 1 }, { recognise: () => false }), 2)
+
+    // An operator node is a container, with `tokens` on or off.
+    const tn = new Tabnas().use(jsonic).use(Expr, { op: REF })
+    const math = (site: Site, op: Op, terms: any[]) =>
+      op.key ? resolving(site, op, terms) : terms[0] + terms[1]
+    assert.equal(count(tn.parse('{a:1+2}'), { evaluate: math }), 2)
+    assert.equal(count(tn.parse('{a:1+2}'), { evaluate: math, tokens: false }), 2)
+    assert.equal(count(tn.parse('{a:1+{$ref:"#/b"},b:2}'), { evaluate: math }), 4)
+
+    // One count for the whole fold, across documents.
+    const others: any = { other: { x: { y: {} } } }
+    assert.equal(count({ a: { $ref: 'other#/x' } }, {
+      load: (key) => others[key],
+      evaluate: (site, _op, [value]) => {
+        const [key, frag] = value.split('#')
+        return site.at(pointer('#' + frag), key).value
+      },
+    }), 5)
+  })
+
+
+  test('budget: the deferred fold is bound, parse by parse', () => {
+    const tn = new Tabnas().use(jsonic).use(Expr, {
+      op: { ...NO_DEFAULTS, ...REF },
+      fold: { evaluate: resolving, budget: { steps: 3 } },
+    })
+    assert.deepEqual(C(tn.parse('{a:{$ref:"#/b"},b:1}')), { a: 1, b: 1 })
+    assert.throws(() => tn.parse('{a:{$ref:"#/b"},b:{}}'),
+      (err: any) => err instanceof FoldError && 'fold_budget' === err.code)
+    assert.deepEqual(C(tn.parse('{a:{$ref:"#/b"},b:1}')), { a: 1, b: 1 })
+  })
+
+
   test('a cycle error escapes member names and bounds the message', () => {
     const name = 'l1\nl2\u001b[31m' + 'K'.repeat(300)
     const doc: any = { [name]: { $ref: 'self' } }

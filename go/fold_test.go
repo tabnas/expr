@@ -1025,6 +1025,201 @@ func TestFoldDepthRaisesFoldDepth(t *testing.T) {
 	}
 }
 
+// budgetDoc takes eight steps: the root, a, the location a asks for, b, c,
+// d and its two members.
+func budgetDoc() *tabnas.OrderedMap {
+	return om("a", om("$ref", "#/b"), "b", om("c", om()), "d", []any{om(), om()})
+}
+
+func TestFoldBudgetStepsBoundTheWalkAndOnCheckCanCancelIt(t *testing.T) {
+	budgeted := func(budget *FoldBudget) (any, error) {
+		return Fold(budgetDoc(), FoldOptions{Op: refDef, Evaluate: resolving, Budget: budget})
+	}
+	var seen []int
+	if _, err := budgeted(&FoldBudget{CheckEveryN: 1, OnCheck: func(n int) bool { seen = append(seen, n); return true }}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("seen %v, want %v", seen, want)
+	}
+
+	out, err := budgeted(&FoldBudget{Steps: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cj(t, out); got != `{"a":{"c":{}},"b":{"c":{}},"d":[{},{}]}` {
+		t.Errorf("at 8 steps: %s", got)
+	}
+	_, err = budgeted(&FoldBudget{Steps: 7})
+	var fe *FoldError
+	if !errors.As(err, &fe) || fe.Code != "fold_budget" || fe.Doc != "" || fe.At != "/d/1" ||
+		err.Error() != `expr fold: more than 7 steps at "/d/1"` {
+		t.Errorf("at 7 steps: %#v", err)
+	}
+
+	// Only a number greater than 0 is a bound.
+	for _, budget := range []*FoldBudget{nil, {}, {Steps: 0}, {Steps: -1}} {
+		if _, err := budgeted(budget); err != nil {
+			t.Errorf("%#v: %v", budget, err)
+		}
+	}
+
+	// OnCheck is called at every Nth step with the count, and false cancels.
+	var thirds []int
+	if _, err := budgeted(&FoldBudget{CheckEveryN: 3, OnCheck: func(n int) bool { thirds = append(thirds, n); return true }}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{3, 6}; !reflect.DeepEqual(thirds, want) {
+		t.Errorf("thirds %v, want %v", thirds, want)
+	}
+	_, err = budgeted(&FoldBudget{CheckEveryN: 2, OnCheck: func(n int) bool { return n < 4 }})
+	fe = nil
+	if !errors.As(err, &fe) || fe.Code != "fold_cancel" || fe.Doc != "" || fe.At != "/b" ||
+		err.Error() != `expr fold: cancelled by budget.onCheck after 4 steps at "/b"` {
+		t.Errorf("cancelled: %#v", err)
+	}
+
+	// The check needs both of its parts, and the bound is tried first.
+	calls := 0
+	refuse := func(int) bool { calls++; return false }
+	for _, budget := range []*FoldBudget{
+		{OnCheck: refuse},
+		{CheckEveryN: 0, OnCheck: refuse},
+		{CheckEveryN: -1, OnCheck: refuse},
+		{CheckEveryN: 1},
+		{CheckEveryN: 1, OnCheck: nil},
+	} {
+		if _, err := budgeted(budget); err != nil {
+			t.Errorf("%#v: %v", budget, err)
+		}
+	}
+	if calls != 0 {
+		t.Errorf("OnCheck called %d times with the check off", calls)
+	}
+	if _, err := budgeted(&FoldBudget{Steps: 2, CheckEveryN: 3, OnCheck: refuse}); foldCode(err) != "fold_budget" {
+		t.Errorf("the bound before the check: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("OnCheck called %d times before the bound", calls)
+	}
+}
+
+func TestFoldBudgetWhatAStepIs(t *testing.T) {
+	count := func(root any, opts FoldOptions) int {
+		t.Helper()
+		n := 0
+		if opts.Op == nil {
+			opts.Op = refDef
+		}
+		if opts.Evaluate == nil {
+			opts.Evaluate = resolving
+		}
+		opts.Budget = &FoldBudget{CheckEveryN: 1, OnCheck: func(steps int) bool { n = steps; return true }}
+		if _, err := Fold(root, opts); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	value := func(hit FoldHit, err error) (any, error) { return hit.Value, err }
+
+	// The root, the site, and the location the site asks for, however it
+	// asks; a scalar target is not folded, so it costs nothing more.
+	doc := func() any { return om("a", om("$ref", "#/b"), "b", 1.0) }
+	for _, c := range []struct {
+		name     string
+		evaluate FoldEvaluate
+		want     int
+	}{
+		{"At", nil, 3},
+		{"Written", func(site *Site, _ *Op, _ []any) (any, error) { return value(site.Written(Path{"b"})) }, 3},
+		{"Locate", func(site *Site, _ *Op, _ []any) (any, error) { return value(site.Locate(Path{"b"})) }, 3},
+		{"Locate, Locate, At", func(site *Site, _ *Op, _ []any) (any, error) {
+			if _, err := site.Locate(Path{"b"}); err != nil {
+				return nil, err
+			}
+			if _, err := site.Locate(Path{"x"}); err != nil {
+				return nil, err
+			}
+			return value(site.At(Path{"b"}))
+		}, 5},
+	} {
+		if got := count(doc(), FoldOptions{Evaluate: c.evaluate}); got != c.want {
+			t.Errorf("%s: %d steps, want %d", c.name, got, c.want)
+		}
+	}
+
+	// A target is folded once, and each site that names it asks once.
+	if got := count(om("a", om("$ref", "#/c"), "b", om("$ref", "#/c"), "c", om("d", 1.0)), FoldOptions{}); got != 6 {
+		t.Errorf("a shared target: %d steps, want 6", got)
+	}
+
+	// Plain reads members that are already folded: no step of its own.
+	plain := func(site *Site, _ *Op, _ []any) (any, error) { return site.Plain() }
+	if got := count(om("a", om("$ref", "x", "m", om())), FoldOptions{Evaluate: plain}); got != 3 {
+		t.Errorf("Plain: %d steps, want 3", got)
+	}
+
+	// A map that is no site is one step; so is one Recognise refuses.
+	refused := func(*Site, *Op) (bool, error) { return false, nil }
+	if got := count(doc(), FoldOptions{Recognise: refused}); got != 2 {
+		t.Errorf("a refused site: %d steps, want 2", got)
+	}
+
+	// An operator node is a container, with Tokens on or off.
+	j := treeParser(t, map[string]interface{}{"op": refOp()})
+	math := func(site *Site, op *Op, terms []any) (any, error) {
+		if op.Key {
+			return resolving(site, op, terms)
+		}
+		return terms[0].(float64) + terms[1].(float64), nil
+	}
+	if got := count(parsed(t, j, `{a:1+2}`), FoldOptions{Evaluate: math}); got != 2 {
+		t.Errorf("an operator node: %d steps, want 2", got)
+	}
+	if got := count(parsed(t, j, `{a:1+2}`), FoldOptions{Evaluate: math, Tokens: tabnas.Bool(false)}); got != 2 {
+		t.Errorf("an operator node, Tokens off: %d steps, want 2", got)
+	}
+	if got := count(parsed(t, j, `{a:1+{$ref:"#/b"},b:2}`), FoldOptions{Evaluate: math}); got != 4 {
+		t.Errorf("a site in an operator node: %d steps, want 4", got)
+	}
+
+	// One count for the whole fold, across documents.
+	others := map[string]any{"other": om("x", om("y", om()))}
+	got := count(om("a", om("$ref", "other#/x")), FoldOptions{
+		Load: func(key string, _ *Site) (any, bool, error) {
+			root, ok := others[key]
+			return root, ok, nil
+		},
+		Evaluate: func(site *Site, _ *Op, terms []any) (any, error) {
+			key, frag, _ := strings.Cut(terms[0].(string), "#")
+			return value(site.At(fragPointer("#"+frag), key))
+		},
+	})
+	if got != 5 {
+		t.Errorf("across documents: %d steps, want 5", got)
+	}
+}
+
+// In deferred mode each parse's fold has its own count, and a fold past
+// the bound surfaces from Parse as a TabnasError with the fold's code.
+func TestFoldBudgetTheDeferredFoldIsBoundParseByParse(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{
+		"op":   noDefaults(refOp()),
+		"fold": FoldOptions{Evaluate: resolving, Budget: &FoldBudget{Steps: 3}},
+	})
+	if got := cj(t, parsed(t, j, `{a:{$ref:"#/b"},b:1}`)); got != `{"a":1,"b":1}` {
+		t.Errorf("within the bound: %s", got)
+	}
+	value, err := j.Parse(`{a:{$ref:"#/b"},b:{}}`)
+	var te *tabnas.TabnasError
+	if !errors.As(err, &te) || te.Code != "fold_budget" || !strings.Contains(te.Detail, "expr fold: ") || value != nil {
+		t.Errorf("past the bound: %v, %#v; want a TabnasError coded fold_budget", value, err)
+	}
+	if got := cj(t, parsed(t, j, `{a:{$ref:"#/b"},b:1}`)); got != `{"a":1,"b":1}` {
+		t.Errorf("after the error: %s", got)
+	}
+}
+
 func TestFoldACycleErrorEscapesMemberNamesAndBoundsTheMessage(t *testing.T) {
 	name := "l1\nl2\u001b[31m" + strings.Repeat("K", 300)
 	_, err := Fold(om(name, om("$ref", "self")), FoldOptions{Op: refDef, Cycle: "error",

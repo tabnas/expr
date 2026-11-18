@@ -93,6 +93,30 @@ type FoldReport struct {
 	Dynamic    []FoldDynamic `json:"dynamic"`
 }
 
+// FoldBudget bounds a fold's work, and gives a host a way to stop it. One
+// step is one container the fold starts to fold (a map, a list or a token
+// operator node; one already folded costs nothing), or one call to a
+// site's At, Written or Locate, whatever the path and whether or not it
+// finds anything. Plain, Inherit, Evaluate and loading a document cost
+// nothing of their own. The count spans every document one fold loads; in
+// deferred mode each parse's fold starts from zero. Steps, when greater
+// than 0, is the most steps a fold may take, and the step after it is a
+// FoldError coded fold_budget. With CheckEveryN greater than 0 and OnCheck
+// set, OnCheck is called at every Nth step with the number taken so far,
+// and a false return is a FoldError coded fold_cancel: a host keeps a
+// deadline there, or reads a flag another goroutine sets. At one step the
+// bound is tried before the check. Off by default, as the engine's own
+// parse budget is, and shaped as that is.
+//
+// OnCheck returns a plain bool where TypeScript accepts `boolean | void`,
+// as the engine's BudgetOptions.OnCheck does: Go has no undefined, so a
+// check that only wants to observe returns true.
+type FoldBudget struct {
+	Steps       int                  // The most steps a fold may take (0 = no bound).
+	CheckEveryN int                  // Call OnCheck at every Nth step (0 = off).
+	OnCheck     func(steps int) bool // Return false to cancel the fold.
+}
+
 // FoldOptions configures Fold, and the plugin's deferred mode
 // (ExprOptions.Fold).
 type FoldOptions struct {
@@ -143,21 +167,26 @@ type FoldOptions struct {
 	// counted together. Zero is the default, 1000.
 	MaxDepth int
 
+	// Budget bounds how much work the fold may do, and can cancel it. Nil
+	// is no bound and no check.
+	Budget *FoldBudget
+
 	// Report receives the report of a fold that succeeds.
 	Report func(report FoldReport)
 }
 
 // FoldError is the fold's own error. Code is what a fixture pins:
-// fold_cycle (a cycle under Cycle "error"), fold_depth (nesting and
-// reference hops past MaxDepth), fold_inherit (an Inherit that returned no
-// bag, or folded its own subtree), fold_key (an operator table with two
-// key operators on one member name, or one on none) and fold_option (an
-// option the fold cannot take, Positions true outside deferred mode among
-// them). Doc, At, TargetDoc and Target name the location where the error
-// has one; a document's root is the pointer "" and the default document's
-// key is "", so an empty field is not on its own a missing one. The
-// message quotes member names JSON-escaped and cut short, since they are
-// document content.
+// fold_budget (more steps than Budget.Steps), fold_cancel (Budget.OnCheck
+// returned false), fold_cycle (a cycle under Cycle "error"), fold_depth
+// (nesting and reference hops past MaxDepth), fold_inherit (an Inherit that
+// returned no bag, or folded its own subtree), fold_key (an operator table
+// with two key operators on one member name, or one on none) and
+// fold_option (an option the fold cannot take, Positions true outside
+// deferred mode among them). Doc, At, TargetDoc and Target name the
+// location where the error has one; a document's root is the pointer "" and
+// the default document's key is "", so an empty field is not on its own a
+// missing one. The message quotes member names JSON-escaped and cut short,
+// since they are document content.
 type FoldError struct {
 	Code      string
 	Doc       string
@@ -174,6 +203,8 @@ func (e *FoldError) Error() string {
 }
 
 const (
+	codeFoldBudget  = "fold_budget"
+	codeFoldCancel  = "fold_cancel"
 	codeFoldCycle   = "fold_cycle"
 	codeFoldDepth   = "fold_depth"
 	codeFoldInherit = "fold_inherit"
@@ -373,6 +404,15 @@ func foldTree(root any, opts *FoldOptions, keys KeyMap, lookup Positions) (any, 
 	}
 	if f.base == nil {
 		f.base = map[string]any{}
+	}
+	if b := opts.Budget; b != nil {
+		if 0 < b.Steps {
+			f.maxSteps = b.Steps
+		}
+		if b.OnCheck != nil && 0 < b.CheckEveryN {
+			f.onCheck = b.OnCheck
+			f.checkEveryN = b.CheckEveryN
+		}
 	}
 	main := f.makeDoc(opts.Doc, root)
 	out, err := f.walk(main.top, 0)
@@ -910,6 +950,12 @@ type folder struct {
 	stack []*pnode
 	// The documents by key; a nil entry is one that cannot be had.
 	docs map[string]*foldDoc
+	// The budget: the bound (0 for none), the check (nil for none) and the
+	// steps taken so far.
+	maxSteps    int
+	checkEveryN int
+	onCheck     func(steps int) bool
+	steps       int
 }
 
 func (f *folder) makeDoc(key string, raw any) *foldDoc {
@@ -1103,7 +1149,27 @@ func (f *folder) siteOf(pn *pnode) *Site {
 	return site
 }
 
+// tick takes one step of the budget at pn: a container about to be
+// folded, or the site whose resolver asked for a location.
+func (f *folder) tick(pn *pnode) error {
+	f.steps++
+	if 0 < f.maxSteps && f.maxSteps < f.steps {
+		ptr := f.ptrOf(pn)
+		return &FoldError{Code: codeFoldBudget, Doc: pn.doc.key, At: ptr,
+			message: "more than " + strconv.Itoa(f.maxSteps) + " steps at " + shown(ptr)}
+	}
+	if f.onCheck != nil && f.steps%f.checkEveryN == 0 && !f.onCheck(f.steps) {
+		ptr := f.ptrOf(pn)
+		return &FoldError{Code: codeFoldCancel, Doc: pn.doc.key, At: ptr,
+			message: "cancelled by budget.onCheck after " + strconv.Itoa(f.steps) + " steps at " + shown(ptr)}
+	}
+	return nil
+}
+
 func (f *folder) locate(from *pnode, target Path, key string, named bool) (FoldHit, error) {
+	if err := f.tick(from); err != nil {
+		return FoldHit{}, err
+	}
 	doc, err := f.docOf(from, key, named)
 	if err != nil || doc == nil {
 		return FoldHit{}, err
@@ -1164,6 +1230,9 @@ func (f *folder) cycleTo(from, target *pnode) (FoldHit, error) {
 // With written, a site met on the way is stepped through as the map it
 // is, and only the location named is folded.
 func (f *folder) at(from *pnode, target Path, key string, named bool, written bool) (FoldHit, error) {
+	if err := f.tick(from); err != nil {
+		return FoldHit{}, err
+	}
 	targetDoc := from.doc.key
 	if named {
 		targetDoc = key
@@ -1314,6 +1383,9 @@ func (f *folder) walk(pn *pnode, via int8) (any, error) {
 		ptr := f.ptrOf(pn)
 		return nil, &FoldError{Code: codeFoldDepth, Doc: pn.doc.key, At: ptr,
 			message: "nesting and references deeper than " + strconv.Itoa(f.maxDepth) + " at " + shown(ptr)}
+	}
+	if err := f.tick(pn); err != nil {
+		return nil, err
 	}
 	pn.state = 1
 	pn.via = via

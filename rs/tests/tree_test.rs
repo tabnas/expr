@@ -5,7 +5,9 @@
 //
 // Not ported, since Rust has nothing they could observe: the deferred mode
 // (the plugin's `fold` option, its filter on the engine's rule event, and
-// a start rule with no close alternates), `recordPositions`, which this
+// a start rule with no close alternates, and the budget of a deferred
+// fold), budget values that are not numbers and `onCheck` answers that
+// are not booleans, which the Rust types cannot carry, `recordPositions`, which this
 // crate does not provide, and objects that are not plain records (a
 // `Date`, a `Map`, a class instance), which an engine `Value` cannot be.
 
@@ -18,6 +20,7 @@ mod common;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -25,9 +28,9 @@ use serde_json::json;
 use tabnas::{MapRef, TabnasError, Token, Value};
 use tabnas_expr::{
     evaluation, evaluation_with, fold, is_op, key_op_of, make_key_map, op_of, opify, simplify,
-    terms_of, EvalSite, Evaluate, EvaluationOptions, ExprOptions, FoldCycle, FoldDynamic,
-    FoldEntry, FoldOptions, FoldReport, Op, OpDef, OpRef, Seg, Site, FOLD_CYCLE, FOLD_DEPTH,
-    FOLD_INHERIT, FOLD_KEY,
+    terms_of, EvalSite, Evaluate, EvaluationOptions, ExprOptions, FoldBudget, FoldCycle,
+    FoldDynamic, FoldEntry, FoldOptions, FoldReport, Op, OpDef, OpRef, Seg, Site, FOLD_BUDGET,
+    FOLD_CANCEL, FOLD_CYCLE, FOLD_DEPTH, FOLD_INHERIT, FOLD_KEY,
 };
 
 use common::{key_parser, norm, pointer, resolving, table, text_of};
@@ -1282,4 +1285,218 @@ fn a_handle_that_escaped_its_scope_is_refused() {
         fold(&escaped, &options).map(|_| ())
     });
     assert!(folded.is_err(), "fold must refuse a released handle");
+}
+
+// --- budget ----------------------------------------------------------------
+
+/// Eight steps: the root, `a`, the location `a` asks for, `b`, `c`, `d`
+/// and its two members.
+const EIGHT_STEPS: &str = r##"{a:{$ref:"#/b"},b:{c:{}},d:[{},{}]}"##;
+
+fn budgeted(budget: FoldBudget<'_>) -> Result<Value, tabnas_expr::FoldError> {
+    fold(
+        &parse(EIGHT_STEPS),
+        &with_ref(FoldOptions::new(resolving).with_budget(budget)),
+    )
+}
+
+/// Every count `on_check` is given, at every `every`th step.
+fn checks(every: usize) -> Vec<usize> {
+    let seen = RefCell::new(Vec::new());
+    budgeted(FoldBudget::new(0).with_check(every, |n| {
+        seen.borrow_mut().push(n);
+        true
+    }))
+    .expect("folds");
+    seen.into_inner()
+}
+
+#[test]
+fn budget_steps_bound_the_walk_and_on_check_can_cancel_it() {
+    assert_eq!(checks(1), [1, 2, 3, 4, 5, 6, 7, 8]);
+
+    let out = budgeted(FoldBudget::new(8)).expect("eight steps fold");
+    assert_eq!(
+        json_of(&out),
+        expect(json!({"a": {"c": {}}, "b": {"c": {}}, "d": [{}, {}]}))
+    );
+    let error = budgeted(FoldBudget::new(7)).expect_err("seven steps do not");
+    assert_eq!(FOLD_BUDGET, error.code());
+    assert_eq!(Some(""), error.doc());
+    assert_eq!(Some("/d/1"), error.at());
+    assert_eq!(error.message(), r#"expr fold: more than 7 steps at "/d/1""#);
+
+    // Only a number greater than 0 is a bound.
+    assert!(budgeted(FoldBudget::new(0)).is_ok());
+    assert!(budgeted(FoldBudget::default()).is_ok());
+
+    // `on_check` is called at every Nth step with the count, and false
+    // cancels.
+    assert_eq!(checks(3), [3, 6]);
+    let error = budgeted(FoldBudget::new(0).with_check(2, |n| n < 4)).expect_err("cancelled");
+    assert_eq!(FOLD_CANCEL, error.code());
+    assert_eq!(Some(""), error.doc());
+    assert_eq!(Some("/b"), error.at());
+    assert_eq!(
+        error.message(),
+        r#"expr fold: cancelled by budget.onCheck after 4 steps at "/b""#
+    );
+    assert!(budgeted(FoldBudget::new(0).with_check(1, |_| true)).is_ok());
+
+    // The check needs both of its parts, and the bound is tried first.
+    let calls = Cell::new(0);
+    let refuse = |_: usize| {
+        calls.set(calls.get() + 1);
+        false
+    };
+    assert!(budgeted(FoldBudget {
+        on_check: Some(Box::new(refuse)),
+        ..FoldBudget::default()
+    })
+    .is_ok());
+    assert!(budgeted(FoldBudget::new(0).with_check(0, refuse)).is_ok());
+    assert!(budgeted(FoldBudget {
+        check_every_n: 1,
+        ..FoldBudget::default()
+    })
+    .is_ok());
+    assert_eq!(calls.get(), 0);
+    let error = budgeted(FoldBudget::new(2).with_check(3, refuse)).expect_err("bound");
+    assert_eq!(FOLD_BUDGET, error.code());
+    assert_eq!(calls.get(), 0);
+}
+
+/// The number of steps a fold takes, read from `on_check` at every step.
+fn count(root: &Value, options: FoldOptions<'_>) -> usize {
+    let seen = Rc::new(Cell::new(0));
+    let last = seen.clone();
+    let options = with_ref(options).with_budget(FoldBudget::new(0).with_check(1, move |n| {
+        last.set(n);
+        true
+    }));
+    fold(root, &options).expect("folds");
+    seen.get()
+}
+
+/// `$ref` through `site.at`, and `+` as a sum.
+fn summing(site: &Site<'_>, op: &Op, terms: &[Value]) -> Result<Value, TabnasError> {
+    if op.key {
+        return resolving(site, op, terms);
+    }
+    Ok(Value::Number(number(&terms[0]) + number(&terms[1])))
+}
+
+#[test]
+fn budget_what_a_step_is() {
+    // The root, the site, and the location the site asks for, however it
+    // asks; a scalar target is not folded, so it costs nothing more.
+    let doc = parse(r##"{a:{$ref:"#/b"},b:1}"##);
+    let b = [Seg::from("b")];
+    assert_eq!(count(&doc, FoldOptions::new(resolving)), 3);
+    assert_eq!(
+        count(
+            &doc,
+            FoldOptions::new(|site, _op, _terms| Ok(site.written(&b, None)?.value.unwrap()))
+        ),
+        3
+    );
+    assert_eq!(
+        count(
+            &doc,
+            FoldOptions::new(|site, _op, _terms| Ok(site.locate(&b, None)?.unwrap()))
+        ),
+        3
+    );
+    assert_eq!(
+        count(
+            &doc,
+            FoldOptions::new(|site, _op, _terms| {
+                site.locate(&b, None)?;
+                site.locate(&[Seg::from("x")], None)?;
+                Ok(site.at(&b, None)?.value.unwrap())
+            })
+        ),
+        5
+    );
+
+    // A target is folded once, and each site that names it asks once.
+    assert_eq!(
+        count(
+            &parse(r##"{a:{$ref:"#/c"},b:{$ref:"#/c"},c:{d:1}}"##),
+            FoldOptions::new(resolving)
+        ),
+        6
+    );
+
+    // `plain` reads members that are already folded: no step of its own.
+    assert_eq!(
+        count(
+            &parse(r#"{a:{$ref:"x",m:{}}}"#),
+            FoldOptions::new(|site, _op, _terms| Ok(site.plain()?))
+        ),
+        3
+    );
+
+    // A map that is no site is one step; so is one `recognise` refuses.
+    assert_eq!(
+        count(
+            &doc,
+            FoldOptions::new(resolving).with_recognise(|_site, _op| Ok(false))
+        ),
+        2
+    );
+
+    // An operator node is a container, with `tokens` on or off.
+    for (src, tokens, steps) in [
+        ("{a:1+2}", true, 2),
+        ("{a:1+2}", false, 2),
+        (r##"{a:1+{$ref:"#/b"},b:2}"##, true, 4),
+    ] {
+        tabnas_expr::parse_scope(&token_parser(), src, |raw| {
+            assert_eq!(
+                count(&raw, FoldOptions::new(summing).with_tokens(tokens)),
+                steps,
+                "{src} tokens {tokens}"
+            );
+        })
+        .expect("parses");
+    }
+
+    // One count for the whole fold, across documents.
+    let other = parse("{x:{y:{}}}");
+    assert_eq!(
+        count(
+            &parse(r#"{a:{$ref:"other#/x"}}"#),
+            FoldOptions::new(|site, _op, terms| {
+                let (doc, path) = split(text_of(&terms[0]).unwrap_or(""));
+                Ok(site.at(&path, doc.as_deref())?.value.unwrap())
+            })
+            .with_load(|key, _site| Ok(("other" == key).then(|| other.clone())))
+        ),
+        5
+    );
+}
+
+// The check may re-enter the fold's state: it runs with no borrow held,
+// here from inside a resolver's `site.at`.
+#[test]
+fn budget_on_check_runs_while_a_resolver_has_re_entered_the_fold() {
+    let seen = RefCell::new(Vec::new());
+    let options = with_ref(
+        FoldOptions::new(resolving).with_budget(FoldBudget::new(0).with_check(1, |n| {
+            seen.borrow_mut().push(n);
+            true
+        })),
+    );
+    let out = fold(
+        &parse(r##"{a:{$ref:"#/b"},b:{$ref:"#/c"},c:{d:1}}"##),
+        &options,
+    )
+    .expect("folds");
+    drop(options);
+    assert_eq!(
+        json_of(&out),
+        expect(json!({"a": {"d": 1}, "b": {"d": 1}, "c": {"d": 1}}))
+    );
+    assert_eq!(seen.into_inner(), [1, 2, 3, 4, 5, 6]);
 }

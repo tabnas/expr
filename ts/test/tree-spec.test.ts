@@ -153,6 +153,16 @@ describe('tree', () => {
   })
 
 
+  // The step budget, at five steps: a container the fold starts to fold
+  // is one step, and so is a location a resolver asks its site for.
+  describe('budget', () => {
+    const op = { ref: { key: true, src: '$ref' } }
+    const tn = new Tabnas().use(jsonic).use(Expr, { op: { ...NO_DEFAULTS, ...op } })
+    const opts: FoldOptions = { op, evaluate: resolving, budget: { steps: 5 } }
+    runTree('budget.tsv', (s) => C(fold(tn.parse(s), opts)))
+  })
+
+
   test('every tree fixture is run', () => {
     const files = Fs.readdirSync(TREE).filter((name) => name.endsWith('.tsv'))
     const unrun = files.filter((name) => !registered.has(name))

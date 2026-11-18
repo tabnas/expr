@@ -564,11 +564,24 @@ reproduces:
   dynamic sites), each kept once.
 - **Bounds and errors.** `maxDepth` (default 1000) counts nesting and
   reference hops together; past it, or when the JavaScript stack runs out
-  first, the fold throws `fold_depth`, never a `RangeError`. Every error
-  of the layer's own is a `FoldError` with a `code` (`fold_cycle`,
-  `fold_depth`, `fold_inherit`, `fold_key`, `fold_option`) and the
-  location as fields; member names in its message are JSON-escaped and cut
-  short.
+  first, the fold throws `fold_depth`, never a `RangeError`. `budget`
+  bounds the work and can cancel it, and is off by default. A step is one
+  container the fold STARTS to fold (a map, an array or an operator node;
+  a location already folded costs none) or one location a resolver asks
+  its site for (`at`, `written`, `locate`; `plain` costs none). The step
+  after `budget.steps`, when that is greater than 0, throws `fold_budget`;
+  with `checkEveryN` greater than 0, `onCheck(steps)` runs at every Nth
+  step and a `false` return throws `fold_cancel`. The bound is tried
+  before the check, and the depth check before both. The count is one per
+  fold, across documents, so it is a property of the document and the
+  resolver, not of the runtime: `test/tree/budget.tsv` holds all three to
+  it at five steps, with rows on each side of the bound. The shape is the
+  engine's `parse.budget` (`Budget *FoldBudget` in Go, where `OnCheck`
+  returns a plain `bool`; `budget: Option<FoldBudget>` in Rust). Every
+  error of the layer's own is a `FoldError` with a `code` (`fold_budget`,
+  `fold_cancel`, `fold_cycle`, `fold_depth`, `fold_inherit`, `fold_key`,
+  `fold_option`) and the location as fields; member names in its message
+  are JSON-escaped and cut short.
 - **Deferred mode.** `ExprOptions.fold`, through the engine's `ruleDone`
   event, filtered to the last pass of the parse: a depth-0 close whose
   alternate is null (a rule with no close alternates) or neither pushes,
@@ -1042,9 +1055,11 @@ contract a fixture pins with `ERROR:<code>`, and declaring one here without
 adding it to the descriptor fails admin's `make ax-descriptor` staleness
 check.
 
-The tree layer's `FoldError` carries codes of its own (`fold_cycle`,
-`fold_depth`, `fold_inherit`, `fold_key`, `fold_option`), pinned by
-`ERROR:<code>` rows in `test/tree/errors.tsv`. They are deliberately not
+The tree layer's `FoldError` carries codes of its own (`fold_budget`,
+`fold_cancel`, `fold_cycle`, `fold_depth`, `fold_inherit`, `fold_key`,
+`fold_option`), pinned by `ERROR:<code>` rows in `test/tree/errors.tsv`
+and `test/tree/budget.tsv`; `fold_cancel` needs a callback, so each
+runtime's own tests pin it. They are deliberately not
 engine codes: no runtime declares them in `options.error`, and the
 descriptor lists none. All three runtimes raise the same ones: TypeScript
 and Go on a `FoldError`, Go's deferred fold as a `TabnasError` with the

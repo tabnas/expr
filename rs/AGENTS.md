@@ -293,6 +293,16 @@ test reads that result down iteratively instead.
 `tree_test.rs` holds the canonical depth test to `max_depth` on a 64 MiB
 thread with `max_stack` raised, and the default bound on a 2 MiB thread.
 
+`tick` counts the steps of `FoldOptions::budget`. It runs after `guard`
+at `at`, `written` and `locate`, and in `enter` where a container's frame
+begins, after the depth check, so a location is counted once however the
+iterative walk reaches it. Nothing is counted when no budget is set,
+which nothing can observe. It holds no borrow of the state while
+`on_check` runs, and the error it raises is recorded, so a `fold_budget`
+or `fold_cancel` raised inside a resolver's `site.at` comes back out of
+the resolver with its own code. `test/tree/budget.tsv` holds the count to
+the other two runtimes' at five steps.
+
 ### Positions
 
 `site.token()` is the occurrence token at a token operator site and the
