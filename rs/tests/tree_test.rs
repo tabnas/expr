@@ -583,6 +583,121 @@ fn a_pointer_into_a_ring_is_a_cycle_in_every_member_order() {
     }
 }
 
+// `a` is written first and names the site `q`, so `q` is folded before its
+// container `c`. `q` names `c`, and folding `c` then would have to put
+// something at `q`, which is not settled. That is a cycle through a
+// container, cut at `q`, as it is when `c` is written first.
+//
+// The canonical test also holds the value at `a` to be the very object at
+// `c.p.q`. A Rust value is copied on write, so container identity says
+// nothing about a location here; the two are held equal instead.
+#[test]
+fn a_location_reached_ahead_of_the_walk_its_container_is_a_cycle_until_it_is_settled() {
+    let doc_a = || json!({"$ref": "#/c/p/q"});
+    let doc_c = || json!({"p": {"q": {"$ref": "#/c"}}});
+    let run = |doc: serde_json::Value, written: bool| {
+        let slot = report_slot();
+        let asked = RefCell::new(Vec::new());
+        // A cycle comes back as a marker, never as the map as written, so a
+        // raw map in the output could only have been put there by the fold.
+        let options = with_ref(
+            FoldOptions::new(|site, _op, terms| {
+                asked.borrow_mut().push(format!("/{}", joined(site.path())));
+                let reference = text_of(&terms[0]).unwrap_or("").to_string();
+                let path = pointer(&reference);
+                let hit = if written {
+                    site.written(&path, None)?
+                } else {
+                    site.at(&path, None)?
+                };
+                let marker = |name: &str| data(json!({ name: reference }));
+                Ok(if hit.cycle {
+                    marker("cut")
+                } else if !hit.found {
+                    marker("missing")
+                } else {
+                    hit.value.unwrap_or(Value::Undefined)
+                })
+            })
+            .with_report(|report| *slot.borrow_mut() = Some(report)),
+        );
+        let out = fold(&data(doc), &options).expect("folds");
+        drop(options);
+        let mut asked = asked.into_inner();
+        asked.sort();
+        (out, taken(slot), asked)
+    };
+    for written in [false, true] {
+        let first = run(json!({"a": doc_a(), "c": doc_c()}), written);
+        let second = run(json!({"c": doc_c(), "a": doc_a()}), written);
+        assert_eq!(
+            json_of(&first.0),
+            expect(json!({"a": {"cut": "#/c"}, "c": {"p": {"q": {"cut": "#/c"}}}})),
+            "written: {written}"
+        );
+        assert_eq!(
+            names(&first.0),
+            ["a", "c"],
+            "the folded map keeps its own order"
+        );
+        assert_eq!(names(&second.0), ["c", "a"]);
+        // `serde_json` maps compare without regard to member order.
+        assert_eq!(json_of(&first.0), json_of(&second.0), "written: {written}");
+        for (out, report, asked) in [first, second] {
+            assert_eq!(report.cycles, [entry("", "/c/p/q", "", "/c")]);
+            assert_eq!(report.unresolved, []);
+            // Each site's resolver is asked once, and what it returns is
+            // what the tree holds, at the site and at every reference to it.
+            assert_eq!(asked, ["/a", "/c/p/q"]);
+            let q = member(&member(&member(&out, "c"), "p"), "q");
+            assert_eq!(json_of(&member(&out, "a")), json_of(&q));
+        }
+    }
+
+    // Nothing above the location is folded early: only a site asking for
+    // such a container meets the cycle, and a plain pointer does not.
+    let plain = data(json!({"a": {"$ref": "#/c/p"}, "c": {"p": {"x": 1}, "y": {"$ref": "#/c/p"}}}));
+    assert_eq!(
+        json_of(&fold(&plain, &with_ref(FoldOptions::new(resolving))).expect("folds")),
+        expect(json!({"a": {"x": 1}, "c": {"p": {"x": 1}, "y": {"x": 1}}}))
+    );
+
+    // Under `FoldCycle::Error` it fails as any other cycle does.
+    let error = fold(
+        &data(json!({"a": doc_a(), "c": doc_c()})),
+        &with_ref(FoldOptions::new(resolving).with_cycle(FoldCycle::Error)),
+    )
+    .expect_err("a cycle under FoldCycle::Error fails");
+    assert_eq!(FOLD_CYCLE, error.code());
+    assert_eq!(Some("/c/p/q"), error.at());
+    assert_eq!(Some("/c"), error.target());
+
+    // Another document's container is held open in the same way.
+    let other = data(json!({"c": {"p": {"q": {"$ref": "other#/c"}}}}));
+    let slot = report_slot();
+    let options = with_ref(
+        FoldOptions::new(|site, _op, terms| {
+            let reference = text_of(&terms[0]).unwrap_or("").to_string();
+            let (doc, path) = split(&reference);
+            let hit = site.at(&path, doc.as_deref())?;
+            Ok(if hit.cycle {
+                data(json!({ "cut": reference }))
+            } else {
+                hit.value.unwrap_or(Value::Undefined)
+            })
+        })
+        .with_load(|key, _site| Ok(("other" == key).then(|| other.clone())))
+        .with_report(|report| *slot.borrow_mut() = Some(report)),
+    );
+    let across = fold(&data(json!({"a": {"$ref": "other#/c/p/q"}})), &options).expect("folds");
+    drop(options);
+    assert_eq!(json_of(&across), expect(json!({"a": {"cut": "other#/c"}})));
+    assert_eq!(
+        taken(slot).cycles,
+        [entry("other", "/c/p/q", "other", "/c")]
+    );
+}
+
 #[test]
 fn a_key_operator_may_be_named_proto() {
     let calls = RefCell::new(Vec::new());

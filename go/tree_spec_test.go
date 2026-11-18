@@ -289,6 +289,21 @@ func TestTreeErrors(t *testing.T) {
 	runTree(t, "errors.tsv", foldParse(j, opts))
 }
 
+// A location reached ahead of the walk, through a reference, while the
+// container that holds it has not been folded. A site that then asks for
+// that container closes a cycle, as it would had the walk come to the
+// container first: each pair of rows is one document in two member orders,
+// and gives one answer. Both ways of reaching agree.
+func TestTreeAheadAt(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{"op": noDefaults(refOp())})
+	runTree(t, "ahead.tsv", foldParse(j, FoldOptions{Op: refDef, Evaluate: resolving}))
+}
+
+func TestTreeAheadWritten(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{"op": noDefaults(refOp())})
+	runTree(t, "ahead.tsv", foldParse(j, FoldOptions{Op: refDef, Evaluate: writing}))
+}
+
 // The step budget, at five steps: a container the fold starts to fold is
 // one step, and so is a location a resolver asks its site for.
 func TestTreeBudget(t *testing.T) {
@@ -317,7 +332,7 @@ func TestEveryTreeFixtureIsRun(t *testing.T) {
 			t.Errorf("tree fixture with no runner: %s", file.Name)
 		}
 	}
-	if rows != 85 {
-		t.Errorf("the tree fixtures hold %d rows, not the 85 measured", rows)
+	if rows != 99 {
+		t.Errorf("the tree fixtures hold %d rows, not the 99 measured", rows)
 	}
 }

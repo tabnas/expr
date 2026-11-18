@@ -573,6 +573,14 @@ Which site holds the cut follows the walk, which runs from the root in
 member order, so a document gives the same cuts every time it is folded,
 and reordering its members can move them.
 
+A reference can reach a location before the walk reaches the maps that
+hold it. In `{a:{$ref:"#/c/p/q"},c:{p:{q:{$ref:"#/c"}}}}`, the walk folds
+`a` first, and `a` asks for `q`, so the fold starts `q` before it starts
+`c`. `q` then asks for `c`. Folding `c` at that moment takes a value for
+`q`, and `q` has none yet, so `site.at` returns `cycle: true` to `q`. The
+walk finds the same cycle when the document puts `c` before `a`, and cuts
+it at the same site, so the two orders give one answer.
+
 ### Several documents
 
 `site.at(path, doc)`, `site.written(path, doc)` and

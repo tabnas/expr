@@ -303,6 +303,17 @@ or `fold_cancel` raised inside a resolver's `site.at` comes back out of
 the resolver with its own code. `test/tree/budget.tsv` holds the count to
 the other two runtimes' at five steps.
 
+A location reached ahead of the walk is counted on every location above
+it: `enter` sets `Frame::ahead` when the parent is not being folded and
+calls `State::count_under`, in the borrow that marks the location, and
+`leave` takes the count back on every way out (the two early exits of
+`enter`, `finish` on `Ok` and `Err`, and `unwind`). `holds_open` reads it
+in `through` and `reach`, so a site that asks for a location holding an
+open one gets a cycle, as the canonical fold gives. `test/tree/ahead.tsv`
+pins it through `at` and through `written`. With the rule in place the
+early return of `enter` for a location already being folded is never
+reached by descent: made to panic, it left the whole suite passing.
+
 ### Positions
 
 `site.token()` is the occurrence token at a token operator site and the

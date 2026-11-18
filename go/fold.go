@@ -892,6 +892,9 @@ type pnode struct {
 	// How the walk entered it: 0 from its parent, 1 through a reference.
 	via   int8
 	value any
+	// How many locations below it are being folded while their own parent
+	// is not: each was reached through a reference, ahead of the walk.
+	under int
 
 	// The bag at this location: nil until worked out.
 	k     map[string]any
@@ -1192,11 +1195,13 @@ func (f *folder) miss(from *pnode, targetDoc string, target Path) FoldHit {
 }
 
 // cycleTo answers a cycle: from named target while target was still being
-// folded (a back edge), or target is in a loop of references. Every member
-// of a loop made only of references is a cycle, and so is every reference
-// into one, since none of them has anything to resolve to. A cycle that
-// passes through a container is cut once, at the site whose target was
-// being folded; a later reference to that site gets its folded value.
+// folded (a back edge), or while a location below target was (folding
+// target would reach it), or target is in a loop of references. Every
+// member of a loop made only of references is a cycle, and so is every
+// reference into one, since none of them has anything to resolve to. A
+// cycle that passes through a container is cut once, at the site whose
+// target was being folded; a later reference to that site gets its folded
+// value.
 func (f *folder) cycleTo(from, target *pnode) (FoldHit, error) {
 	row := FoldEntry{Doc: from.doc.key, At: f.ptrOf(from), TargetDoc: target.doc.key, Target: f.ptrOf(target)}
 	if f.cycleErr {
@@ -1266,7 +1271,7 @@ func (f *folder) at(from *pnode, target Path, key string, named bool, written bo
 				return FoldHit{}, err
 			}
 			if op != nil && !op.Dynamic {
-				if pn.state == 1 || pn.loop {
+				if pn.state == 1 || pn.loop || holdsOpen(pn) {
 					return f.cycleTo(from, pn)
 				}
 				folded, err := f.walk(pn, 1)
@@ -1285,7 +1290,7 @@ func (f *folder) at(from *pnode, target Path, key string, named bool, written bo
 			}
 		}
 	}
-	if pn.state == 1 {
+	if pn.state == 1 || holdsOpen(pn) {
 		return f.cycleTo(from, pn)
 	}
 	value, err := f.walk(pn, 1)
@@ -1296,6 +1301,16 @@ func (f *folder) at(from *pnode, target Path, key string, named bool, written bo
 		return f.cycleTo(from, pn)
 	}
 	return FoldHit{Found: true, Value: value}, nil
+}
+
+// holdsOpen is whether folding pn now would reach a location that is still
+// being folded. Such a location was entered through a reference, ahead of
+// the walk, and the fold of pn would have nothing final to put there. The
+// site asking for pn is on the way from that location, so this is a cycle
+// through a container, the same one the walk would have found had it come
+// to pn first.
+func holdsOpen(pn *pnode) bool {
+	return pn.state == 0 && 0 < pn.under
 }
 
 // siteOpOf is the key operator a map is an occurrence of here, if any: its
@@ -1390,9 +1405,22 @@ func (f *folder) walk(pn *pnode, via int8) (any, error) {
 	pn.state = 1
 	pn.via = via
 	f.stack = append(f.stack, pn)
+	// A location whose parent is not being folded was reached ahead of the
+	// walk: count it on every location above it, for holdsOpen.
+	ahead := pn.parent != nil && pn.parent.state != 1
+	if ahead {
+		for p := pn.parent; p != nil; p = p.parent {
+			p.under++
+		}
+	}
 	out, err := f.walkInto(pn, node, sh)
 	f.stack = f.stack[:len(f.stack)-1]
 	pn.state = 0
+	if ahead {
+		for p := pn.parent; p != nil; p = p.parent {
+			p.under--
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

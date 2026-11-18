@@ -304,7 +304,10 @@ data, `load` reaches another document by a key the host chooses, a
 dynamic key operator is reported and never evaluated, and the report
 lists cycles, unresolved targets, and dynamic sites. A site whose target
 is still being folded closes a cycle, which `at` reports with `cycle`
-set, or which fails the fold under `FoldCycle::Error`.
+set, or which fails the fold under `FoldCycle::Error`. The same holds
+for a target that contains a location the fold has started and not
+finished, which happens when a reference reaches that location before
+the walk does.
 
 One resolver can reduce the token operators too, and `op.key` sets the
 two kinds apart. A token operator is recognised only on a live expression

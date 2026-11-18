@@ -1336,3 +1336,137 @@ func TestFoldReadsTheParse(t *testing.T) {
 		t.Error("a key operator registered a fixed token")
 	}
 }
+
+// unordered is a value with every ordered map turned into a plain one, so
+// its canonical JSON lists members sorted.
+func unordered(v any) any {
+	switch x := v.(type) {
+	case *tabnas.OrderedMap:
+		out := map[string]any{}
+		for _, k := range x.Keys {
+			out[k] = unordered(x.Vals[k])
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = unordered(item)
+		}
+		return out
+	}
+	return v
+}
+
+// a is written first and names the site q, so q is folded before its
+// container c. q names c, and folding c then would have to put something
+// at q, which is not settled. That is a cycle through a container, cut at
+// q, as it is when c is written first.
+func TestFoldALocationReachedAheadOfTheWalkHoldsItsContainerOpen(t *testing.T) {
+	a := func() *tabnas.OrderedMap { return om("$ref", "#/c/p/q") }
+	c := func() *tabnas.OrderedMap { return om("p", om("q", om("$ref", "#/c"))) }
+	type run struct {
+		out    any
+		report FoldReport
+		asked  []string
+	}
+	fold := func(doc any, written bool) run {
+		var got run
+		// A cycle comes back as a marker, never as the map as written, so a
+		// raw map in the output could only have been put there by the fold.
+		got.out = mustFold(t, doc, FoldOptions{
+			Op:     refDef,
+			Report: func(r FoldReport) { got.report = r },
+			Evaluate: func(site *Site, _ *Op, terms []any) (any, error) {
+				got.asked = append(got.asked, pointer(site.Path()))
+				reach := site.At
+				if written {
+					reach = site.Written
+				}
+				value := terms[0].(string)
+				hit, err := reach(fragPointer(value))
+				switch {
+				case err != nil:
+					return nil, err
+				case hit.Cycle:
+					return om("cut", value), nil
+				case !hit.Found:
+					return om("missing", value), nil
+				}
+				return hit.Value, nil
+			},
+		})
+		return got
+	}
+	for _, written := range []bool{false, true} {
+		first := fold(om("a", a(), "c", c()), written)
+		second := fold(om("c", c(), "a", a()), written)
+		if got := cj(t, first.out); got != `{"a":{"cut":"#/c"},"c":{"p":{"q":{"cut":"#/c"}}}}` {
+			t.Errorf("written %v: folded %s", written, got)
+		}
+		if cj(t, unordered(first.out)) != cj(t, unordered(second.out)) {
+			t.Errorf("written %v: the orders differ: %s, %s", written, cj(t, first.out), cj(t, second.out))
+		}
+		for _, got := range []run{first, second} {
+			if want := []FoldEntry{{Doc: "", At: "/c/p/q", TargetDoc: "", Target: "/c"}}; !reflect.DeepEqual(got.report.Cycles, want) {
+				t.Errorf("written %v: cycles %v", written, got.report.Cycles)
+			}
+			if len(got.report.Unresolved) != 0 {
+				t.Errorf("written %v: unresolved %v", written, got.report.Unresolved)
+			}
+			// Each site's resolver is asked once, and what it returns is
+			// what the tree holds, at the site and at every reference to it.
+			asked := append([]string(nil), got.asked...)
+			sort.Strings(asked)
+			if !reflect.DeepEqual(asked, []string{"/a", "/c/p/q"}) {
+				t.Errorf("written %v: asked %v", written, got.asked)
+			}
+			if member(got.out, "a") != member(got.out, "c", "p", "q") {
+				t.Errorf("written %v: a is not the value at c.p.q", written)
+			}
+		}
+	}
+
+	// Nothing above the location is folded early: only a site asking for
+	// such a container meets the cycle, and a plain pointer does not.
+	plain := om("a", om("$ref", "#/c/p"), "c", om("p", om("x", 1.0), "y", om("$ref", "#/c/p")))
+	if got := cj(t, mustFold(t, plain, FoldOptions{Op: refDef, Evaluate: resolving})); got != `{"a":{"x":1},"c":{"p":{"x":1},"y":{"x":1}}}` {
+		t.Errorf("plain: %s", got)
+	}
+
+	// Under Cycle "error" it fails as any other cycle does.
+	_, err := Fold(om("a", a(), "c", c()), FoldOptions{Op: refDef, Cycle: "error", Evaluate: resolving})
+	var fe *FoldError
+	if !errors.As(err, &fe) || fe.Code != "fold_cycle" || fe.At != "/c/p/q" || fe.Target != "/c" {
+		t.Errorf("Cycle error: %v", err)
+	}
+
+	// Another document's container is held open in the same way.
+	others := map[string]any{"other": om("c", om("p", om("q", om("$ref", "other#/c"))))}
+	var rows FoldReport
+	across := mustFold(t, om("a", om("$ref", "other#/c/p/q")), FoldOptions{
+		Op: refDef,
+		Load: func(key string, _ *Site) (any, bool, error) {
+			root, ok := others[key]
+			return root, ok, nil
+		},
+		Report: func(r FoldReport) { rows = r },
+		Evaluate: func(site *Site, _ *Op, terms []any) (any, error) {
+			value := terms[0].(string)
+			key, frag, _ := strings.Cut(value, "#")
+			hit, err := site.At(fragPointer("#"+frag), key)
+			if err != nil {
+				return nil, err
+			}
+			if hit.Cycle {
+				return om("cut", value), nil
+			}
+			return hit.Value, nil
+		},
+	})
+	if got := cj(t, across); got != `{"a":{"cut":"other#/c"}}` {
+		t.Errorf("across: %s", got)
+	}
+	if want := []FoldEntry{{Doc: "other", At: "/c/p/q", TargetDoc: "other", Target: "/c"}}; !reflect.DeepEqual(rows.Cycles, want) {
+		t.Errorf("across: cycles %v", rows.Cycles)
+	}
+}

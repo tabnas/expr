@@ -900,6 +900,23 @@ struct State {
     failure: Option<FoldError>,
 }
 
+impl State {
+    /// Count a location reached ahead of the walk on every location above
+    /// it, up to its document's top, or take that count back off.
+    fn count_under(&mut self, pn: usize, add: bool) {
+        let mut cursor = self.nodes[pn].parent;
+        while let Some(at) = cursor {
+            let node = &mut self.nodes[at];
+            if add {
+                node.under += 1;
+            } else {
+                node.under -= 1;
+            }
+            cursor = node.parent;
+        }
+    }
+}
+
 struct Doc {
     key: Rc<str>,
     root: Value,
@@ -915,6 +932,10 @@ struct PNode {
     kids: Option<Box<Kids>>,
     state: u8,
     via: u8,
+    /// How many locations below it are being folded while their own
+    /// parent is not: each was reached through a reference, ahead of the
+    /// walk.
+    under: u32,
     value: Value,
     k: Option<Value>,
     k_busy: bool,
@@ -941,6 +962,7 @@ impl PNode {
             kids: None,
             state: FREE,
             via: FROM_PARENT,
+            under: 0,
             value: Value::Undefined,
             k: None,
             k_busy: false,
@@ -1015,6 +1037,9 @@ fn stack_here() -> usize {
 /// a time, and the folded ones collected.
 struct Frame {
     pn: usize,
+    /// It was reached ahead of the walk, and so is counted on every
+    /// location above it until it is left.
+    ahead: bool,
     raw: Value,
     next: usize,
     kind: Kind,
@@ -1586,7 +1611,7 @@ impl Folder<'_> {
         key: Option<&str>,
     ) -> Result<FoldHit, FoldError> {
         let (state, looped, _) = self.state_of(pn);
-        if ACTIVE == state || looped {
+        if ACTIVE == state || looped || self.holds_open(pn) {
             return self.cycle_to(from, pn);
         }
         match self.walk(pn, FROM_REFERENCE) {
@@ -1619,13 +1644,25 @@ impl Folder<'_> {
     /// Fold the location at the end of a path.
     fn reach(&self, from: usize, pn: usize) -> Result<FoldHit, FoldError> {
         let (state, _, _) = self.state_of(pn);
-        if ACTIVE == state {
+        if ACTIVE == state || self.holds_open(pn) {
             return self.cycle_to(from, pn);
         }
         match self.walk(pn, FROM_REFERENCE) {
             Ok(value) => self.reached(from, pn, value),
             Err(error) => Err(error),
         }
+    }
+
+    /// Whether folding `pn` now would reach a location that is still being
+    /// folded. Such a location was entered through a reference, ahead of
+    /// the walk, and the fold of `pn` would have nothing final to put
+    /// there. The site asking for `pn` is on the way from that location,
+    /// so this is a cycle through a container, the same one the walk would
+    /// have found had it come to `pn` first.
+    fn holds_open(&self, pn: usize) -> bool {
+        let state = self.state.borrow();
+        let node = &state.nodes[pn];
+        FREE == node.state && 0 < node.under
     }
 
     /// A location folded at the end of a path: a cycle when it is in a
@@ -1864,17 +1901,26 @@ impl Folder<'_> {
         // A step of the budget: the location is about to be marked as
         // being folded, after the memory, the leaf and the depth checks.
         self.tick(pn)?;
-        {
+        let ahead = {
             let mut state = self.state.borrow_mut();
             state.nodes[pn].state = ACTIVE;
             state.nodes[pn].via = via;
             state.stack.push(pn);
-        }
+            // A location whose parent is not being folded was reached ahead
+            // of the walk: count it on every location above it, for
+            // `holds_open`.
+            let parent = state.nodes[pn].parent;
+            let ahead = parent.is_some_and(|parent| ACTIVE != state.nodes[parent].state);
+            if ahead {
+                state.count_under(pn, true);
+            }
+            ahead
+        };
         let kind = if is_record(&raw) {
             let op = match self.site_op_of(pn) {
                 Ok(op) => op,
                 Err(error) => {
-                    self.leave(pn, None);
+                    self.leave(pn, ahead, None);
                     return Err(error);
                 }
             };
@@ -1890,7 +1936,7 @@ impl Folder<'_> {
                     }
                     let plain = self.state.borrow().nodes[pn].plain.clone();
                     if let Some(plain) = plain {
-                        self.leave(pn, Some(plain.clone()));
+                        self.leave(pn, ahead, Some(plain.clone()));
                         return Ok(Some(plain));
                     }
                     Kind::Plain {
@@ -1913,6 +1959,7 @@ impl Folder<'_> {
         };
         frames.push(Frame {
             pn,
+            ahead,
             raw,
             next: 0,
             kind,
@@ -1928,13 +1975,13 @@ impl Folder<'_> {
     /// frame is read in place, not moved, and the work that calls nothing
     /// back is done in frames that are gone before a callback runs.
     fn finish(&self, frame: &mut Frame) -> Result<Value, FoldError> {
-        let pn = frame.pn;
+        let (pn, ahead) = (frame.pn, frame.ahead);
         let out = match frame.kind {
             Kind::Node { op: Some(_), .. } => self.reduce_node(frame),
             Kind::Site { .. } => self.reduce_site(frame),
             _ => Ok(self.rebuild(frame)),
         };
-        self.leave(pn, out.as_ref().ok().cloned());
+        self.leave(pn, ahead, out.as_ref().ok().cloned());
         out
     }
 
@@ -2017,11 +2064,15 @@ impl Folder<'_> {
     }
 
     /// Take a location off the active stack: kept when it has a value,
-    /// free again when its fold failed.
-    fn leave(&self, pn: usize, out: Option<Value>) {
+    /// free again when its fold failed. One reached `ahead` of the walk is
+    /// taken off the count of every location above it, either way.
+    fn leave(&self, pn: usize, ahead: bool, out: Option<Value>) {
         let mut state = self.state.borrow_mut();
         let top = state.stack.pop();
         debug_assert_eq!(Some(pn), top, "the active stack unwinds in order");
+        if ahead {
+            state.count_under(pn, false);
+        }
         let node = &mut state.nodes[pn];
         match out {
             Some(value) => {
@@ -2035,7 +2086,7 @@ impl Folder<'_> {
     /// A walk failed: every location it still had open is free again.
     fn unwind(&self, frames: &[Frame]) {
         for frame in frames.iter().rev() {
-            self.leave(frame.pn, None);
+            self.leave(frame.pn, frame.ahead, None);
         }
     }
 }

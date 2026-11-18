@@ -557,6 +557,22 @@ reproduces:
   `value` with `cycle: true`. Where the cut falls follows the walk, from
   the root in member order, so it is stable for a document and can move
   when members are reordered.
+- **A location reached ahead of the walk.** A reference can fold a
+  location while the containers above it have not been started. A
+  location entered while its parent is not being folded is counted on
+  every location above it (`under`), and a site that asks for a location
+  holding one closes a cycle, exactly as if that location were on the
+  stack: folding it would have to put a value where the open location is,
+  and nothing there is settled. It is the cycle the walk finds when it
+  comes to the container first, cut at the same site, so a document gives
+  one answer whichever of the two is written first. Before 2026-11-18 the
+  container was folded with the open location's map as written in it,
+  nothing was reported, and the result was kept for every later reference
+  (23 real descriptions hit it through tabnas/openapi, which recorded it
+  as W10). `test/tree/ahead.tsv` pins the pairs of orders, through `at`
+  and through `written`. With the rule in place the walk never meets a
+  location that is still being folded by descent; the early return for
+  one stays as a guard.
 - **Several documents.** `options.doc` names the document folded and
   `options.load(key, site)` returns another's raw root, once per key, or
   `undefined`. Memory, the active stack and sharing span documents. Report

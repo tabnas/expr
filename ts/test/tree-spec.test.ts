@@ -153,6 +153,21 @@ describe('tree', () => {
   })
 
 
+  // A location reached ahead of the walk, through a reference, while the
+  // container that holds it has not been folded. A site that then asks
+  // for that container closes a cycle, as it would had the walk come to
+  // the container first: each pair of rows is one document in two member
+  // orders, and gives one answer. Both ways of reaching agree.
+  for (const reach of ['at', 'written'] as const) {
+    describe('ahead, through ' + reach, () => {
+      const op = { ref: { key: true, src: '$ref' } }
+      const tn = new Tabnas().use(jsonic).use(Expr, { op: { ...NO_DEFAULTS, ...op } })
+      const opts: FoldOptions = { op, evaluate: resolvingBy(reach) }
+      runTree('ahead.tsv', (s) => C(fold(tn.parse(s), opts)))
+    })
+  }
+
+
   // The step budget, at five steps: a container the fold starts to fold
   // is one step, and so is a location a resolver asks its site for.
   describe('budget', () => {

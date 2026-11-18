@@ -221,6 +221,31 @@ fn tree_errors() {
     });
 }
 
+// A location reached ahead of the walk, through a reference, while the
+// container that holds it has not been folded. A site that then asks for
+// that container closes a cycle, as it would had the walk come to the
+// container first: each pair of rows is one document in two member
+// orders, and gives one answer. Both ways of reaching agree.
+#[test]
+fn tree_ahead_through_at() {
+    let ops = [("ref", OpDef::key("$ref"))];
+    let parser = key_parser(&ops);
+    let options = FoldOptions::new(resolving).with_ops(table(&ops));
+    run_tree("ahead.tsv", move |input| {
+        fold_parse(&parser, &options, input)
+    });
+}
+
+#[test]
+fn tree_ahead_through_written() {
+    let ops = [("ref", OpDef::key("$ref"))];
+    let parser = key_parser(&ops);
+    let options = FoldOptions::new(writing).with_ops(table(&ops));
+    run_tree("ahead.tsv", move |input| {
+        fold_parse(&parser, &options, input)
+    });
+}
+
 // The step budget, at five steps: a container the fold starts to fold is
 // one step, and so is a location a resolver asks its site for.
 #[test]

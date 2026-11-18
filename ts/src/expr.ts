@@ -2583,6 +2583,9 @@ class PNode {
   value: any = undefined
   // How the walk entered it: 0 from its parent, 1 through a reference.
   via = 0
+  // How many locations below it are being folded while their own parent
+  // is not: each was reached through a reference, ahead of the walk.
+  under = 0
   k: Record<string, any> | undefined = undefined
   kBusy = false
   // Its resolution met a cycle, so the resolver was told `cycle: true`.
@@ -2803,11 +2806,13 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
   }
 
   // A cycle: `from` named `target` while `target` was still being folded
-  // (a back edge), or `target` is in a loop of references. Every member of
-  // a loop made only of references is a cycle, and so is every reference
-  // into one, since none of them has anything to resolve to. A cycle that
-  // passes through a container is cut once, at the site whose target was
-  // being folded; a later reference to that site gets its folded value.
+  // (a back edge), or while a location below `target` was (folding
+  // `target` would reach it), or `target` is in a loop of references.
+  // Every member of a loop made only of references is a cycle, and so is
+  // every reference into one, since none of them has anything to resolve
+  // to. A cycle that passes through a container is cut once, at the site
+  // whose target was being folded; a later reference to that site gets its
+  // folded value.
   const cycleTo = (from: PNode, target: PNode): FoldHit => {
     const row = { doc: from.doc.key, at: ptrOf(from), targetDoc: target.doc.key, target: ptrOf(target) }
     if ('error' === opts.cycle) {
@@ -2857,7 +2862,7 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
       // so the raw path below it names the same location.
       const op = !written && i < target.length - 1 && isRecord(node) ? siteOpOf(pn) : null
       if (null !== op && !op.dynamic) {
-        if (1 === pn.state || pn.loop) return cycleTo(from, pn)
+        if (1 === pn.state || pn.loop || holdsOpen(pn)) return cycleTo(from, pn)
         let folded = walk(pn, 1)
         if (pn.loop || pn.cut) return cycleTo(from, pn)
         for (i++; i < target.length; i++) {
@@ -2867,11 +2872,19 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
         return { found: true, cycle: false, value: folded }
       }
     }
-    if (1 === pn.state) return cycleTo(from, pn)
+    if (1 === pn.state || holdsOpen(pn)) return cycleTo(from, pn)
     const value = walk(pn, 1)
     if (pn.loop) return cycleTo(from, pn)
     return { found: true, cycle: false, value }
   }
+
+  // Whether folding `pn` now would reach a location that is still being
+  // folded. Such a location was entered through a reference, ahead of the
+  // walk, and the fold of `pn` would have nothing final to put there. The
+  // site asking for `pn` is on the way from that location, so this is a
+  // cycle through a container, the same one the walk would have found had
+  // it come to `pn` first.
+  const holdsOpen = (pn: PNode): boolean => 0 === pn.state && 0 < pn.under
 
   // The key operator a map is an occurrence of here, if any: its shape,
   // then the host's `recognise`, decided once per location.
@@ -2920,6 +2933,10 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
     pn.state = 1
     pn.via = via
     stack.push(pn)
+    // A location whose parent is not being folded was reached ahead of the
+    // walk: count it on every location above it, for `holdsOpen`.
+    const ahead = undefined !== pn.parent && 1 !== pn.parent.state
+    if (ahead) for (let p = pn.parent; undefined !== p; p = p.parent) p.under++
     let out: any
     try {
       if (list && isOp(node)) {
@@ -2974,6 +2991,7 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
     finally {
       stack.pop()
       pn.state = 0
+      if (ahead) for (let p = pn.parent; undefined !== p; p = p.parent) p.under--
     }
     pn.state = 2
     pn.value = out
