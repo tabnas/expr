@@ -292,6 +292,11 @@ reference resolves, and every site that names one location shares one
 folded value. A hit carries a value only when the location was found and
 is not a cycle. The input is never changed: the result is a new tree.
 
+`site.written` folds a location as the document writes it. Where
+`site.at` folds a key operator map met on the way and reads on in its
+folded value, `site.written` steps through it as an ordinary map, so it
+reads a member beside the operator's own member as written.
+
 The rest of the contract is the canonical one, and the TypeScript
 reference documents it in full: `inherit` passes a bag of context down
 from the root, `recognise` lets a host decide that a map owning `$ref` is
@@ -299,7 +304,10 @@ data, `load` reaches another document by a key the host chooses, a
 dynamic key operator is reported and never evaluated, and the report
 lists cycles, unresolved targets, and dynamic sites. A site whose target
 is still being folded closes a cycle, which `at` reports with `cycle`
-set, or which fails the fold under `FoldCycle::Error`.
+set, or which fails the fold under `FoldCycle::Error`. The same holds
+for a target that contains a location the fold has started and not
+finished, which happens when a reference reaches that location before
+the walk does.
 
 One resolver can reduce the token operators too, and `op.key` sets the
 two kinds apart. A token operator is recognised only on a live expression
@@ -336,7 +344,8 @@ as an operator, because a document can spell the same array, and reading
 it would let the text of a document choose what the resolver runs.
 
 A fold that fails returns a `FoldError`. For the layer's own failures its
-`code` is `fold_cycle`, `fold_depth`, `fold_inherit` or `fold_key`, and
+`code` is `fold_budget`, `fold_cancel`, `fold_cycle`, `fold_depth`,
+`fold_inherit`, or `fold_key`, and
 `doc`, `at`, `target_doc` and `target` give the location, as pointers
 into the document; member names in its message are escaped and cut
 short, since they are document content. A resolver returns the engine's
@@ -356,6 +365,21 @@ the stack, which would end the process. A resolver like the first one
 here makes about 240 hops in a debug build and about 320 in a release
 build within the default. Raise `max_stack` only on a thread that has the
 stack to give.
+
+`budget` bounds how much the fold does, and lets a host stop it. The
+fold takes a step each time it starts to fold a container: a map, an
+array, or an operator node. It takes another each time a resolver asks
+its site for a location, through `at`, `written`, or `locate`. A location
+already folded costs no step, and neither does `plain`. `steps`, when
+greater than 0, is the most steps a fold may take: the step after it
+fails the fold with `fold_budget`. With `check_every_n` greater than 0
+and `on_check` set, the fold calls `on_check` at every Nth step with the
+number of steps taken so far, and a `false` return fails the fold with
+`fold_cancel`. A host keeps a deadline there, or reads a flag that
+another thread sets. Both parts are off by default, and the count is one
+for the whole fold, across documents. `FoldBudget::new(steps)` makes a
+bound, `with_check` adds the check, and `FoldOptions::with_budget` takes
+the result.
 
 `site.token()` is the token a token operator occurrence was matched from.
 At a map it is whatever `FoldOptions::positions` returns for the map:

@@ -219,9 +219,11 @@ type FoldHit = { found: boolean; cycle: boolean; value?: any }
 // including this one), the map's opening token when positions are
 // recorded, and the ways to reach the rest of the tree: `at` folds
 // another location, in this document or another, through any key-operator
-// sites on the way; `locate` reads one raw; `plain` is this map folded as
-// a plain map, member by member in its own order, which is what a
-// resolver returns where the operator does not apply.
+// sites on the way; `written` folds one as the document is written, so a
+// site on the way is stepped through as the map it is and only the
+// location named is folded; `locate` reads one raw; `plain` is this map
+// folded as a plain map, member by member in its own order, which is what
+// a resolver returns where the operator does not apply.
 type Site = {
   readonly root: any
   readonly doc: string
@@ -230,6 +232,7 @@ type Site = {
   readonly k: Record<string, any>
   readonly token?: Token
   at: (path: Path, doc?: string) => FoldHit
+  written: (path: Path, doc?: string) => FoldHit
   locate: (path: Path, doc?: string) => { found: boolean; value?: any }
   plain: () => any
 }
@@ -264,6 +267,21 @@ type FoldReport = {
   dynamic: { doc: string; at: string; src: string }[]
 }
 
+// A bound on a fold's work, and a way to stop it. One step is one
+// container the fold starts to fold (a map, an array or an operator
+// node), or one location a resolver asks a site for (`at`, `written` or
+// `locate`). `steps`, when greater than 0, is the most steps a fold may
+// take; the step after it throws `fold_budget`. With `checkEveryN`
+// greater than 0, `onCheck` is called at every Nth step with the number
+// taken so far, and a `false` return throws `fold_cancel`: a host keeps a
+// deadline there, or reads a flag another task sets. Off by default, as
+// the engine's own `parse.budget` is, and shaped as that is.
+type FoldBudget = {
+  steps?: number
+  checkEveryN?: number
+  onCheck?: null | ((steps: number) => boolean | void)
+}
+
 type FoldOptions = {
   // The operator table; only the `key` entries matter to a fold. The
   // plugin supplies its own table in deferred mode.
@@ -292,6 +310,9 @@ type FoldOptions = {
   // How deep the walk may go, nesting and reference hops counted
   // together. Default 1000.
   maxDepth?: number
+  // How much work the fold may do, and a check that can cancel it.
+  // Default: no bound and no check.
+  budget?: FoldBudget
   report?: (report: FoldReport) => void
 }
 
@@ -2492,12 +2513,14 @@ function define(o: any, k: string, v: any): void {
 }
 
 
-// The fold's own errors. `code` is what a fixture pins: `fold_cycle` (a
-// cycle under `cycle: 'error'`), `fold_depth` (nesting and reference hops
-// past `maxDepth`, or the stack ran out first), `fold_inherit` (an
-// `inherit` that returned no bag, or folded its own subtree), `fold_key`
-// (an operator table with two key operators on one member name, or one
-// on none) and `fold_option` (`positions: true` outside deferred mode).
+// The fold's own errors. `code` is what a fixture pins: `fold_budget`
+// (more steps than `budget.steps`), `fold_cancel` (`budget.onCheck`
+// returned false), `fold_cycle` (a cycle under `cycle: 'error'`),
+// `fold_depth` (nesting and reference hops past `maxDepth`, or the stack
+// ran out first), `fold_inherit` (an `inherit` that returned no bag, or
+// folded its own subtree), `fold_key` (an operator table with two key
+// operators on one member name, or one on none) and `fold_option`
+// (`positions: true` outside deferred mode).
 // The document key and the pointers are fields; the message quotes them
 // JSON-escaped and cut short, since member names are document content.
 class FoldError extends Error {
@@ -2560,6 +2583,9 @@ class PNode {
   value: any = undefined
   // How the walk entered it: 0 from its parent, 1 through a reference.
   via = 0
+  // How many locations below it are being folded while their own parent
+  // is not: each was reached through a reference, ahead of the walk.
+  under = 0
   k: Record<string, any> | undefined = undefined
   kBusy = false
   // Its resolution met a cycle, so the resolver was told `cycle: true`.
@@ -2611,6 +2637,13 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
   const recognise = opts.recognise
   const lookup = 'function' === typeof opts.positions ? opts.positions : undefined
   const maxDepth = null == opts.maxDepth ? 1000 : opts.maxDepth
+  const budget = opts.budget
+  const maxSteps =
+    null != budget && 'number' === typeof budget.steps && 0 < budget.steps ? budget.steps : Infinity
+  const onCheck = null != budget && 'function' === typeof budget.onCheck ? budget.onCheck : undefined
+  const checkEveryN =
+    undefined !== onCheck && 'number' === typeof budget!.checkEveryN ? Math.floor(budget!.checkEveryN) : 0
+  let steps = 0
   const base = opts.k || {}
   const report: FoldReport = { cycles: [], unresolved: [], dynamic: [] }
   const noted = new Set<string>()
@@ -2663,6 +2696,22 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
       c.ptr = s
     }
     return s
+  }
+
+  // One step of the budget, taken at `pn`: a container about to be
+  // folded, or the site whose resolver asked for a location.
+  const tick = (pn: PNode): void => {
+    steps++
+    if (maxSteps < steps) {
+      throw new FoldError('fold_budget',
+        'more than ' + maxSteps + ' steps at ' + shown(ptrOf(pn)),
+        { doc: pn.doc.key, at: ptrOf(pn) })
+    }
+    if (0 < checkEveryN && 0 === steps % checkEveryN && false === onCheck!(steps)) {
+      throw new FoldError('fold_cancel',
+        'cancelled by budget.onCheck after ' + steps + ' steps at ' + shown(ptrOf(pn)),
+        { doc: pn.doc.key, at: ptrOf(pn) })
+    }
   }
 
   const pathOf = (pn: PNode): Path => {
@@ -2733,12 +2782,14 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
       },
       token: undefined !== lookup && null != node && 'object' === typeof node ? lookup(node) : undefined,
       at: (target: Path, doc?: string) => at(pn, target, doc),
+      written: (target: Path, doc?: string) => at(pn, target, doc, true),
       locate: (target: Path, doc?: string) => locate(pn, target, doc),
       plain: () => plainOf(pn),
     }
   }
 
   const locate = (from: PNode, target: Path, key?: string): { found: boolean; value?: any } => {
+    tick(from)
     const doc = docOf(from, key)
     if (undefined === doc) return { found: false }
     let node = doc.root
@@ -2755,11 +2806,13 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
   }
 
   // A cycle: `from` named `target` while `target` was still being folded
-  // (a back edge), or `target` is in a loop of references. Every member of
-  // a loop made only of references is a cycle, and so is every reference
-  // into one, since none of them has anything to resolve to. A cycle that
-  // passes through a container is cut once, at the site whose target was
-  // being folded; a later reference to that site gets its folded value.
+  // (a back edge), or while a location below `target` was (folding
+  // `target` would reach it), or `target` is in a loop of references.
+  // Every member of a loop made only of references is a cycle, and so is
+  // every reference into one, since none of them has anything to resolve
+  // to. A cycle that passes through a container is cut once, at the site
+  // whose target was being folded; a later reference to that site gets its
+  // folded value.
   const cycleTo = (from: PNode, target: PNode): FoldHit => {
     const row = { doc: from.doc.key, at: ptrOf(from), targetDoc: target.doc.key, target: ptrOf(target) }
     if ('error' === opts.cycle) {
@@ -2787,8 +2840,10 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
   // way is folded (through the memo) and the remaining segments read its
   // folded value, so a reference to a reference resolves. A target still
   // being folded is a cycle, and so is a path that must pass through a
-  // site that was cut.
-  const at = (from: PNode, target: Path, key?: string): FoldHit => {
+  // site that was cut. With `written`, a site met on the way is stepped
+  // through as the map it is, and only the location named is folded.
+  const at = (from: PNode, target: Path, key?: string, written?: boolean): FoldHit => {
+    tick(from)
     const targetDoc = undefined === key ? from.doc.key : key
     const doc = docOf(from, key)
     if (undefined === doc) return miss(from, targetDoc, target)
@@ -2805,9 +2860,9 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
       // Only a static site changes what lies below it; any other map,
       // a dynamic one or one `recognise` refused, folds member by member,
       // so the raw path below it names the same location.
-      const op = i < target.length - 1 && isRecord(node) ? siteOpOf(pn) : null
+      const op = !written && i < target.length - 1 && isRecord(node) ? siteOpOf(pn) : null
       if (null !== op && !op.dynamic) {
-        if (1 === pn.state || pn.loop) return cycleTo(from, pn)
+        if (1 === pn.state || pn.loop || holdsOpen(pn)) return cycleTo(from, pn)
         let folded = walk(pn, 1)
         if (pn.loop || pn.cut) return cycleTo(from, pn)
         for (i++; i < target.length; i++) {
@@ -2817,11 +2872,19 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
         return { found: true, cycle: false, value: folded }
       }
     }
-    if (1 === pn.state) return cycleTo(from, pn)
+    if (1 === pn.state || holdsOpen(pn)) return cycleTo(from, pn)
     const value = walk(pn, 1)
     if (pn.loop) return cycleTo(from, pn)
     return { found: true, cycle: false, value }
   }
+
+  // Whether folding `pn` now would reach a location that is still being
+  // folded. Such a location was entered through a reference, ahead of the
+  // walk, and the fold of `pn` would have nothing final to put there. The
+  // site asking for `pn` is on the way from that location, so this is a
+  // cycle through a container, the same one the walk would have found had
+  // it come to `pn` first.
+  const holdsOpen = (pn: PNode): boolean => 0 === pn.state && 0 < pn.under
 
   // The key operator a map is an occurrence of here, if any: its shape,
   // then the host's `recognise`, decided once per location.
@@ -2866,9 +2929,14 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
         'nesting and references deeper than ' + maxDepth + ' at ' + shown(ptrOf(pn)),
         { doc: pn.doc.key, at: ptrOf(pn) })
     }
+    tick(pn)
     pn.state = 1
     pn.via = via
     stack.push(pn)
+    // A location whose parent is not being folded was reached ahead of the
+    // walk: count it on every location above it, for `holdsOpen`.
+    const ahead = undefined !== pn.parent && 1 !== pn.parent.state
+    if (ahead) for (let p = pn.parent; undefined !== p; p = p.parent) p.under++
     let out: any
     try {
       if (list && isOp(node)) {
@@ -2923,6 +2991,7 @@ function foldTree(root: any, opts: FoldOptions, keys: KeyMap): any {
     finally {
       stack.pop()
       pn.state = 0
+      if (ahead) for (let p = pn.parent; undefined !== p; p = p.parent) p.under--
     }
     pn.state = 2
     pn.value = out
@@ -3379,6 +3448,7 @@ export type {
   OpDef,
   Op,
   Evaluate,
+  FoldBudget,
   FoldOptions,
   FoldEvaluate,
   FoldHit,

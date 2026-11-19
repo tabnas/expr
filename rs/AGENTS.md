@@ -231,7 +231,7 @@ the code.
   error, and keeps it) and never a value's identity: `Arc` identity says
   nothing about a location, since values are copied on write.
 - **Re-entry.** Every resolver can call back into the fold through its
-  `Site` (`at`, `locate`, `plain`, `k`) while the fold is inside an outer
+  `Site` (`at`, `written`, `locate`, `plain`, `k`) while the fold is inside an outer
   callback. All state is one `RefCell<State>` and NO borrow of it may be
   held across a callback. The trap is a temporary in an `if let` or
   `match` scrutinee, which lives to the end of the whole statement: bind
@@ -279,7 +279,8 @@ hop from 10 KB to 4.5 KB in debug and from 4.3 KB to 3.3 KB in release.
 `FoldOptions::max_stack` bytes (a megabyte, `FOLD_MAX_STACK`) from where
 the OUTERMOST fold on the thread started (`STACK_BASE`, so a fold inside a
 resolver shares its caller's budget). It runs at every entry the re-entry
-passes through: `walk`, `at`, `locate`, `plain_of`, `k_of` and a `load`.
+passes through: `walk`, `at`, `written`, `locate`, `plain_of`, `k_of` and
+a `load`.
 On a 2 MiB thread with the defaults, 238 hops fold in a debug build, and
 313 (rustc 1.85, the MSRV) or 324 (1.97) in a release build; 3,000 nested
 maps fold with `max_depth` raised.
@@ -291,6 +292,27 @@ printed the 998-deep result of a fold aborted under rustc 1.85, so the
 test reads that result down iteratively instead.
 `tree_test.rs` holds the canonical depth test to `max_depth` on a 64 MiB
 thread with `max_stack` raised, and the default bound on a 2 MiB thread.
+
+`tick` counts the steps of `FoldOptions::budget`. It runs after `guard`
+at `at`, `written` and `locate`, and in `enter` where a container's frame
+begins, after the depth check, so a location is counted once however the
+iterative walk reaches it. Nothing is counted when no budget is set,
+which nothing can observe. It holds no borrow of the state while
+`on_check` runs, and the error it raises is recorded, so a `fold_budget`
+or `fold_cancel` raised inside a resolver's `site.at` comes back out of
+the resolver with its own code. `test/tree/budget.tsv` holds the count to
+the other two runtimes' at five steps.
+
+A location reached ahead of the walk is counted on every location above
+it: `enter` sets `Frame::ahead` when the parent is not being folded and
+calls `State::count_under`, in the borrow that marks the location, and
+`leave` takes the count back on every way out (the two early exits of
+`enter`, `finish` on `Ok` and `Err`, and `unwind`). `holds_open` reads it
+in `through` and `reach`, so a site that asks for a location holding an
+open one gets a cycle, as the canonical fold gives. `test/tree/ahead.tsv`
+pins it through `at` and through `written`. With the rule in place the
+early return of `enter` for a location already being folded is never
+reached by descent: made to panic, it left the whole suite passing.
 
 ### Positions
 

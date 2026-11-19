@@ -24,10 +24,12 @@ mod common;
 use std::path::PathBuf;
 
 use tabnas::{TabnasError, Value};
-use tabnas_expr::{fold, ExprOptions, FoldCycle, FoldError, FoldOptions, OpDef};
+use tabnas_expr::{fold, ExprOptions, FoldBudget, FoldCycle, FoldError, FoldOptions, OpDef};
 use tabnas_support::{load_spec, Failure, Runner, SpecOptions};
 
-use common::{canonical, key_parser, pointer, repo_root, resolving, table, text_of, to_failure};
+use common::{
+    canonical, key_parser, pointer, repo_root, resolving, table, text_of, to_failure, writing,
+};
 
 fn tree_dir() -> PathBuf {
     repo_root().join("test").join("tree")
@@ -122,6 +124,18 @@ fn tree_at_pointer() {
     });
 }
 
+// The same resolver through `site.written`: a site on the way to the
+// location named is stepped through as the map it is written as.
+#[test]
+fn tree_written() {
+    let ops = [("ref", OpDef::key("$ref"))];
+    let parser = key_parser(&ops);
+    let options = FoldOptions::new(writing).with_ops(table(&ops));
+    run_tree("written.tsv", move |input| {
+        fold_parse(&parser, &options, input)
+    });
+}
+
 // Token operators and key operators reduce in one fold. A token operator
 // is recognised only on a live expression node, so the fold runs inside
 // `parse_scope`, and the folded value is realized there before the scope
@@ -203,6 +217,45 @@ fn tree_errors() {
         .with_cycle(FoldCycle::Error)
         .with_max_depth(3);
     run_tree("errors.tsv", move |input| {
+        fold_parse(&parser, &options, input)
+    });
+}
+
+// A location reached ahead of the walk, through a reference, while the
+// container that holds it has not been folded. A site that then asks for
+// that container closes a cycle, as it would had the walk come to the
+// container first: each pair of rows is one document in two member
+// orders, and gives one answer. Both ways of reaching agree.
+#[test]
+fn tree_ahead_through_at() {
+    let ops = [("ref", OpDef::key("$ref"))];
+    let parser = key_parser(&ops);
+    let options = FoldOptions::new(resolving).with_ops(table(&ops));
+    run_tree("ahead.tsv", move |input| {
+        fold_parse(&parser, &options, input)
+    });
+}
+
+#[test]
+fn tree_ahead_through_written() {
+    let ops = [("ref", OpDef::key("$ref"))];
+    let parser = key_parser(&ops);
+    let options = FoldOptions::new(writing).with_ops(table(&ops));
+    run_tree("ahead.tsv", move |input| {
+        fold_parse(&parser, &options, input)
+    });
+}
+
+// The step budget, at five steps: a container the fold starts to fold is
+// one step, and so is a location a resolver asks its site for.
+#[test]
+fn tree_budget() {
+    let ops = [("ref", OpDef::key("$ref"))];
+    let parser = key_parser(&ops);
+    let options = FoldOptions::new(resolving)
+        .with_ops(table(&ops))
+        .with_budget(FoldBudget::new(5));
+    run_tree("budget.tsv", move |input| {
         fold_parse(&parser, &options, input)
     });
 }

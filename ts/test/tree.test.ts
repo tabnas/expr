@@ -64,6 +64,69 @@ describe('fold', () => {
   })
 
 
+  test('written reads a location as the document is written', () => {
+    const through = (reach: 'at' | 'written') => (site: Site, _op: Op, [value, siblings]: any[]) => {
+      const hit = site[reach](pointer(value))
+      if (!hit.found || hit.cycle) return site.node
+      if (null == hit.value || 'object' !== typeof hit.value || Array.isArray(hit.value)) return hit.value
+      return { ...hit.value, ...siblings }
+    }
+    const run = (src: string, reach: 'at' | 'written') =>
+      C(fold(parser().parse(src), { op: REF, evaluate: through(reach) }))
+
+    // A member only the site's target has: `at` reads it in the folded
+    // value, and as written it is not there.
+    const passing = '{a:{$ref:"#/b/x"},b:{$ref:"#/c"},c:{x:5}}'
+    assert.deepEqual(run(passing, 'at'), { a: 5, b: { x: 5 }, c: { x: 5 } })
+    assert.deepEqual(run(passing, 'written'), { a: { $ref: '#/b/x' }, b: { x: 5 }, c: { x: 5 } })
+
+    // A site that names its own member: a cycle through `at`, since the
+    // path passes the site while it is being folded, and a value as
+    // written.
+    const own = '{b:{$ref:"#/b/d",d:{x:1}},c:{$ref:"#/b"}}'
+    assert.deepEqual(run(own, 'at'), { b: { $ref: '#/b/d', d: { x: 1 } }, c: { $ref: '#/b' } })
+    assert.deepEqual(run(own, 'written'), { b: { x: 1, d: { x: 1 } }, c: { x: 1, d: { x: 1 } } })
+
+    // A location still being folded is a cycle, as it is through `at`.
+    const self = '{a:{b:{$ref:"#/a"}}}'
+    assert.deepEqual(run(self, 'written'), { a: { b: { $ref: '#/a' } } })
+  })
+
+
+  test('written shares the one result per location, and reaches another document', () => {
+    // The member beside the key is folded once: as the site's sibling, and
+    // again as the location another site names.
+    const raw = parser().parse('{a:{$ref:"#/b/d"},b:{$ref:"#/c",d:{e:1}},c:{}}')
+    const seen: any = {}
+    const out: any = fold(raw, {
+      op: REF,
+      evaluate: (site, _op, [value, siblings]) => {
+        const hit = site.written(pointer(value))
+        if ('b' === site.path[0]) seen.sibling = siblings.d
+        return hit.found && !hit.cycle ? hit.value : site.node
+      },
+    })
+    assert.equal(out.a, seen.sibling, 'one folded object for /b/d')
+
+    let report: FoldReport | undefined
+    const loads: string[] = []
+    const other: any = fold({ P: { $ref: 'b.json#/S/keep' }, Q: { $ref: 'c.json#/W' } }, {
+      op: REF,
+      doc: 'a.json',
+      load: (key) => { loads.push(key); return 'b.json' === key ? { S: { $ref: '#/T', keep: { k: 1 } }, T: {} } : undefined },
+      evaluate: (site, _op, [ref]) => {
+        const [doc, frag] = ref.split('#')
+        const hit = site.written(pointer('#' + frag), '' === doc ? undefined : doc)
+        return hit.found && !hit.cycle ? hit.value : site.node
+      },
+      report: (r) => { report = r },
+    })
+    assert.deepEqual(C(other.P), { k: 1 })
+    assert.deepEqual(loads, ['b.json', 'c.json'])
+    assert.deepEqual(report!.unresolved, [{ doc: 'a.json', at: '/Q', targetDoc: 'c.json', target: '/W' }])
+  })
+
+
   test('cycles are reported and kept verbatim, or thrown', () => {
     const src = '{a:{$ref:"#/a"},b:{c:{$ref:"#/b"}},x:{$ref:"#/y"},y:{$ref:"#/x"},r:{$ref:"#"}}'
     let report: FoldReport | undefined
@@ -563,6 +626,179 @@ describe('fold: second review', () => {
     const cyclic: any = { a: {} }
     cyclic.a.self = cyclic.a
     assert.throws(() => fold(cyclic, { op: REF, evaluate: resolving }), (err: any) => 'fold_depth' === err.code)
+  })
+
+
+  test('a location reached ahead of the walk: its container is a cycle until it is settled', () => {
+    // `a` is written first and names the site `q`, so `q` is folded before
+    // its container `c`. `q` names `c`, and folding `c` then would have to
+    // put something at `q`, which is not settled. That is a cycle through
+    // a container, cut at `q`, as it is when `c` is written first.
+    const sorted = (v: any): any =>
+      Array.isArray(v) ? v.map(sorted)
+        : v && 'object' === typeof v ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted(v[k])]))
+          : v
+    const A = { $ref: '#/c/p/q' }
+    const Cc = () => ({ p: { q: { $ref: '#/c' } } })
+    const run = (doc: any, reach: 'at' | 'written') => {
+      let report: FoldReport | undefined
+      const asked: string[] = []
+      // A cycle comes back as a marker, never as the map as written, so a
+      // raw map in the output could only have been put there by the fold.
+      const out = fold(doc, {
+        op: REF,
+        report: (r) => { report = r },
+        evaluate: (site, _op, [value]) => {
+          asked.push('/' + site.path.join('/'))
+          const hit = site[reach](pointer(value))
+          return hit.cycle ? { cut: value } : !hit.found ? { missing: value } : hit.value
+        },
+      })
+      return { out, report: report as FoldReport, asked }
+    }
+    for (const reach of ['at', 'written'] as const) {
+      const first = run({ a: A, c: Cc() }, reach)
+      const second = run({ c: Cc(), a: A }, reach)
+      assert.deepEqual(C(first.out), { a: { cut: '#/c' }, c: { p: { q: { cut: '#/c' } } } })
+      assert.deepEqual(sorted(C(first.out)), sorted(C(second.out)))
+      for (const got of [first, second]) {
+        assert.deepEqual(got.report.cycles, [{ doc: '', at: '/c/p/q', targetDoc: '', target: '/c' }])
+        assert.deepEqual(got.report.unresolved, [])
+        // Each site's resolver is asked once, and what it returns is what
+        // the tree holds, at the site and at every reference to it.
+        assert.deepEqual(got.asked.slice().sort(), ['/a', '/c/p/q'])
+        assert.equal(got.out.a, got.out.c.p.q)
+      }
+    }
+
+    // Nothing above the location is folded early: only a site asking for
+    // such a container meets the cycle, and a plain pointer does not.
+    const plain: any = { a: { $ref: '#/c/p' }, c: { p: { x: 1 }, y: { $ref: '#/c/p' } } }
+    assert.deepEqual(C(fold(plain, { op: REF, evaluate: resolving })), { a: { x: 1 }, c: { p: { x: 1 }, y: { x: 1 } } })
+
+    // Under `cycle: 'error'` it throws as any other cycle does.
+    assert.throws(() => fold({ a: A, c: Cc() }, { op: REF, cycle: 'error', evaluate: resolving }),
+      (err: any) => err instanceof FoldError && 'fold_cycle' === err.code && '/c/p/q' === err.at && '/c' === err.target)
+
+    // Another document's container is held open in the same way.
+    const others: any = { other: { c: { p: { q: { $ref: 'other#/c' } } } } }
+    let rows: FoldReport | undefined
+    const across = fold({ a: { $ref: 'other#/c/p/q' } }, {
+      op: REF,
+      load: (key) => others[key],
+      report: (r) => { rows = r },
+      evaluate: (site, _op, [value]) => {
+        const [key, frag] = value.split('#')
+        const hit = site.at(pointer('#' + frag), key)
+        return hit.cycle ? { cut: value } : hit.value
+      },
+    })
+    assert.deepEqual(C(across), { a: { cut: 'other#/c' } })
+    assert.deepEqual((rows as FoldReport).cycles, [{ doc: 'other', at: '/c/p/q', targetDoc: 'other', target: '/c' }])
+  })
+
+
+  test('budget: steps bound the walk, and onCheck can cancel it', () => {
+    // Eight steps: the root, `a`, the location `a` asks for, `b`, `c`,
+    // `d` and its two members.
+    const doc = { a: { $ref: '#/b' }, b: { c: {} }, d: [{}, {}] }
+    const budgeted = (budget: any) => fold(doc, { op: REF, evaluate: resolving, budget })
+    const seen: number[] = []
+    budgeted({ checkEveryN: 1, onCheck: (n: number) => { seen.push(n) } })
+    assert.deepEqual(seen, [1, 2, 3, 4, 5, 6, 7, 8])
+
+    assert.deepEqual(C(budgeted({ steps: 8 })), { a: { c: {} }, b: { c: {} }, d: [{}, {}] })
+    assert.throws(() => budgeted({ steps: 7 }),
+      (err: any) => err instanceof FoldError && 'fold_budget' === err.code && '' === err.doc && '/d/1' === err.at)
+
+    // Only a number greater than 0 is a bound.
+    for (const steps of [undefined, null, 0, -1, NaN, '3']) {
+      assert.ok(budgeted({ steps }), String(steps))
+    }
+    assert.ok(budgeted({}))
+
+    // onCheck is called at every Nth step with the count, and false cancels.
+    const thirds: number[] = []
+    budgeted({ checkEveryN: 3, onCheck: (n: number) => { thirds.push(n) } })
+    assert.deepEqual(thirds, [3, 6])
+    assert.throws(() => budgeted({ checkEveryN: 2, onCheck: (n: number) => n < 4 }),
+      (err: any) => err instanceof FoldError && 'fold_cancel' === err.code && '/b' === err.at)
+    for (const answer of [undefined, null, 0, '', true]) {
+      assert.ok(budgeted({ checkEveryN: 1, onCheck: () => answer }), String(answer))
+    }
+
+    // The check needs both of its parts, and the bound is tried first.
+    let calls = 0
+    const refuse = () => { calls++; return false }
+    assert.ok(budgeted({ onCheck: refuse }))
+    assert.ok(budgeted({ checkEveryN: 0, onCheck: refuse }))
+    assert.ok(budgeted({ checkEveryN: 1 }))
+    assert.ok(budgeted({ checkEveryN: 1, onCheck: null }))
+    assert.equal(calls, 0)
+    assert.throws(() => budgeted({ steps: 2, checkEveryN: 3, onCheck: refuse }),
+      (err: any) => 'fold_budget' === err.code)
+    assert.equal(calls, 0)
+  })
+
+
+  test('budget: what a step is', () => {
+    const count = (root: any, opts: Partial<FoldOptions>) => {
+      let n = 0
+      fold(root, {
+        op: REF, evaluate: resolving, ...opts,
+        budget: { checkEveryN: 1, onCheck: (steps) => { n = steps } },
+      })
+      return n
+    }
+
+    // The root, the site, and the location the site asks for, however it
+    // asks; a scalar target is not folded, so it costs nothing more.
+    const doc = { a: { $ref: '#/b' }, b: 1 }
+    assert.equal(count(doc, {}), 3)
+    assert.equal(count(doc, { evaluate: (site) => site.written(['b']).value }), 3)
+    assert.equal(count(doc, { evaluate: (site) => site.locate(['b']).value }), 3)
+    assert.equal(count(doc, {
+      evaluate: (site) => (site.locate(['b']), site.locate(['x']), site.at(['b']).value),
+    }), 5)
+
+    // A target is folded once, and each site that names it asks once.
+    assert.equal(count({ a: { $ref: '#/c' }, b: { $ref: '#/c' }, c: { d: 1 } }, {}), 6)
+
+    // `plain` reads members that are already folded: no step of its own.
+    assert.equal(count({ a: { $ref: 'x', m: {} } }, { evaluate: (site) => site.plain() }), 3)
+
+    // A map that is no site is one step; so is one `recognise` refuses.
+    assert.equal(count({ a: { $ref: '#/b' }, b: 1 }, { recognise: () => false }), 2)
+
+    // An operator node is a container, with `tokens` on or off.
+    const tn = new Tabnas().use(jsonic).use(Expr, { op: REF })
+    const math = (site: Site, op: Op, terms: any[]) =>
+      op.key ? resolving(site, op, terms) : terms[0] + terms[1]
+    assert.equal(count(tn.parse('{a:1+2}'), { evaluate: math }), 2)
+    assert.equal(count(tn.parse('{a:1+2}'), { evaluate: math, tokens: false }), 2)
+    assert.equal(count(tn.parse('{a:1+{$ref:"#/b"},b:2}'), { evaluate: math }), 4)
+
+    // One count for the whole fold, across documents.
+    const others: any = { other: { x: { y: {} } } }
+    assert.equal(count({ a: { $ref: 'other#/x' } }, {
+      load: (key) => others[key],
+      evaluate: (site, _op, [value]) => {
+        const [key, frag] = value.split('#')
+        return site.at(pointer('#' + frag), key).value
+      },
+    }), 5)
+  })
+
+
+  test('budget: the deferred fold is bound, parse by parse', () => {
+    const tn = new Tabnas().use(jsonic).use(Expr, {
+      op: { ...NO_DEFAULTS, ...REF },
+      fold: { evaluate: resolving, budget: { steps: 3 } },
+    })
+    assert.deepEqual(C(tn.parse('{a:{$ref:"#/b"},b:1}')), { a: 1, b: 1 })
+    assert.throws(() => tn.parse('{a:{$ref:"#/b"},b:{}}'),
+      (err: any) => err instanceof FoldError && 'fold_budget' === err.code)
+    assert.deepEqual(C(tn.parse('{a:{$ref:"#/b"},b:1}')), { a: 1, b: 1 })
   })
 
 

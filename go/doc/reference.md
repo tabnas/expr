@@ -553,7 +553,14 @@ type FoldOptions struct {
     Tokens    *bool                  // nil is true: operator nodes met in the walk reduce too
     Positions interface{}            // a Positions lookup, or true in deferred mode
     MaxDepth  int                    // 0 is the default, 1000
+    Budget    *FoldBudget            // nil is no bound and no check
     Report    func(report FoldReport)
+}
+
+type FoldBudget struct {
+    Steps       int                  // the most steps a fold may take; 0 is no bound
+    CheckEveryN int                  // call OnCheck at every Nth step; 0 is off
+    OnCheck     func(steps int) bool // false cancels the fold
 }
 
 type FoldEvaluate func(site *Site, op *Op, terms []interface{}) (interface{}, error)
@@ -571,6 +578,7 @@ type Site struct {
 func (s *Site) Path() Path                                      // from the root to this map
 func (s *Site) K() (map[string]interface{}, error)              // the bag down to and including this map
 func (s *Site) At(path Path, doc ...string) (FoldHit, error)    // fold another location
+func (s *Site) Written(path Path, doc ...string) (FoldHit, error) // fold one as the document is written
 func (s *Site) Locate(path Path, doc ...string) (FoldHit, error) // read one raw
 func (s *Site) Plain() (interface{}, error)                     // this map folded as a plain map
 
@@ -643,8 +651,18 @@ one value. A path names nothing (`Found` false) when a step does. An
 array index is an RFC 6901 index, `"0"` or digits with no leading zero,
 or an `int` or an integral `float64`: `"01"`, `"1.0"`, an empty segment
 and `"-"` name nothing. `Value` is set only when the location was found
-and is not a cycle. `site.Locate(path)` reads the raw tree and follows
-nothing.
+and is not a cycle.
+
+`site.Written(path)` folds the location as the document writes it. It
+follows the same raw members and steps through a key-operator map on the
+way as an ordinary map, so it reads a member beside the operator's own
+member as written, not from the map's folded value. It folds only the
+location the path names, with the same one result per location, so a map
+can name one of its own members. A path through a key-operator map to a
+member that only its target has names nothing, and the resolver follows
+the map to its target itself.
+
+`site.Locate(path)` reads the raw tree and follows nothing.
 
 ### Cycles
 
@@ -665,10 +683,19 @@ a cycle. Which site holds the cut follows the walk, which runs from the
 root in member order, so a document gives the same cuts every time it is
 folded, and reordering its members can move them.
 
+A reference can reach a location before the walk reaches the maps that
+hold it. In `{a:{$ref:"#/c/p/q"},c:{p:{q:{$ref:"#/c"}}}}`, the walk folds
+`a` first, and `a` asks for `q`, so the fold starts `q` before it starts
+`c`. `q` then asks for `c`. Folding `c` at that moment takes a value for
+`q`, and `q` has none yet, so `site.At` returns `Cycle` true to `q`. The
+walk finds the same cycle when the document puts `c` before `a`, and cuts
+it at the same site, so the two orders give one answer.
+
 ### Several documents
 
-`site.At(path, doc)` and `site.Locate(path, doc)` reach a location in
-another document, named by a key the host chooses. The fold asks
+`site.At(path, doc)`, `site.Written(path, doc)` and
+`site.Locate(path, doc)` reach a location in another document, named by
+a key the host chooses. The fold asks
 `Load(doc, site)` for that document's raw root once per key; `ok` false
 is a document it cannot have, and the location is reported unresolved,
 while an error stops the fold. Deciding what a key may name, and fetching
@@ -706,6 +733,21 @@ Running out of stack is fatal in Go rather than an error, so `MaxDepth`
 is the only guard: keep it within what a stack can hold, as the default
 of 1000 is.
 
+`Budget` bounds how much the fold does, and lets a host stop it. The
+fold takes a step each time it starts to fold a container: a map, a
+list, or an operator node. It takes another each time a resolver asks its
+site for a location, through `At`, `Written`, or `Locate`. A location
+already folded costs no step, and neither does `Plain`. `Steps`, when
+greater than 0, is the most steps a fold may take: the step after it ends
+the fold with a `FoldError` coded `fold_budget`. With `CheckEveryN`
+greater than 0 and `OnCheck` set, the fold calls `OnCheck` at every Nth
+step with the number of steps taken so far, and a `false` return ends the
+fold with a `FoldError` coded `fold_cancel`. A host keeps a deadline
+there, or reads a flag that other code sets. `OnCheck` returns a plain
+`bool`, as the engine's own `BudgetOptions.OnCheck` does, so it answers
+`true` to go on. The count is one for the whole fold, across documents,
+and in deferred mode each parse starts it again.
+
 ### Fold errors
 
 `FoldError` carries `Code`, and `Doc`, `At`, `TargetDoc` and `Target`
@@ -714,6 +756,8 @@ member names JSON-escaped and cut short, since they are document content.
 
 | Code | Returned when |
 |---|---|
+| `fold_budget` | the fold takes more steps than `Budget.Steps` |
+| `fold_cancel` | `Budget.OnCheck` returns `false` |
 | `fold_cycle` | a cycle is met under `Cycle: "error"` |
 | `fold_depth` | nesting and references go past `MaxDepth` |
 | `fold_inherit` | `Inherit` returns a nil bag, or folds below its own map |

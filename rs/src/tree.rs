@@ -39,6 +39,10 @@ use crate::{
 // Errors
 // ---------------------------------------------------------------------------
 
+/// More steps than [`FoldBudget::steps`].
+pub const FOLD_BUDGET: &str = "fold_budget";
+/// [`FoldBudget::on_check`] returned `false`.
+pub const FOLD_CANCEL: &str = "fold_cancel";
 /// A cycle met while [`FoldOptions::cycle`] is [`FoldCycle::Error`].
 pub const FOLD_CYCLE: &str = "fold_cycle";
 /// Nesting and reference hops past [`FoldOptions::max_depth`], or the
@@ -57,8 +61,9 @@ pub const FOLD_OPTION: &str = "fold_option";
 /// The error [`fold`] returns: one of the layer's own failures, with its
 /// code and location, or the error a callback returned, unchanged.
 ///
-/// `code` is what a fixture pins: [`FOLD_CYCLE`], [`FOLD_DEPTH`],
-/// [`FOLD_INHERIT`] or [`FOLD_KEY`] for the layer's own failures, and the
+/// `code` is what a fixture pins: [`FOLD_BUDGET`], [`FOLD_CANCEL`],
+/// [`FOLD_CYCLE`], [`FOLD_DEPTH`], [`FOLD_INHERIT`] or [`FOLD_KEY`] for
+/// the layer's own failures, and the
 /// callback's own code for a callback's. The document key and the
 /// pointers are fields; the message quotes them JSON-escaped and cut
 /// short, since member names are document content.
@@ -346,6 +351,70 @@ pub enum FoldCycle {
     Error,
 }
 
+/// A bound on a fold's work, and a way to stop it.
+///
+/// One step is one container the fold starts to fold (a map, a list or an
+/// operator node; a location already folded costs nothing), or one call a
+/// resolver makes to [`Site::at`], [`Site::written`] or [`Site::locate`],
+/// whatever it finds. Nothing else is a step: not [`Site::plain`], not
+/// `inherit`, not `evaluate`, not loading a document. One count spans
+/// every document a fold loads.
+///
+/// Past `steps` the fold fails with [`FOLD_BUDGET`]. With `check_every_n`
+/// and `on_check` both set, `on_check` is called at every Nth step with
+/// the number taken so far, and a `false` return fails the fold with
+/// [`FOLD_CANCEL`]: a host keeps a deadline there, or reads a flag another
+/// thread sets. At one step the bound is tried before the check. Off by
+/// default, as the engine's own parse budget is.
+#[derive(Default)]
+pub struct FoldBudget<'a> {
+    /// The most steps a fold may take; 0 sets no bound.
+    pub steps: usize,
+    /// Call `on_check` at every Nth step; 0 turns the check off.
+    pub check_every_n: usize,
+    /// Given the number of steps taken so far; `false` cancels the fold.
+    pub on_check: Option<Box<dyn Fn(usize) -> bool + 'a>>,
+}
+
+impl<'a> FoldBudget<'a> {
+    /// A bound of `steps` and no check.
+    pub fn new(steps: usize) -> Self {
+        FoldBudget {
+            steps,
+            ..FoldBudget::default()
+        }
+    }
+
+    /// Call `on_check` at every `check_every_n`th step.
+    pub fn with_check(
+        mut self,
+        check_every_n: usize,
+        on_check: impl Fn(usize) -> bool + 'a,
+    ) -> Self {
+        self.check_every_n = check_every_n;
+        self.on_check = Some(Box::new(on_check));
+        self
+    }
+}
+
+impl fmt::Debug for FoldBudget<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FoldBudget")
+            .field("steps", &self.steps)
+            .field("check_every_n", &self.check_every_n)
+            .field(
+                "on_check",
+                &if self.on_check.is_some() {
+                    "<function>"
+                } else {
+                    "none"
+                },
+            )
+            .finish()
+    }
+}
+
 /// The options of one [`fold`]. Only `evaluate` is required; build with
 /// [`FoldOptions::new`] and the `with_` methods.
 ///
@@ -383,6 +452,9 @@ pub struct FoldOptions<'a> {
     /// through the resolver. Raise it only on a thread known to have more
     /// than twice as much stack.
     pub max_stack: usize,
+    /// How much work the fold may do, and a check that can cancel it.
+    /// `None` by default: no bound and no check.
+    pub budget: Option<FoldBudget<'a>>,
     /// Called once with the report when the fold succeeds.
     pub report: Option<Box<dyn Fn(FoldReport) + 'a>>,
 }
@@ -405,6 +477,7 @@ impl<'a> FoldOptions<'a> {
             positions: None,
             max_depth: 1000,
             max_stack: FOLD_MAX_STACK,
+            budget: None,
             report: None,
         }
     }
@@ -481,6 +554,11 @@ impl<'a> FoldOptions<'a> {
         self
     }
 
+    pub fn with_budget(mut self, budget: FoldBudget<'a>) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
     pub fn with_report(mut self, report: impl Fn(FoldReport) + 'a) -> Self {
         self.report = Some(Box::new(report));
         self
@@ -504,6 +582,7 @@ impl fmt::Debug for FoldOptions<'_> {
             .field("positions", &function(self.positions.is_some()))
             .field("max_depth", &self.max_depth)
             .field("max_stack", &self.max_stack)
+            .field("budget", &self.budget)
             .field("report", &function(self.report.is_some()))
             .finish()
     }
@@ -685,6 +764,16 @@ impl Site<'_> {
         self.fold.at(self.pn, path, doc)
     }
 
+    /// The folded value at `path` as the document is written. Raw members
+    /// are followed from the root, and a key operator site met on the way
+    /// is stepped through as the map it is, where [`Site::at`] folds it and
+    /// reads on in its folded value. Only the location named is folded, so
+    /// a member beside a site's key reads as it is written. A target still
+    /// being folded closes a cycle.
+    pub fn written(&self, path: &[Seg], doc: Option<&str>) -> Result<FoldHit, FoldError> {
+        self.fold.written(self.pn, path, doc)
+    }
+
     /// The raw value at `path`, following nothing.
     pub fn locate(&self, path: &[Seg], doc: Option<&str>) -> Result<Option<Value>, FoldError> {
         self.fold.locate(self.pn, path, doc)
@@ -747,6 +836,7 @@ pub fn fold(root: &Value, options: &FoldOptions<'_>) -> Result<Value, FoldError>
         keys,
         stack_base: base.at,
         main: Rc::from(options.doc.as_str()),
+        steps: Cell::new(0),
         state: RefCell::new(State::default()),
     };
     let doc = folder.make_doc(&options.doc, root.clone());
@@ -788,6 +878,8 @@ struct Folder<'f> {
     keys: KeyMap,
     stack_base: usize,
     main: Rc<str>,
+    /// The budget's count, for every document the fold loads.
+    steps: Cell<usize>,
     state: RefCell<State>,
 }
 
@@ -808,6 +900,23 @@ struct State {
     failure: Option<FoldError>,
 }
 
+impl State {
+    /// Count a location reached ahead of the walk on every location above
+    /// it, up to its document's top, or take that count back off.
+    fn count_under(&mut self, pn: usize, add: bool) {
+        let mut cursor = self.nodes[pn].parent;
+        while let Some(at) = cursor {
+            let node = &mut self.nodes[at];
+            if add {
+                node.under += 1;
+            } else {
+                node.under -= 1;
+            }
+            cursor = node.parent;
+        }
+    }
+}
+
 struct Doc {
     key: Rc<str>,
     root: Value,
@@ -823,6 +932,10 @@ struct PNode {
     kids: Option<Box<Kids>>,
     state: u8,
     via: u8,
+    /// How many locations below it are being folded while their own
+    /// parent is not: each was reached through a reference, ahead of the
+    /// walk.
+    under: u32,
     value: Value,
     k: Option<Value>,
     k_busy: bool,
@@ -849,6 +962,7 @@ impl PNode {
             kids: None,
             state: FREE,
             via: FROM_PARENT,
+            under: 0,
             value: Value::Undefined,
             k: None,
             k_busy: false,
@@ -923,6 +1037,9 @@ fn stack_here() -> usize {
 /// a time, and the folded ones collected.
 struct Frame {
     pn: usize,
+    /// It was reached ahead of the walk, and so is counted on every
+    /// location above it until it is left.
+    ahead: bool,
     raw: Value,
     next: usize,
     kind: Kind,
@@ -1236,6 +1353,41 @@ impl Folder<'_> {
         }
     }
 
+    /// One step of the budget, taken at `pn`: a container about to be
+    /// folded, or the site whose resolver asked for a location. No borrow
+    /// of the state is held across `on_check`, which may re-enter.
+    fn tick(&self, pn: usize) -> Result<(), FoldError> {
+        let Some(budget) = &self.options.budget else {
+            return Ok(());
+        };
+        let steps = self.steps.get() + 1;
+        self.steps.set(steps);
+        if 0 < budget.steps && budget.steps < steps {
+            let pointer = self.ptr_of(pn);
+            let error = FoldError::new(
+                FOLD_BUDGET,
+                format_args!("more than {} steps at {}", budget.steps, shown(&pointer)),
+            )
+            .located(&self.doc_key(pn), Some(&pointer));
+            return Err(self.raise(error));
+        }
+        if let Some(on_check) = &budget.on_check {
+            if 0 < budget.check_every_n && 0 == steps % budget.check_every_n && !on_check(steps) {
+                let pointer = self.ptr_of(pn);
+                let error = FoldError::new(
+                    FOLD_CANCEL,
+                    format_args!(
+                        "cancelled by budget.onCheck after {steps} steps at {}",
+                        shown(&pointer)
+                    ),
+                )
+                .located(&self.doc_key(pn), Some(&pointer));
+                return Err(self.raise(error));
+            }
+        }
+        Ok(())
+    }
+
     /// Fail with `fold_depth` before the re-entry through callbacks can
     /// run the thread's stack out.
     fn guard(&self) -> Result<(), FoldError> {
@@ -1421,8 +1573,28 @@ impl Folder<'_> {
     /// reference hop, so it holds as little as it can.
     fn at(&self, from: usize, target: &[Seg], key: Option<&str>) -> Result<FoldHit, FoldError> {
         self.guard()?;
-        match self.find(from, target, key)? {
+        self.tick(from)?;
+        match self.find(from, target, key, false)? {
             Found::Hit(hit) => Ok(hit),
+            Found::Through(pn, next) => self.through(from, pn, target, next, key),
+            Found::End(pn) => self.reach(from, pn),
+        }
+    }
+
+    /// The folded value at `target` as the document is written: a site
+    /// met on the way is stepped through as the map it is, and only the
+    /// location named is folded.
+    fn written(
+        &self,
+        from: usize,
+        target: &[Seg],
+        key: Option<&str>,
+    ) -> Result<FoldHit, FoldError> {
+        self.guard()?;
+        self.tick(from)?;
+        match self.find(from, target, key, true)? {
+            Found::Hit(hit) => Ok(hit),
+            // `find` stops at no site when it reads as written.
             Found::Through(pn, next) => self.through(from, pn, target, next, key),
             Found::End(pn) => self.reach(from, pn),
         }
@@ -1439,7 +1611,7 @@ impl Folder<'_> {
         key: Option<&str>,
     ) -> Result<FoldHit, FoldError> {
         let (state, looped, _) = self.state_of(pn);
-        if ACTIVE == state || looped {
+        if ACTIVE == state || looped || self.holds_open(pn) {
             return self.cycle_to(from, pn);
         }
         match self.walk(pn, FROM_REFERENCE) {
@@ -1472,13 +1644,25 @@ impl Folder<'_> {
     /// Fold the location at the end of a path.
     fn reach(&self, from: usize, pn: usize) -> Result<FoldHit, FoldError> {
         let (state, _, _) = self.state_of(pn);
-        if ACTIVE == state {
+        if ACTIVE == state || self.holds_open(pn) {
             return self.cycle_to(from, pn);
         }
         match self.walk(pn, FROM_REFERENCE) {
             Ok(value) => self.reached(from, pn, value),
             Err(error) => Err(error),
         }
+    }
+
+    /// Whether folding `pn` now would reach a location that is still being
+    /// folded. Such a location was entered through a reference, ahead of
+    /// the walk, and the fold of `pn` would have nothing final to put
+    /// there. The site asking for `pn` is on the way from that location,
+    /// so this is a cycle through a container, the same one the walk would
+    /// have found had it come to `pn` first.
+    fn holds_open(&self, pn: usize) -> bool {
+        let state = self.state.borrow();
+        let node = &state.nodes[pn];
+        FREE == node.state && 0 < node.under
     }
 
     /// A location folded at the end of a path: a cycle when it is in a
@@ -1493,8 +1677,15 @@ impl Folder<'_> {
 
     /// Follow `target` raw from the document's root, as far as the fold has
     /// to go: to its end, to a static key operator site met on the way,
-    /// or to an answer.
-    fn find(&self, from: usize, target: &[Seg], key: Option<&str>) -> Result<Found, FoldError> {
+    /// or to an answer. With `written`, a site on the way is one more map
+    /// to step through, and the walk goes to the end.
+    fn find(
+        &self,
+        from: usize,
+        target: &[Seg],
+        key: Option<&str>,
+        written: bool,
+    ) -> Result<Found, FoldError> {
         let Some(doc) = self.doc_of(from, key)? else {
             return Ok(Found::Hit(self.miss(from, key, target)));
         };
@@ -1532,7 +1723,7 @@ impl Folder<'_> {
             // Only a static site changes what lies below it; any other map,
             // a dynamic one or one `recognise` refused, folds member by
             // member, so the raw path below it names the same location.
-            if !last && is_record(&node) {
+            if !written && !last && is_record(&node) {
                 if let Some(op) = self.site_op_of(pn)? {
                     if !op.dynamic {
                         return Ok(Found::Through(pn, i + 1));
@@ -1550,6 +1741,7 @@ impl Folder<'_> {
         key: Option<&str>,
     ) -> Result<Option<Value>, FoldError> {
         self.guard()?;
+        self.tick(from)?;
         let Some(doc) = self.doc_of(from, key)? else {
             return Ok(None);
         };
@@ -1702,21 +1894,33 @@ impl Folder<'_> {
             }
             node.raw.clone()
         };
-        {
+        let depth = self.state.borrow().stack.len();
+        if self.options.max_depth <= depth {
+            return Err(self.depth_error(pn));
+        }
+        // A step of the budget: the location is about to be marked as
+        // being folded, after the memory, the leaf and the depth checks.
+        self.tick(pn)?;
+        let ahead = {
             let mut state = self.state.borrow_mut();
-            if self.options.max_depth <= state.stack.len() {
-                drop(state);
-                return Err(self.depth_error(pn));
-            }
             state.nodes[pn].state = ACTIVE;
             state.nodes[pn].via = via;
             state.stack.push(pn);
-        }
+            // A location whose parent is not being folded was reached ahead
+            // of the walk: count it on every location above it, for
+            // `holds_open`.
+            let parent = state.nodes[pn].parent;
+            let ahead = parent.is_some_and(|parent| ACTIVE != state.nodes[parent].state);
+            if ahead {
+                state.count_under(pn, true);
+            }
+            ahead
+        };
         let kind = if is_record(&raw) {
             let op = match self.site_op_of(pn) {
                 Ok(op) => op,
                 Err(error) => {
-                    self.leave(pn, None);
+                    self.leave(pn, ahead, None);
                     return Err(error);
                 }
             };
@@ -1732,7 +1936,7 @@ impl Folder<'_> {
                     }
                     let plain = self.state.borrow().nodes[pn].plain.clone();
                     if let Some(plain) = plain {
-                        self.leave(pn, Some(plain.clone()));
+                        self.leave(pn, ahead, Some(plain.clone()));
                         return Ok(Some(plain));
                     }
                     Kind::Plain {
@@ -1755,6 +1959,7 @@ impl Folder<'_> {
         };
         frames.push(Frame {
             pn,
+            ahead,
             raw,
             next: 0,
             kind,
@@ -1770,13 +1975,13 @@ impl Folder<'_> {
     /// frame is read in place, not moved, and the work that calls nothing
     /// back is done in frames that are gone before a callback runs.
     fn finish(&self, frame: &mut Frame) -> Result<Value, FoldError> {
-        let pn = frame.pn;
+        let (pn, ahead) = (frame.pn, frame.ahead);
         let out = match frame.kind {
             Kind::Node { op: Some(_), .. } => self.reduce_node(frame),
             Kind::Site { .. } => self.reduce_site(frame),
             _ => Ok(self.rebuild(frame)),
         };
-        self.leave(pn, out.as_ref().ok().cloned());
+        self.leave(pn, ahead, out.as_ref().ok().cloned());
         out
     }
 
@@ -1859,11 +2064,15 @@ impl Folder<'_> {
     }
 
     /// Take a location off the active stack: kept when it has a value,
-    /// free again when its fold failed.
-    fn leave(&self, pn: usize, out: Option<Value>) {
+    /// free again when its fold failed. One reached `ahead` of the walk is
+    /// taken off the count of every location above it, either way.
+    fn leave(&self, pn: usize, ahead: bool, out: Option<Value>) {
         let mut state = self.state.borrow_mut();
         let top = state.stack.pop();
         debug_assert_eq!(Some(pn), top, "the active stack unwinds in order");
+        if ahead {
+            state.count_under(pn, false);
+        }
         let node = &mut state.nodes[pn];
         match out {
             Some(value) => {
@@ -1877,7 +2086,7 @@ impl Folder<'_> {
     /// A walk failed: every location it still had open is free again.
     fn unwind(&self, frames: &[Frame]) {
         for frame in frames.iter().rev() {
-            self.leave(frame.pn, None);
+            self.leave(frame.pn, frame.ahead, None);
         }
     }
 }

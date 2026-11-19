@@ -462,6 +462,11 @@ type FoldOptions = {
   tokens?: boolean                   // default true: token operator arrays met in the walk reduce too
   positions?: boolean | ((node: object) => Token | undefined)
   maxDepth?: number                  // default 1000
+  budget?: {                         // default: no bound and no check
+    steps?: number                   // the most steps the fold may take
+    checkEveryN?: number             // call onCheck at every Nth step
+    onCheck?: (steps: number) => boolean | void   // false cancels the fold
+  }
   report?: (report: FoldReport) => void
 }
 
@@ -473,6 +478,7 @@ type Site = {
   k: Record<string, any>             // the bag inherited down to and including this map
   token?: Token                      // the map's opening token, with `positions`
   at(path, doc?): { found: boolean; cycle: boolean; value?: any }
+  written(path, doc?): { found: boolean; cycle: boolean; value?: any }
   locate(path, doc?): { found: boolean; value?: any }
   plain(): any                       // this map folded as a plain map
 }
@@ -532,6 +538,16 @@ one value. A path names nothing (`found: false`) when a step does: an
 array index is an RFC 6901 index: `0`, or digits with no leading zero, so
 `01`, `1.0`, an empty segment, and `-` name nothing. `value` is present
 only when the location was found and is not a cycle.
+
+`site.written(path)` folds the location as the document writes it. It
+follows the same raw members and steps through a key-operator map on the
+way as an ordinary map, so it reads a member beside the operator's own
+member as written, not from the map's folded value. It folds only the
+location the path names, with the same one result per location, so a map
+can name one of its own members. A path through a key-operator map to a
+member that only its target has names nothing, and the resolver follows
+the map to its target itself.
+
 `site.locate(path)` reads the raw tree and follows nothing.
 
 ### Cycles
@@ -557,10 +573,19 @@ Which site holds the cut follows the walk, which runs from the root in
 member order, so a document gives the same cuts every time it is folded,
 and reordering its members can move them.
 
+A reference can reach a location before the walk reaches the maps that
+hold it. In `{a:{$ref:"#/c/p/q"},c:{p:{q:{$ref:"#/c"}}}}`, the walk folds
+`a` first, and `a` asks for `q`, so the fold starts `q` before it starts
+`c`. `q` then asks for `c`. Folding `c` at that moment takes a value for
+`q`, and `q` has none yet, so `site.at` returns `cycle: true` to `q`. The
+walk finds the same cycle when the document puts `c` before `a`, and cuts
+it at the same site, so the two orders give one answer.
+
 ### Several documents
 
-`site.at(path, doc)` and `site.locate(path, doc)` reach a location in
-another document, named by a key the host chooses, a URI say. The fold
+`site.at(path, doc)`, `site.written(path, doc)` and
+`site.locate(path, doc)` reach a location in another document, named by
+a key the host chooses, a URI say. The fold
 asks `load(doc, site)` for that document's raw root once per key, and
 treats `undefined` as a document it cannot have, reporting the location
 unresolved. Deciding what a key may name, and fetching it, belongs to the
@@ -589,6 +614,20 @@ hops together. Past it, or if the JavaScript stack runs out first, the
 fold throws a `FoldError` coded `fold_depth`, so a hostile document gets
 a clean error and never a `RangeError`.
 
+`budget` bounds how much the fold does, and lets a host stop it. The
+fold takes a step each time it starts to fold a container: a map, an
+array, or an operator node. It takes another each time a resolver asks
+its site for a location, through `at`, `written`, or `locate`. A location
+already folded costs no step, and neither does `plain`. `steps`, when
+greater than 0, is the most steps a fold may take: the step after it
+throws a `FoldError` coded `fold_budget`. With `checkEveryN` greater than
+0, the fold calls `onCheck` at every Nth step with the number of steps
+taken so far, and a `false` return throws a `FoldError` coded
+`fold_cancel`. A host keeps a deadline there, or reads a flag that
+another task sets. Both parts are off by default. The count is one for
+the whole fold, across documents, and in deferred mode each parse starts
+it again. The option has the shape of the engine's `parse.budget`.
+
 ### Fold errors
 
 `FoldError` carries `code`, and `doc`, `at`, `targetDoc`, and `target`
@@ -597,6 +636,8 @@ short, since they are document content.
 
 | Code | Thrown when |
 |---|---|
+| `fold_budget` | the fold takes more steps than `budget.steps` |
+| `fold_cancel` | `budget.onCheck` returns `false` |
 | `fold_cycle` | a cycle is met under `cycle: 'error'` |
 | `fold_depth` | nesting and references go past `maxDepth`, or the stack runs out first |
 | `fold_inherit` | `inherit` returns something that is not an object, or folds below its own map |

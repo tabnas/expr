@@ -96,6 +96,15 @@ func mergeOver(value any, siblings *tabnas.OrderedMap) *tabnas.OrderedMap {
 // folded through site.At, kept verbatim when it names nothing or is a
 // cycle, with the site's own members laid over a map target.
 func resolving(site *Site, op *Op, terms []any) (any, error) {
+	return resolvingBy(false, site, op, terms)
+}
+
+// writing is the same resolver through site.Written.
+func writing(site *Site, op *Op, terms []any) (any, error) {
+	return resolvingBy(true, site, op, terms)
+}
+
+func resolvingBy(written bool, site *Site, op *Op, terms []any) (any, error) {
 	if !op.Key {
 		return math.NaN(), nil
 	}
@@ -103,7 +112,11 @@ func resolving(site *Site, op *Op, terms []any) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("resolving: a $ref of %T", terms[0])
 	}
-	hit, err := site.At(fragPointer(ref))
+	reach := site.At
+	if written {
+		reach = site.Written
+	}
+	hit, err := reach(fragPointer(ref))
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +205,13 @@ func TestTreeAtPointer(t *testing.T) {
 	runTree(t, "at-pointer.tsv", foldParse(j, FoldOptions{Op: atPointerOp, Evaluate: resolving}))
 }
 
+// The same resolver through site.Written: a site on the way to the
+// location named is stepped through as the map it is written as.
+func TestTreeWritten(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{"op": noDefaults(refOp())})
+	runTree(t, "written.tsv", foldParse(j, FoldOptions{Op: refDef, Evaluate: writing}))
+}
+
 // Deferred mode gives the same value as the standalone fold, row for row
 // of the same file.
 func TestTreeAtPointerDeferred(t *testing.T) {
@@ -269,6 +289,29 @@ func TestTreeErrors(t *testing.T) {
 	runTree(t, "errors.tsv", foldParse(j, opts))
 }
 
+// A location reached ahead of the walk, through a reference, while the
+// container that holds it has not been folded. A site that then asks for
+// that container closes a cycle, as it would had the walk come to the
+// container first: each pair of rows is one document in two member orders,
+// and gives one answer. Both ways of reaching agree.
+func TestTreeAheadAt(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{"op": noDefaults(refOp())})
+	runTree(t, "ahead.tsv", foldParse(j, FoldOptions{Op: refDef, Evaluate: resolving}))
+}
+
+func TestTreeAheadWritten(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{"op": noDefaults(refOp())})
+	runTree(t, "ahead.tsv", foldParse(j, FoldOptions{Op: refDef, Evaluate: writing}))
+}
+
+// The step budget, at five steps: a container the fold starts to fold is
+// one step, and so is a location a resolver asks its site for.
+func TestTreeBudget(t *testing.T) {
+	j := treeParser(t, map[string]interface{}{"op": noDefaults(refOp())})
+	opts := FoldOptions{Op: refDef, Evaluate: resolving, Budget: &FoldBudget{Steps: 5}}
+	runTree(t, "budget.tsv", foldParse(j, opts))
+}
+
 // Every file in test/tree is named by a runTree call in this file, as
 // TestEveryFixtureRowIsHeldToItsCanonicalJSON checks test/spec, and the
 // row total is ratcheted at what is on disk, so a corpus that shrinks
@@ -289,7 +332,7 @@ func TestEveryTreeFixtureIsRun(t *testing.T) {
 			t.Errorf("tree fixture with no runner: %s", file.Name)
 		}
 	}
-	if rows != 52 {
-		t.Errorf("the tree fixtures hold %d rows, not the 52 measured", rows)
+	if rows != 99 {
+		t.Errorf("the tree fixtures hold %d rows, not the 99 measured", rows)
 	}
 }

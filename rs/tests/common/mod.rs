@@ -184,13 +184,32 @@ pub fn spread(target: &Value, siblings: &Value) -> Value {
 /// site's own members laid over an object target. A token operator reads
 /// as NaN.
 pub fn resolving(site: &Site<'_>, op: &Op, terms: &[Value]) -> Result<Value, TabnasError> {
+    resolving_by(false, site, op, terms)
+}
+
+/// The same resolver through `site.written`.
+pub fn writing(site: &Site<'_>, op: &Op, terms: &[Value]) -> Result<Value, TabnasError> {
+    resolving_by(true, site, op, terms)
+}
+
+fn resolving_by(
+    written: bool,
+    site: &Site<'_>,
+    op: &Op,
+    terms: &[Value],
+) -> Result<Value, TabnasError> {
     if !op.key {
         return Ok(Value::Number(f64::NAN));
     }
     let Some(reference) = terms.first().and_then(text_of) else {
         return Ok(site.node().clone());
     };
-    let hit = site.at(&pointer(reference), None)?;
+    let path = pointer(reference);
+    let hit = if written {
+        site.written(&path, None)?
+    } else {
+        site.at(&path, None)?
+    };
     let value = match hit.value {
         Some(value) if hit.found && !hit.cycle => value,
         _ => return Ok(site.node().clone()),

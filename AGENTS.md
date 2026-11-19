@@ -55,6 +55,39 @@ script or loop you write, and anything sent to the background.
 
 A quick command that finishes within 30 seconds needs nothing extra.
 
+## Client work
+
+Never mention or identify a private work-tracking repository, even indirectly,
+in this repository or in anything the client can see. This includes code,
+comments, documentation, configuration, branch names, commits, issues, pull
+requests, chat messages, and visible tool calls or output.
+
+Only plain delivery and task identifiers may be shared from internal tracking.
+For example, “Delivery `rounds`, task `restart`.” Keep repository names,
+URLs, paths, skill names, project and session identifiers, and transcript
+references private. Describe the product work and test results normally.
+
+For every private work record you create or update, write both a purpose
+(`desc`) and a current status explanation (`statusDetail`). This applies to
+the overall collection, projects, deliveries, tasks, sessions and individual
+messages. Give the next agent enough context to resume:
+
+- **Purpose.** State who needs the outcome, what problem it solves and what
+  would count as success. For a session, explain the intended handoff. For a
+  message, identify the request, decision or result it contributes.
+- **Current status.** Say what has happened, what evidence supports it, and
+  what remains open, blocked or deferred. Identify the next action when one
+  is known. For a message, record its disposition separately from its exact
+  text. Describe unknowns explicitly.
+- At handoff, update the affected records and the project summary. Keep task
+  status, status prose and timestamped changes consistent. A state label or
+  a repeated title alone leaves the next agent without a handoff.
+
+For example, a restart task could have the purpose “Let two players start
+another round on the same board.” A useful status update is “Reset clears all
+nine squares and restores X's turn. Keyboard focus after reset still needs
+verification.” Keep these annotations private under the sharing rules above.
+
 ## What this project is
 
 `@tabnas/expr` is a **Pratt expression-operator plugin** for the
@@ -496,8 +529,16 @@ reproduces:
   including the site's own map, each map's bag kept, so a target reached
   early through a reference gets its own ancestors' bag, never the
   referrer's), the opening token when `positions` gives one, `at(path,
-  doc?)`, `locate(path, doc?)` and `plain()`, the map folded as a plain
-  map, for a resolver that finds no operation there. `inherit` must
+  doc?)`, `written(path, doc?)`, `locate(path, doc?)` and `plain()`, the
+  map folded as a plain map, for a resolver that finds no operation
+  there. `at` folds a key-operator site met on the way and reads the rest
+  of the path in its folded value. `written` steps through such a site as
+  the map it is and folds only the location named, so a member beside a
+  site's key is read as written, and a site may name one of its own
+  members without closing a cycle. A host that reads pointers on the
+  document as written, as RFC 6901 does, uses `written` and follows a
+  site to its target itself. `test/tree/written.tsv` pins it in all three
+  runtimes (`Written` in Go, `written` in Rust). `inherit` must
   return an object and must not fold below its own map (`fold_inherit`).
 - **Memory.** One result per location, kept in a trie of locations per
   document, so a deep document costs a constant amount per container;
@@ -516,6 +557,22 @@ reproduces:
   `value` with `cycle: true`. Where the cut falls follows the walk, from
   the root in member order, so it is stable for a document and can move
   when members are reordered.
+- **A location reached ahead of the walk.** A reference can fold a
+  location while the containers above it have not been started. A
+  location entered while its parent is not being folded is counted on
+  every location above it (`under`), and a site that asks for a location
+  holding one closes a cycle, exactly as if that location were on the
+  stack: folding it would have to put a value where the open location is,
+  and nothing there is settled. It is the cycle the walk finds when it
+  comes to the container first, cut at the same site, so a document gives
+  one answer whichever of the two is written first. Before 2026-11-18 the
+  container was folded with the open location's map as written in it,
+  nothing was reported, and the result was kept for every later reference
+  (23 real descriptions hit it through tabnas/openapi, which recorded it
+  as W10). `test/tree/ahead.tsv` pins the pairs of orders, through `at`
+  and through `written`. With the rule in place the walk never meets a
+  location that is still being folded by descent; the early return for
+  one stays as a guard.
 - **Several documents.** `options.doc` names the document folded and
   `options.load(key, site)` returns another's raw root, once per key, or
   `undefined`. Memory, the active stack and sharing span documents. Report
@@ -523,11 +580,24 @@ reproduces:
   dynamic sites), each kept once.
 - **Bounds and errors.** `maxDepth` (default 1000) counts nesting and
   reference hops together; past it, or when the JavaScript stack runs out
-  first, the fold throws `fold_depth`, never a `RangeError`. Every error
-  of the layer's own is a `FoldError` with a `code` (`fold_cycle`,
-  `fold_depth`, `fold_inherit`, `fold_key`, `fold_option`) and the
-  location as fields; member names in its message are JSON-escaped and cut
-  short.
+  first, the fold throws `fold_depth`, never a `RangeError`. `budget`
+  bounds the work and can cancel it, and is off by default. A step is one
+  container the fold STARTS to fold (a map, an array or an operator node;
+  a location already folded costs none) or one location a resolver asks
+  its site for (`at`, `written`, `locate`; `plain` costs none). The step
+  after `budget.steps`, when that is greater than 0, throws `fold_budget`;
+  with `checkEveryN` greater than 0, `onCheck(steps)` runs at every Nth
+  step and a `false` return throws `fold_cancel`. The bound is tried
+  before the check, and the depth check before both. The count is one per
+  fold, across documents, so it is a property of the document and the
+  resolver, not of the runtime: `test/tree/budget.tsv` holds all three to
+  it at five steps, with rows on each side of the bound. The shape is the
+  engine's `parse.budget` (`Budget *FoldBudget` in Go, where `OnCheck`
+  returns a plain `bool`; `budget: Option<FoldBudget>` in Rust). Every
+  error of the layer's own is a `FoldError` with a `code` (`fold_budget`,
+  `fold_cancel`, `fold_cycle`, `fold_depth`, `fold_inherit`, `fold_key`,
+  `fold_option`) and the location as fields; member names in its message
+  are JSON-escaped and cut short.
 - **Deferred mode.** `ExprOptions.fold`, through the engine's `ruleDone`
   event, filtered to the last pass of the parse: a depth-0 close whose
   alternate is null (a rule with no close alternates) or neither pushes,
@@ -555,8 +625,8 @@ failure all the same. What each port settled:
   `MakeKeyMap`, `KeyOpOf`, `IsOp`, `RecordPositions` and `Fold(root, opts)
   (any, error)`, with `FoldEvaluate`, `Inherit` and `Recognise` all
   returning an error, which stops the fold and comes back from `Fold` as it
-  is, and `Site` with `At`, `Locate` and `Plain`, and `Path()` and `K()`
-  as methods. Recognition over `*OrderedMap` in its own order, and over
+  is, and `Site` with `At`, `Written`, `Locate` and `Plain`, and `Path()`
+  and `K()` as methods. Recognition over `*OrderedMap` in its own order, and over
   `map[string]any` and `MapRef`, which have none, in code-point order (Go
   compares strings by byte, which is code-point order for UTF-8); siblings
   are a new `*OrderedMap`, and a folded map or list is a new one of its own
@@ -1001,9 +1071,11 @@ contract a fixture pins with `ERROR:<code>`, and declaring one here without
 adding it to the descriptor fails admin's `make ax-descriptor` staleness
 check.
 
-The tree layer's `FoldError` carries codes of its own (`fold_cycle`,
-`fold_depth`, `fold_inherit`, `fold_key`, `fold_option`), pinned by
-`ERROR:<code>` rows in `test/tree/errors.tsv`. They are deliberately not
+The tree layer's `FoldError` carries codes of its own (`fold_budget`,
+`fold_cancel`, `fold_cycle`, `fold_depth`, `fold_inherit`, `fold_key`,
+`fold_option`), pinned by `ERROR:<code>` rows in `test/tree/errors.tsv`
+and `test/tree/budget.tsv`; `fold_cancel` needs a callback, so each
+runtime's own tests pin it. They are deliberately not
 engine codes: no runtime declares them in `options.error`, and the
 descriptor lists none. All three runtimes raise the same ones: TypeScript
 and Go on a `FoldError`, Go's deferred fold as a `TabnasError` with the

@@ -91,9 +91,10 @@ pub use tabnas::TabnasError as ExprError;
 mod tree;
 
 pub use tree::{
-    fold, key_op_of, make_key_map, FoldCycle, FoldDynamic, FoldEntry, FoldError, FoldEvaluate,
-    FoldHit, FoldOptions, FoldReport, Inherit, KeyMap, Load, Path, Positions, Recognise, Seg, Site,
-    FOLD_CYCLE, FOLD_DEPTH, FOLD_INHERIT, FOLD_KEY, FOLD_MAX_STACK, FOLD_OPTION,
+    fold, key_op_of, make_key_map, FoldBudget, FoldCycle, FoldDynamic, FoldEntry, FoldError,
+    FoldEvaluate, FoldHit, FoldOptions, FoldReport, Inherit, KeyMap, Load, Path, Positions,
+    Recognise, Seg, Site, FOLD_BUDGET, FOLD_CANCEL, FOLD_CYCLE, FOLD_DEPTH, FOLD_INHERIT, FOLD_KEY,
+    FOLD_MAX_STACK, FOLD_OPTION,
 };
 
 /// JavaScript's `Number.MIN_SAFE_INTEGER`, the binding power an operator
