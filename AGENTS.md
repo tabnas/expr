@@ -88,6 +88,29 @@ another round on the same board.” A useful status update is “Reset clears al
 nine squares and restores X's turn. Keyboard focus after reset still needs
 verification.” Keep these annotations private under the sharing rules above.
 
+## Before and after a product pull request
+
+1. **Before opening the product PR**, set each task whose implementation is
+   ready to submit to `awaiting_merge` in its private record. Record what was
+   tested, the readiness time, and which branch or commit is ready. Refresh
+   the affected delivery and project summaries and reports. Open a private
+   tracking PR, merge it, and confirm the update is on the tracking default
+   branch. Only then submit the product PR.
+2. **During review**, keep those tasks in `awaiting_merge` while the change
+   is ready and waiting. If changes are requested that require more work,
+   return the affected tasks to `in_progress` and record the reason. If the
+   PR closes unmerged, record whether the work has resumed or returned to
+   the queue.
+3. **After the product PR merges**, verify the merge on the intended target
+   branch. Set each task fully delivered by that merge to `done`. Append the
+   actual merge time, product PR reference and merge commit to its private
+   history. Refresh the summaries and reports, then open and merge a second
+   private tracking PR. Confirm the completed tasks are on the tracking
+   default branch.
+
+Keep all tracking operations and references private under the sharing rules
+above. The product PR describes the product change and its tests.
+
 ## What this project is
 
 `@tabnas/expr` is a **Pratt expression-operator plugin** for the
