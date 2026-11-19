@@ -67,32 +67,37 @@ For example, “Delivery `rounds`, task `restart`.” Keep repository names,
 URLs, paths, skill names, project and session identifiers, and transcript
 references private. Describe the product work and test results normally.
 
-For every private work record you create or update, write both a purpose
-(`desc`) and a current status explanation (`statusDetail`). This applies to
-the overall collection, projects, deliveries, tasks, sessions and individual
-messages. Give the next agent enough context to resume:
+## Describe the goal
 
-- **Purpose.** State who needs the outcome, what problem it solves and what
-  would count as success. For a session, explain the intended handoff. For a
-  message, identify the request, decision or result it contributes.
-- **Current status.** Say what has happened, what evidence supports it, and
-  what remains open, blocked or deferred. Identify the next action when one
-  is known. For a message, record its disposition separately from its exact
-  text. Describe unknowns explicitly.
-- At handoff, update the affected records and the project summary. Keep task
-  status, status prose and timestamped changes consistent. A state label or
-  a repeated title alone leaves the next agent without a handoff.
+For every private node you create or update, keep both fields short and to the
+point. Use as many sentences as needed to make the goal or its state clear.
 
-For example, a restart task could have the purpose “Let two players start
-another round on the same board.” A useful status update is “Reset clears all
-nine squares and restores X's turn. Keyboard focus after reset still needs
-verification.” Keep these annotations private under the sharing rules above.
+- **`desc`** states the intended outcome. For a project or delivery, name the
+  capability it will provide. For a task, name the result that would finish it.
+- **`statusDetail`** states where that goal stands. Say what is possible now
+  and, if it affects the plan, name the remaining gap, blocker or decision.
+
+Apply the same rule to the overall collection, sessions and messages. A
+session summarizes its goal and where the work stood at handoff. A message
+annotation captures the request or decision and its disposition. Preserve
+the original message verbatim.
+
+For example, a rounds delivery could have `desc` “Let players play a series
+of rounds” and `statusDetail` “Players can start another round. The score still
+resets between rounds.”
+
+Keep PR and issue details, links, branch names, commit IDs, implementation
+steps and test logs out of both fields. Put supporting references and
+verification evidence in private history notes. When updating an older
+summary that reads like a work log, condense it to the current goal and outcome.
+At handoff, keep the task state and its history in sync. Update a parent
+summary when the goal it describes has moved forward or its outlook has changed.
 
 ## Before and after a product pull request
 
 1. **Before opening the product PR**, set each task whose implementation is
-   ready to submit to `awaiting_merge` in its private record. Record what was
-   tested, the readiness time, and which branch or commit is ready. Refresh
+   ready to submit to `awaiting_merge` in its private record. In its history,
+   record what was tested, the readiness time, and the branch or commit. Refresh
    the affected delivery and project summaries and reports. Open a private
    tracking PR, merge it, and confirm the update is on the tracking default
    branch. Only then submit the product PR.
