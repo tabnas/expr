@@ -2,8 +2,8 @@
 
 // The render, run: trees written as expression documents by the parts the
 // package carries (`translate()`), the embedding and then the render, as a
-// host composes them for a plain tree, through the `alchemy` command
-// (tabnas/alchemy-cli), which this package does not depend on. Set
+// host composes them for a plain tree, through the `dmog` command
+// (tabnas/dmog), which this package does not depend on. Set
 // TABNAS_ALCHEMY to the command's path to run these tests; without it they
 // skip, as `debug-model.test.ts` does without @tabnas/debug.
 //
@@ -27,7 +27,7 @@ import { findSpecDir, loadSpec } from '@tabnas/support'
 import { Expr, parseSimplified, simplify, translate } from '..'
 
 const ALCHEMY = process.env.TABNAS_ALCHEMY
-const skip = ALCHEMY ? false : 'TABNAS_ALCHEMY does not name the alchemy command'
+const skip = ALCHEMY ? false : 'TABNAS_ALCHEMY does not name the dmog command'
 
 const tn = new Tabnas().use(jsonic).use(Expr)
 
@@ -84,7 +84,7 @@ function reading (tree: any): any {
   return back(simplify(tree))
 }
 
-// The tree tabnas-c's reader builds for `int x;`, as alchemy-cli's
+// The tree tabnas-c's reader builds for `int x;`, as dmog's
 // `translate --from c` reads it: the children of a node begin with a
 // token, an object whose src is the token's text.
 const C_INT_X = '{"kind":"translation_unit","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"external_declaration","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"declaration_specifiers","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"token","tname":"KW_INT","src":"int","span":{"start":0,"end":3,"line":1,"col":1}}],"trivia":{"leading":[],"trailing":[]}},{"kind":"init_declarator_list","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"init_declarator","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"declarator","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"direct_declarator","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"token","tname":"ID","src":"x","span":{"start":4,"end":5,"line":1,"col":5}}],"trivia":{"leading":[],"trailing":[]},"declaredName":"x"}],"trivia":{"leading":[],"trailing":[]},"declaredName":"x"}],"trivia":{"leading":[],"trailing":[]},"declaredName":"x"}],"trivia":{"leading":[],"trailing":[]}},{"kind":"token","tname":"PUNC_SEMI","src":";","span":{"start":5,"end":6,"line":1,"col":6}}],"trivia":{"leading":[],"trailing":[]},"declKind":"declaration","viaPath":"grammar"}],"trivia":{"leading":[],"trailing":[]}}'
