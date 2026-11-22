@@ -2034,14 +2034,19 @@ function implicitList(rule: Rule, ctx: Context, a: any) {
   // Find the paren rule that contains this implicit list.
   // If a map or list rule sits between the expression and the paren,
   // the expression is inside a contained value — not a direct paren
-  // child — so don't create an implicit list.
+  // child — so don't create an implicit list. Nor where an elem rule
+  // does: the list exists, and this expression is a later member of it,
+  // which the elem rule collects. Taking it here pointed the member's
+  // frames at the list, so `f(-1, -2, -3)` held itself where `-2` stood
+  // (the Go port's isFirstImplicitInParen stops at elem the same way).
   for (let rI = ctx.rsI - 1; -1 < rI; rI--) {
     if ('paren' === ctx.rs[rI].name) {
       paren = ctx.rs[rI]
       parenI = rI
       break
     }
-    if ('map' === ctx.rs[rI].name || 'list' === ctx.rs[rI].name) {
+    if ('map' === ctx.rs[rI].name || 'list' === ctx.rs[rI].name ||
+      'elem' === ctx.rs[rI].name) {
       return a
     }
   }
