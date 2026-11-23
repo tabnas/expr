@@ -14,8 +14,8 @@ import (
 
 // The render, run: trees written as expression documents by the parts the
 // package carries (Translate), the embedding and then the render, as a host
-// composes them for a plain tree, through the `alchemy` command
-// (tabnas/alchemy-cli), which this module does not depend on. Set
+// composes them for a plain tree, through the `dmog` command
+// (tabnas/dmog), which this module does not depend on. Set
 // TABNAS_ALCHEMY to the command's path to run these tests; without it they
 // skip, as the TypeScript half, ts/test/translate-render.test.ts, does.
 //
@@ -27,13 +27,13 @@ import (
 // that reads back as it, and the render refuses it with
 // TARGET_VALUE_UNREPRESENTABLE, naming where.
 
-// alchemyCommand is the alchemy command TABNAS_ALCHEMY names, and skips
+// alchemyCommand is the dmog command TABNAS_ALCHEMY names, and skips
 // the test where it names none.
 func alchemyCommand(t *testing.T) string {
 	t.Helper()
 	path := os.Getenv("TABNAS_ALCHEMY")
 	if path == "" {
-		t.Skip("TABNAS_ALCHEMY does not name the alchemy command")
+		t.Skip("TABNAS_ALCHEMY does not name the dmog command")
 	}
 	return path
 }
@@ -155,7 +155,7 @@ func refusesAt(t *testing.T, alchemy, tree, at, src string) {
 	}
 }
 
-// cIntX is the tree tabnas-c's reader builds for `int x;`, as alchemy-cli's
+// cIntX is the tree tabnas-c's reader builds for `int x;`, as dmog's
 // `translate --from c` reads it: the children of a node begin with a token,
 // an object whose src is the token's text.
 const cIntX = `{"kind":"translation_unit","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"external_declaration","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"declaration_specifiers","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"token","tname":"KW_INT","src":"int","span":{"start":0,"end":3,"line":1,"col":1}}],"trivia":{"leading":[],"trailing":[]}},{"kind":"init_declarator_list","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"init_declarator","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"declarator","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"direct_declarator","span":{"start":0,"end":0,"line":1,"col":1},"children":[{"kind":"token","tname":"ID","src":"x","span":{"start":4,"end":5,"line":1,"col":5}}],"trivia":{"leading":[],"trailing":[]},"declaredName":"x"}],"trivia":{"leading":[],"trailing":[]},"declaredName":"x"}],"trivia":{"leading":[],"trailing":[]},"declaredName":"x"}],"trivia":{"leading":[],"trailing":[]}},{"kind":"token","tname":"PUNC_SEMI","src":";","span":{"start":5,"end":6,"line":1,"col":6}}],"trivia":{"leading":[],"trailing":[]},"declKind":"declaration","viaPath":"grammar"}],"trivia":{"leading":[],"trailing":[]}}`
