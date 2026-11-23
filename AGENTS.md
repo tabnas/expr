@@ -67,6 +67,45 @@ For example, “Delivery `rounds`, task `restart`.” Keep repository names,
 URLs, paths, skill names, project and session identifiers, and transcript
 references private. Describe the product work and test results normally.
 
+## Set up the client checkout
+
+Create a relative symlink named `CLAUDE.md` at the repository root pointing to
+`AGENTS.md` and commit the symlink. On first setup, run `ln -s AGENTS.md CLAUDE.md`
+from the root. On repeat setup, verify `readlink CLAUDE.md` prints `AGENTS.md`.
+If a regular file already exists there, preserve its instructions in `AGENTS.md`
+before replacing it. The target belongs to this client checkout.
+
+The link is named `CLAUDE.md` here, as `tabnas/parser` has it. The file
+of that name held this guide's two core principles and nothing else, and
+a `CLAUDE.MD` beside it would differ from it only in case, which the
+file systems of macOS and Windows do not tell apart. The maintainer
+ruled so on 23 November 2026.
+
+## Track the current session
+
+When you start a delivery, rename the active chat to its plain delivery ID if
+the chat host supports renaming. Update the title when you switch deliveries.
+Keep the private session key stable. If renaming is unavailable, continue
+recording the worked tasks in the same session.
+
+In the deliverable description README, link to the session that worked on it.
+Use the host's existing client-accessible conversation URL for a client README.
+Keep private tracking links inside the private delivery report. Record the
+real chat URL privately when available and link every worked task so the
+report can link the session record even when the host supplies no URL.
+Keep links to earlier sessions when another session takes over.
+
+Record a timestamped session history entry of `working` when work starts or
+resumes. Once the final response has been delivered and work is waiting on the
+user, record `awaiting_input`. Keep `working` through progress updates. If
+the host exposes delivery only after the turn ends, use its completion hook
+or record the observed event on resume. Use `unknown` if activity cannot be
+confirmed. Refresh the reports after a transition.
+
+Capture each turn once in the session's private `turns.csv`. Use the capture
+helper to maintain `requests.idx`, which lists only the physical CSV line
+numbers of user requests. Preserve the exact message, role and turn number.
+
 ## Describe the goal
 
 For every private node you create or update, keep both fields short and to the
